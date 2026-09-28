@@ -35,10 +35,6 @@ STEM_HOME="/home/tendril"
 STEM_BIN="${STEM_HOME}/.local/bin/tendril"
 UNIT_PATH="/usr/local/lib/systemd/system/tendril.service"
 LEGACY_UNIT_PATH="/etc/systemd/system/tendril.service"
-SUDOERS_SNIPPET="/etc/sudoers.d/opentendril-p2"
-SUDOERS_PRIMARY="/etc/sudoers"
-SUDOERS_RS="/etc/sudoers-rs"
-SUDOERS_DIR="/etc/sudoers.d"
 GREENHOUSE_ARCHIVE="opentendril-greenhouse-linux-amd64.tar.gz"
 GREENHOUSE_WRAPPER="/usr/local/sbin/opentendril-greenhouse"
 GREENHOUSE_CONTAINER="opentendril-greenhouse"
@@ -1515,107 +1511,8 @@ EOF
   return 1
 }
 
-sudo_listing_lacks_sudo_authority() {
-  case "$1" in
-    *'not allowed to run sudo'*)
-      return 0
-      ;;
-  esac
-  return 1
-}
-
-canonical_p2_contents() {
-  printf 'Defaults:%s timestamp_timeout=0\n' "$pollinator_user"
-}
-
-text_has_timestamp_timeout() {
-  case "$1" in
-    *timestamp_timeout*)
-      return 0
-      ;;
-  esac
-  return 1
-}
-
-p2_upgrade_refuse() {
-  die "cannot upgrade: $1 Cached sudo is not an accepted governed P2 posture. Governed upgrade will not rewrite sudo policy."
-}
-
-prove_canonical_p2_provenance() {
-  require_cmd visudo
-  require_cmd cat
-  require_cmd cmp
-  require_cmd ls
-  require_cmd stat
-
-  if fs_exists "$SUDOERS_RS"; then
-    p2_upgrade_refuse "alternate primary sudoers source ${SUDOERS_RS} exists, so ${SUDOERS_SNIPPET} cannot be proven as the active non-cache policy."
-  fi
-
-  fs_exists "$SUDOERS_PRIMARY" || p2_upgrade_refuse "${SUDOERS_PRIMARY} is missing, so ${SUDOERS_SNIPPET} cannot be proven active."
-  _kind=$(stat -c '%F' "$SUDOERS_PRIMARY" 2>/dev/null) || p2_upgrade_refuse "cannot stat ${SUDOERS_PRIMARY}."
-  [ "$_kind" = "regular file" ] || p2_upgrade_refuse "${SUDOERS_PRIMARY} is not a regular file, so ${SUDOERS_SNIPPET} cannot be proven active."
-
-  _sudoers_text=$(cat "$SUDOERS_PRIMARY") || p2_upgrade_refuse "cannot read ${SUDOERS_PRIMARY}."
-  _have_includedir=0
-  while IFS= read -r _line || [ -n "$_line" ]; do
-    case "$_line" in
-      '#includedir /etc/sudoers.d'|'@includedir /etc/sudoers.d')
-        _have_includedir=1
-        ;;
-      '#include '*|'#includedir '*|'@include '*|'@includedir '*)
-        p2_upgrade_refuse "${SUDOERS_PRIMARY} has an additional include directive; ${SUDOERS_SNIPPET} precedence cannot be proven."
-        ;;
-    esac
-  done <<OPENTENDRIL_SUDOERS_END
-${_sudoers_text}
-OPENTENDRIL_SUDOERS_END
-  [ "$_have_includedir" -eq 1 ] || p2_upgrade_refuse "${SUDOERS_PRIMARY} does not include ${SUDOERS_DIR} with a known include directive, so ${SUDOERS_SNIPPET} cannot be proven active."
-  if text_has_timestamp_timeout "$_sudoers_text"; then
-    p2_upgrade_refuse "${SUDOERS_PRIMARY} declares timestamp_timeout; precedence cannot be proven."
-  fi
-
-  fs_exists "$SUDOERS_SNIPPET" || p2_upgrade_refuse "Pollinator-hosting account ${pollinator_user} has sudo authority, but ${SUDOERS_SNIPPET} is missing."
-  _kind=$(stat -c '%F' "$SUDOERS_SNIPPET" 2>/dev/null) || p2_upgrade_refuse "cannot stat ${SUDOERS_SNIPPET}."
-  [ "$_kind" = "regular file" ] || p2_upgrade_refuse "${SUDOERS_SNIPPET} is not a regular file."
-  _owner=$(fs_owner "$SUDOERS_SNIPPET") || p2_upgrade_refuse "cannot determine owner of ${SUDOERS_SNIPPET}."
-  _group=$(fs_group "$SUDOERS_SNIPPET") || p2_upgrade_refuse "cannot determine group of ${SUDOERS_SNIPPET}."
-  if [ "$_owner" != root ] || [ "$_group" != root ]; then
-    p2_upgrade_refuse "${SUDOERS_SNIPPET} is owned by ${_owner}:${_group}, expected root:root."
-  fi
-  _mode=$(fs_mode "$SUDOERS_SNIPPET") || p2_upgrade_refuse "cannot determine mode of ${SUDOERS_SNIPPET}."
-  case "$_mode" in
-    440|0440) ;;
-    *)
-      p2_upgrade_refuse "${SUDOERS_SNIPPET} mode is ${_mode}, expected 0440."
-      ;;
-  esac
-  if ! canonical_p2_contents | cmp -s "$SUDOERS_SNIPPET" -; then
-    p2_upgrade_refuse "${SUDOERS_SNIPPET} is not the canonical Defaults:${pollinator_user} timestamp_timeout=0 rule."
-  fi
-
-  _dropins=$(ls -1 "$SUDOERS_DIR") || p2_upgrade_refuse "cannot list ${SUDOERS_DIR}."
-  while IFS= read -r _name || [ -n "$_name" ]; do
-    [ -n "$_name" ] || continue
-    if [ "$_name" = opentendril-p2 ]; then
-      continue
-    fi
-    _dropin="${SUDOERS_DIR}/${_name}"
-    _dropin_text=$(cat "$_dropin") || p2_upgrade_refuse "cannot read ${_dropin}."
-    if text_has_timestamp_timeout "$_dropin_text"; then
-      p2_upgrade_refuse "${_dropin} declares timestamp_timeout; precedence cannot be proven."
-    fi
-  done <<OPENTENDRIL_SUDOERS_D_END
-${_dropins}
-OPENTENDRIL_SUDOERS_D_END
-
-  visudo -c </dev/null || p2_upgrade_refuse "visudo -c rejected the sudoers configuration."
-}
-
-enforce_p2() {
+observe_pollinator_privilege() {
   require_cmd sudo
-  require_cmd visudo
-  sudo -u "$pollinator_user" sudo -K </dev/null 2>/dev/null || true
   _listing_status=0
   _listing=$(sudo -l -U "$pollinator_user" </dev/null 2>&1) || _listing_status=$?
   if [ "$_listing_status" -ne 0 ]; then
@@ -1623,31 +1520,28 @@ enforce_p2() {
       *'not allowed to run sudo'*)
         ;;
       *)
-        die "failed to read sudo policy for ${pollinator_user} (sudo -l -U exited ${_listing_status}); refusing to classify the P2 posture"
+        return 1
         ;;
     esac
   fi
+  sudo_posture_weak=0
   if sudo_listing_has_passwordless_privilege "$_listing"; then
-    die "Pollinator-hosting account ${pollinator_user} has passwordless sudo that can become root, ${STEM_USER}, ALL, or another unattended privileged identity. That violates P2. Remove NOPASSWD rules that allow this account to run commands as root, ${STEM_USER}, or ALL. Governed installation will not loosen sudo policy."
+    sudo_posture_weak=1
   fi
-  case "$_listing" in
-    *'not allowed to run sudo'*|'')
-      ;;
-    *)
-      printf 'Defaults:%s timestamp_timeout=0\n' "$pollinator_user" >"${workdir}/opentendril-p2"
-      chmod 0440 "${workdir}/opentendril-p2" || die "failed to chmod the sudoers snippet"
-      visudo -c -f "${workdir}/opentendril-p2" </dev/null || die "sudoers snippet failed visudo validation"
-      install -m 0440 "${workdir}/opentendril-p2" "$SUDOERS_SNIPPET" </dev/null || die "failed to install ${SUDOERS_SNIPPET}"
-      if ! visudo -c </dev/null; then
-        rm -f "$SUDOERS_SNIPPET"
-        die "activating ${SUDOERS_SNIPPET} failed visudo; the snippet was removed"
-      fi
-      ;;
-  esac
-  sudo -u "$pollinator_user" sudo -K </dev/null 2>/dev/null || true
   if sudo -u "$pollinator_user" sudo -n -u "$STEM_USER" true </dev/null 2>/dev/null; then
-    die "Pollinator-hosting account ${pollinator_user} can become ${STEM_USER} non-interactively (sudo -n -u ${STEM_USER}). That violates P2. Cached or passwordless escalation is not an accepted governed posture."
+    sudo_posture_weak=1
   fi
+  if [ "$sudo_posture_weak" -eq 1 ]; then
+    printf '\n'
+    printf 'Boundary warning: passwordless or cached sudo escalation was detected for Pollinator-hosting account %s.\n' "$pollinator_user"
+    printf 'This administrator-owned host policy was not changed by OpenTendril. Review it with tendril hardiness.\n'
+    printf '\n'
+  fi
+  return 0
+}
+
+enforce_p2() {
+  observe_pollinator_privilege || die "failed to read sudo policy for ${pollinator_user}; refusing to classify the P2 posture"
 }
 
 print_governed_success() {
@@ -2116,27 +2010,7 @@ require_protected_stem_binary() {
 }
 
 inspect_pollinator_privilege_readonly() {
-  require_cmd sudo
-  _listing_status=0
-  _listing=$(sudo -l -U "$pollinator_user" </dev/null 2>&1) || _listing_status=$?
-  if [ "$_listing_status" -ne 0 ]; then
-    case "$_listing" in
-      *'not allowed to run sudo'*)
-        ;;
-      *)
-        die "cannot upgrade: failed to read sudo policy for ${pollinator_user} (sudo -l -U exited ${_listing_status}); refusing to classify the P2 posture. Governed upgrade will not rewrite sudo policy."
-        ;;
-    esac
-  fi
-  if sudo_listing_has_passwordless_privilege "$_listing"; then
-    die "cannot upgrade: Pollinator-hosting account ${pollinator_user} has passwordless sudo that can become root, ${STEM_USER}, ALL, or another unattended privileged identity. That violates P2. Governed upgrade will not loosen sudo policy."
-  fi
-  if ! sudo_listing_lacks_sudo_authority "$_listing"; then
-    prove_canonical_p2_provenance
-  fi
-  if sudo -u "$pollinator_user" sudo -n -u "$STEM_USER" true </dev/null 2>/dev/null; then
-    die "cannot upgrade: Pollinator-hosting account ${pollinator_user} can become ${STEM_USER} non-interactively (sudo -n -u ${STEM_USER}). That violates P2. Cached or passwordless escalation is not an accepted governed posture. Governed upgrade will not rewrite sudo policy."
-  fi
+  observe_pollinator_privilege || die "cannot upgrade: failed to read sudo policy for ${pollinator_user}; refusing to classify the P2 posture"
 }
 
 verify_existing_tendril_rootless_docker() {

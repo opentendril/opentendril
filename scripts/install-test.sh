@@ -44,6 +44,7 @@ need_host_cmd stat
 need_host_cmd grep
 need_host_cmd touch
 need_host_cmd cmp
+need_host_cmd diff
 need_host_cmd python3
 
 real_home="${HOME}"
@@ -967,6 +968,13 @@ EOF
 root:x:0:
 alice:x:1000:
 EOF
+  rm -f "${HOSTFS}/etc/sudoers"
+  cat >"${HOSTFS}/etc/sudoers" <<'EOF'
+Defaults env_reset
+root ALL=(ALL:ALL) ALL
+#includedir /etc/sudoers.d
+EOF
+  chmod 0440 "${HOSTFS}/etc/sudoers"
   cat >"${HOSTFS}/etc/subuid" <<'EOF'
 alice:100000:65536
 EOF
@@ -2240,8 +2248,66 @@ exit 0
 EOF
 }
 
+capture_sudo_policy_snapshot() {
+  local destination=$1
+  local policy_path meta_kind meta_file
+  local entries=()
+
+  rm -rf "${destination}"
+  mkdir -p "${destination}/meta-owners" "${destination}/meta-groups"
+  : >"${destination}/presence"
+  for policy_path in etc/sudoers etc/sudoers.d etc/sudoers-rs; do
+    if [ -e "${HOSTFS}/${policy_path}" ] || [ -L "${HOSTFS}/${policy_path}" ]; then
+      entries+=("${policy_path}")
+      printf 'present %s\n' "${policy_path}" >>"${destination}/presence"
+    else
+      printf 'absent %s\n' "${policy_path}" >>"${destination}/presence"
+    fi
+  done
+  if [ "${#entries[@]}" -gt 0 ]; then
+    tar -cf "${destination}/host.tar" -C "${HOSTFS}" "${entries[@]}"
+  else
+    tar -cf "${destination}/host.tar" -T /dev/null
+  fi
+
+  for meta_kind in owners groups; do
+    for meta_file in "${ROOT}/meta/${meta_kind}/%etc%sudoers"*; do
+      if [ -e "${meta_file}" ]; then
+        cp -a "${meta_file}" "${destination}/meta-${meta_kind}/"
+      fi
+    done
+  done
+}
+
+assert_sudo_policy_untouched() {
+  local name=$1
+  local after="${ROOT}/sudo-policy-after"
+  capture_sudo_policy_snapshot "${after}"
+  if ! cmp -s "${ROOT}/sudo-policy-before/host.tar" "${after}/host.tar" \
+    || ! cmp -s "${ROOT}/sudo-policy-before/presence" "${after}/presence" \
+    || ! diff -qr "${ROOT}/sudo-policy-before/meta-owners" "${after}/meta-owners" >/dev/null \
+    || ! diff -qr "${ROOT}/sudo-policy-before/meta-groups" "${after}/meta-groups" >/dev/null; then
+    fail "${name}: sudo policy bytes, metadata, or path presence changed"
+    return 1
+  fi
+  pass "${name}: sudo policy was untouched"
+}
+
+assert_no_sudo_policy_mutation() {
+  local name=$1
+  if grep -Eqi 'sudoers|visudo' "${events_file}"; then
+    fail "${name}: installer accessed or validated a sudoers policy" "events=$(tr '\n' ' ' <"${events_file}")"
+    return 1
+  fi
+  if ! assert_sudo_policy_untouched "${name}"; then
+    return 1
+  fi
+  return 0
+}
+
 run_governed_installer() {
   : >"${events_file}"
+  capture_sudo_policy_snapshot "${ROOT}/sudo-policy-before"
   setup_governed_shims
   local fixture_version="${PIN_VERSION#v}"
   local scan_arg scan_value scan_index
@@ -2300,6 +2366,7 @@ run_governed_installer() {
 
 run_governed_upgrade_installer() {
   : >"${events_file}"
+  capture_sudo_policy_snapshot "${ROOT}/sudo-policy-before"
   setup_governed_shims
   local fixture_version="${PIN_VERSION#v}"
   local scan_arg scan_value scan_index
@@ -2464,22 +2531,16 @@ assert_durable_untouched() {
   return 1
 }
 
-events_have_mutating_visudo() {
-  grep '^CMD visudo ' "${events_file}" | grep -vqE '^CMD visudo -c$'
-}
-
 assert_no_upgrade_bootstrap() {
   local name=$1
   if grep -Eq '^CMD (apt-get |adduser |usermod |loginctl |dockerd-rootless)' "${events_file}"; then
     fail "${name}: performed governed host-bootstrap operations" "events=$(tr '\n' ' ' <"${events_file}")"
     return 1
   fi
-  if events_have_mutating_visudo; then
-    fail "${name}: visudo ran in a mutating mode" "events=$(tr '\n' ' ' <"${events_file}")"
+  if ! assert_no_sudo_policy_mutation "${name}"; then
     return 1
   fi
-  if grep -Eq '^CMD install .*/etc/sudoers' "${events_file}"; then
-    fail "${name}: rewrote sudoers policy" "events=$(tr '\n' ' ' <"${events_file}")"
+  if ! assert_no_sudo_timestamp_mutation "${name}"; then
     return 1
   fi
   if grep -Eq 'tendril init' "${events_file}"; then
@@ -2502,7 +2563,7 @@ prepare_upgrade_rootless_runtime() {
 write_classic_sudo_privilege_listing() {
   cat >"${ROOT}/state/sudo-l" <<'EOF'
 Matching Defaults entries for alice on testhost:
-    env_reset, mail_badpass, timestamp_timeout=0
+    env_reset, mail_badpass, timestamp_timeout=15
 
 User alice may run the following commands on testhost:
     (ALL : ALL) ALL
@@ -2518,6 +2579,7 @@ EOF
 
 write_governed_sudoers_primary() {
   mkdir -p "${HOSTFS}/etc/sudoers.d"
+  rm -f "${HOSTFS}/etc/sudoers"
   cat >"${HOSTFS}/etc/sudoers" <<'EOF'
 Defaults env_reset
 root ALL=(ALL:ALL) ALL
@@ -2526,11 +2588,11 @@ EOF
   chmod 0440 "${HOSTFS}/etc/sudoers"
 }
 
-place_canonical_p2_snippet() {
+place_legacy_p2_snippet() {
   local user=${1:-alice}
   mkdir -p "${HOSTFS}/etc/sudoers.d" "${ROOT}/meta/owners" "${ROOT}/meta/groups"
   rm -f "${HOSTFS}/etc/sudoers.d/opentendril-p2"
-  printf 'Defaults:%s timestamp_timeout=0\n' "${user}" >"${HOSTFS}/etc/sudoers.d/opentendril-p2"
+  printf 'Defaults:%s timestamp_timeout=15\n' "${user}" >"${HOSTFS}/etc/sudoers.d/opentendril-p2"
   chmod 0440 "${HOSTFS}/etc/sudoers.d/opentendril-p2"
   printf 'root\n' >"${ROOT}/meta/owners/%etc%sudoers.d%opentendril-p2"
   printf 'root\n' >"${ROOT}/meta/groups/%etc%sudoers.d%opentendril-p2"
@@ -2550,9 +2612,9 @@ place_sudoers_d_readme() {
 EOF
 }
 
-prepare_upgrade_p2_provenance() {
+prepare_upgrade_sudo_policy() {
   write_governed_sudoers_primary
-  place_canonical_p2_snippet alice
+  place_legacy_p2_snippet alice
   place_sudoers_d_readme
   write_classic_sudo_privilege_listing
 }
@@ -2564,7 +2626,7 @@ prepare_upgrade_host() {
   write_tendril_unit_file "${HOSTFS}/usr/local/lib/systemd/system/tendril.service" 2001
   write_floor_systemctl_show 2001
   prepare_upgrade_rootless_runtime
-  prepare_upgrade_p2_provenance
+  prepare_upgrade_sudo_policy
 }
 
 seed_greenhouse_rollback_state() {
@@ -2578,38 +2640,13 @@ seed_greenhouse_rollback_state() {
   touch "${ROOT}/state/greenhouse-tag-present"
 }
 
-assert_canonical_p2_file() {
+assert_sudo_policy_observation_only() {
   local name=$1
-  local snippet="${HOSTFS}/etc/sudoers.d/opentendril-p2"
-  if [ ! -f "${snippet}" ]; then
-    fail "${name}: missing canonical P2 snippet"
+  if grep -Eqi 'sudoers|visudo' "${events_file}"; then
+    fail "${name}: installer accessed or validated sudo policy" "events=$(tr '\n' ' ' <"${events_file}")"
     return 1
   fi
-  if [ "$(stat -c '%a' "${snippet}")" != 440 ]; then
-    fail "${name}: P2 snippet mode is not 0440"
-    return 1
-  fi
-  if [ "$(cat "${ROOT}/meta/owners/%etc%sudoers.d%opentendril-p2" 2>/dev/null || echo root)" != root ] \
-    || [ "$(cat "${ROOT}/meta/groups/%etc%sudoers.d%opentendril-p2" 2>/dev/null || echo root)" != root ]; then
-    fail "${name}: P2 snippet owner/group is not root:root"
-    return 1
-  fi
-  printf 'Defaults:alice timestamp_timeout=0\n' >"${ROOT}/expected-p2"
-  if ! cmp -s "${snippet}" "${ROOT}/expected-p2"; then
-    fail "${name}: P2 snippet is not the canonical alice rule"
-    return 1
-  fi
-  return 0
-}
-
-assert_p2_inspection_readonly() {
-  local name=$1
-  if grep -Eq '^CMD install .*/etc/sudoers' "${events_file}"; then
-    fail "${name}: rewrote sudoers policy" "events=$(tr '\n' ' ' <"${events_file}")"
-    return 1
-  fi
-  if events_have_mutating_visudo; then
-    fail "${name}: visudo ran in a mutating mode" "events=$(tr '\n' ' ' <"${events_file}")"
+  if ! assert_sudo_policy_untouched "${name}"; then
     return 1
   fi
   if ! assert_no_sudo_timestamp_mutation "${name}"; then
@@ -2618,24 +2655,12 @@ assert_p2_inspection_readonly() {
   return 0
 }
 
-assert_upgrade_p2_posture() {
+assert_upgrade_sudo_posture() {
   local name=$1
-  if ! grep -q '(ALL : ALL) ALL' "${ROOT}/state/sudo-l"; then
-    fail "${name}: success fixture omitted passworded (ALL : ALL) ALL"
+  if ! assert_sudo_policy_observation_only "${name}"; then
     return 1
   fi
-  if ! assert_canonical_p2_file "${name}"; then
-    return 1
-  fi
-  if ! events_match '^CMD visudo -c$'; then
-    fail "${name}: did not validate sudoers with visudo -c" "events=$(tr '\n' ' ' <"${events_file}")"
-    return 1
-  fi
-  if events_match '^CMD visudo -c -f'; then
-    fail "${name}: visudo -c -f ran during upgrade" "events=$(tr '\n' ' ' <"${events_file}")"
-    return 1
-  fi
-  if ! assert_p2_inspection_readonly "${name}"; then
+  if ! assert_no_sudo_timestamp_mutation "${name}"; then
     return 1
   fi
   return 0
@@ -2665,6 +2690,9 @@ assert_upgrade_preflight_unmutated() {
   if ! assert_no_sudo_timestamp_mutation "${name}"; then
     return 1
   fi
+  if ! assert_sudo_policy_untouched "${name}"; then
+    return 1
+  fi
   if grep -q 'Attempting rollback' "${stderr_file}"; then
     fail "${name}: attempted rollback after a preflight failure"
     return 1
@@ -2682,8 +2710,7 @@ assert_no_host_mutation() {
     fail "${name}: privileged command ran after a pre-mutation failure" "events=$(tr '\n' ' ' <"${events_file}")"
     return 1
   fi
-  if events_have_mutating_visudo; then
-    fail "${name}: visudo ran in a mutating mode after a pre-mutation failure" "events=$(tr '\n' ' ' <"${events_file}")"
+  if ! assert_no_sudo_policy_mutation "${name}"; then
     return 1
   fi
   if grep -Eq '^CMD install .*(/home/tendril|/etc/systemd|/etc/sudoers|/etc/apt)' "${events_file}"; then
@@ -2703,8 +2730,7 @@ assert_no_host_write() {
     fail "${name}: write command ran after a closed preflight failure" "events=$(tr '\n' ' ' <"${events_file}")"
     return 1
   fi
-  if events_have_mutating_visudo; then
-    fail "${name}: visudo ran in a mutating mode after a closed preflight failure" "events=$(tr '\n' ' ' <"${events_file}")"
+  if ! assert_no_sudo_policy_mutation "${name}"; then
     return 1
   fi
   if grep -Eq '^CMD systemctl (mask |unmask |disable|enable |start |stop |daemon-reload)' "${events_file}"; then
@@ -2730,6 +2756,12 @@ assert_governed_failure() {
   fi
   if grep -q '^Posture:     GOVERNED$' "${stdout_file}" || grep -q '^Posture:   GOVERNED$' "${stdout_file}"; then
     fail "${name}: reported GOVERNED success" "stdout=$(tr '\n' ' ' <"${stdout_file}")"
+    return 1
+  fi
+  if ! assert_no_sudo_policy_mutation "${name}"; then
+    return 1
+  fi
+  if ! assert_no_sudo_timestamp_mutation "${name}"; then
     return 1
   fi
   return 0
@@ -3173,6 +3205,12 @@ assert_governed_success_core() {
     fail "${name}: governed success described as LOCAL"
     return 1
   fi
+  if ! assert_no_sudo_policy_mutation "${name}"; then
+    return 1
+  fi
+  if ! assert_no_sudo_timestamp_mutation "${name}"; then
+    return 1
+  fi
   return 0
 }
 
@@ -3366,20 +3404,15 @@ if assert_governed_success_core "clean Ubuntu governed bootstrap"; then
   else
     fail "Pollinator ownership/mode are requested correctly" "events=$(tr '\n' ' ' <"${events_file}")"
   fi
-  if events_match '^CMD sudo .* -K' || events_match '^CMD sudo -u alice sudo -K'; then
-    pass "cached sudo state is invalidated"
+  if grep -Eq '^CMD sudo( .*)? -[Kkv]( |$)' "${events_file}"; then
+    fail "fresh governed install invalidated sudo credentials" "events=$(tr '\n' ' ' <"${events_file}")"
   else
-    # the logged command is the full argv
-    if grep -Eq '^CMD sudo .* -K' "${events_file}"; then
-      pass "cached sudo state is invalidated"
-    else
-      fail "cached sudo state is invalidated" "events=$(tr '\n' ' ' <"${events_file}")"
-    fi
+    pass "fresh governed install does not invalidate sudo credentials"
   fi
   if grep -Eq '^CMD sudo .* -n -u tendril true' "${events_file}"; then
-    pass "accepted posture proves sudo -n escalation does not work"
+    pass "fresh governed install observes cached escalation read-only"
   else
-    fail "accepted posture proves sudo -n escalation does not work" "events=$(tr '\n' ' ' <"${events_file}")"
+    fail "fresh governed install observes cached escalation read-only" "events=$(tr '\n' ' ' <"${events_file}")"
   fi
   unit="${HOSTFS}/usr/local/lib/systemd/system/tendril.service"
   if [ -f "${unit}" ]; then
@@ -3508,34 +3541,15 @@ else
   pass "installer source never uses --skip-iptables"
 fi
 
-upgrade_privilege_preflight="$(awk '/^inspect_pollinator_privilege_readonly\(\)/,/^}$/' "${installer}")"
-upgrade_p2_provenance="$(awk '/^prove_canonical_p2_provenance\(\)/,/^}$/' "${installer}")"
-if [ -z "${upgrade_privilege_preflight}" ] || [ -z "${upgrade_p2_provenance}" ]; then
-  fail "governed-upgrade privilege preflight is defined"
-elif printf '%s\n' "${upgrade_privilege_preflight}" "${upgrade_p2_provenance}" | grep -Eq -- '(^|[[:space:]])-[Kkv]([[:space:]]|$)'; then
-  fail "governed-upgrade privilege preflight does not use sudo -K/-k/-v" "preflight=$(printf '%s' "${upgrade_privilege_preflight}" "${upgrade_p2_provenance}" | tr '\n' ' ')"
-elif printf '%s\n' "${upgrade_privilege_preflight}" "${upgrade_p2_provenance}" | grep -q -- 'sudo -ll'; then
-  fail "governed-upgrade privilege preflight does not use sudo -ll"
-elif grep -q sudo_listing_classify_timestamp_timeout "${installer}"; then
-  fail "governed-upgrade privilege preflight does not parse timestamp_timeout from sudo -l"
-elif printf '%s\n' "${upgrade_privilege_preflight}" | grep -q timestamp_timeout; then
-  fail "governed-upgrade privilege listing path does not parse timestamp_timeout" "preflight=$(printf '%s' "${upgrade_privilege_preflight}" | tr '\n' ' ')"
-elif printf '%s\n' "${upgrade_p2_provenance}" | grep -q -- 'visudo -c -f'; then
-  fail "governed-upgrade P2 provenance does not use visudo -c -f"
-elif ! printf '%s\n' "${upgrade_p2_provenance}" | grep -q -- 'visudo -c'; then
-  fail "governed-upgrade P2 provenance validates with visudo -c"
-elif ! printf '%s\n' "${upgrade_privilege_preflight}" | grep -q -- 'sudo -l -U'; then
-  fail "governed-upgrade privilege preflight keeps read-only sudo -l -U"
-elif ! printf '%s\n' "${upgrade_privilege_preflight}" | grep -q -- 'sudo -n -u'; then
-  fail "governed-upgrade privilege preflight keeps the sudo -n probe"
-elif ! printf '%s\n' "${upgrade_p2_provenance}" | grep -q -- 'timestamp_timeout=0'; then
-  fail "governed-upgrade P2 provenance requires the canonical timestamp_timeout=0 rule"
-elif ! grep -q 'SUDOERS_SNIPPET="/etc/sudoers.d/opentendril-p2"' "${installer}"; then
-  fail "governed-upgrade P2 provenance requires the canonical snippet path"
-elif ! printf '%s\n' "${upgrade_p2_provenance}" | grep -q -- 'SUDOERS_SNIPPET'; then
-  fail "governed-upgrade P2 provenance inspects the canonical snippet path"
+privilege_observation="$(awk '/^observe_pollinator_privilege\(\)/,/^}$/' "${installer}")"
+if grep -Eq 'SUDOERS_|/etc/sudoers|visudo|sudo .*(-K|-k)' "${installer}"; then
+  fail "installer never validates or mutates sudo policy or invalidates sudo credentials"
+elif [ -z "${privilege_observation}" ] \
+  || ! printf '%s\n' "${privilege_observation}" | grep -q -- 'sudo -l -U' \
+  || ! printf '%s\n' "${privilege_observation}" | grep -q -- 'sudo -n -u'; then
+  fail "installer observes sudo posture without sudo-policy provenance"
 else
-  pass "governed-upgrade privilege preflight is observational"
+  pass "installer observes sudo posture without sudo-policy provenance or mutation"
 fi
 
 new_governed_case
@@ -3615,34 +3629,34 @@ cat >"${ROOT}/state/sudo-l" <<'EOF'
 User alice may run the following commands on this host:
     (ALL) NOPASSWD: ALL
 EOF
-touch "${ROOT}/state/passwordless-tendril"
+rm -f "${HOSTFS}/etc/sudoers" "${HOSTFS}/etc/sudoers-rs"
+rm -rf "${HOSTFS}/etc/sudoers.d"
 run_governed_installer --pollinator-user alice
-if assert_governed_failure "passwordless Pollinator escalation fails governance"; then
-  if grep -qi 'P2\|passwordless\|non-interactively' "${stderr_file}"; then
-    pass "passwordless Pollinator escalation fails governance"
+if assert_governed_success_core "fresh install reports existing NOPASSWD without changing policy"; then
+  pass "fresh install with no existing sudo-policy paths creates none"
+  if grep -q 'Boundary warning: passwordless or cached sudo escalation was detected' "${stdout_file}" \
+    && grep -q 'administrator-owned host policy was not changed' "${stdout_file}" \
+    && grep -q 'Review it with tendril hardiness' "${stdout_file}"; then
+    pass "fresh install reports passwordless posture and points to tendril hardiness"
   else
-    fail "passwordless Pollinator escalation fails governance: message" "stderr=$(tr '\n' ' ' <"${stderr_file}")"
+    fail "fresh install reports passwordless posture and points to tendril hardiness" "stdout=$(tr '\n' ' ' <"${stdout_file}")"
   fi
-  if grep -q 'Posture:     GOVERNED' "${stdout_file}"; then
-    fail "passwordless Pollinator escalation reported GOVERNED success"
+  if [ ! -e "${HOSTFS}/etc/sudoers.d/opentendril-p2" ]; then
+    pass "fresh install does not create the legacy sudoers drop-in"
+  else
+    fail "fresh install does not create the legacy sudoers drop-in"
   fi
 fi
 
 new_governed_case
-cat >"${ROOT}/state/sudo-l" <<'EOF'
-User alice may run the following commands on this host:
-    (root) NOPASSWD: /bin/sh
-EOF
+touch "${ROOT}/state/passwordless-tendril"
 run_governed_installer --pollinator-user alice
-if assert_governed_failure "indirect root NOPASSWD fails P2"; then
-  if grep -qi 'P2\|passwordless\|NOPASSWD\|root' "${stderr_file}"; then
-    if grep -q 'Posture:     GOVERNED' "${stdout_file}"; then
-      fail "indirect root NOPASSWD fails P2: reported GOVERNED success"
-    else
-      pass "indirect root NOPASSWD fails P2"
-    fi
+if assert_governed_success_core "fresh install reports cached sudo without invalidating it"; then
+  if grep -q 'Boundary warning: passwordless or cached sudo escalation was detected' "${stdout_file}" \
+    && grep -q 'Review it with tendril hardiness' "${stdout_file}"; then
+    pass "fresh install reports cached posture and points to tendril hardiness"
   else
-    fail "indirect root NOPASSWD fails P2: message" "stderr=$(tr '\n' ' ' <"${stderr_file}")"
+    fail "fresh install reports cached posture and points to tendril hardiness" "stdout=$(tr '\n' ' ' <"${stdout_file}")"
   fi
 fi
 
@@ -3665,6 +3679,7 @@ new_governed_case
 setup_governed_host
 setup_governed_release_fixture 0.3.13
 setup_governed_shims
+capture_sudo_policy_snapshot "${ROOT}/sudo-policy-before"
 write_exec "${SHIM_DIR}/docker" <<EOF
 #!/bin/sh
 . "${SHIM_DIR}/hostpath.lib"
@@ -3888,13 +3903,13 @@ if [ "${status}" -eq 0 ]; then
   if assert_no_sudo_timestamp_mutation "successful governed upgrade does not invalidate sudo timestamps"; then
     pass "successful governed upgrade does not invalidate sudo timestamps"
   fi
-  if assert_upgrade_p2_posture "Ubuntu 24.04 upgrade success fixture uses canonical P2 provenance"; then
-    pass "Ubuntu 24.04 upgrade success fixture uses canonical P2 provenance"
+  if assert_upgrade_sudo_posture "Ubuntu 24.04 upgrade does not depend on OpenTendril sudo provenance"; then
+    pass "Ubuntu 24.04 upgrade leaves administrator sudo policy untouched"
   fi
-  if grep -q 'timestamp_timeout=0' "${ROOT}/state/sudo-l"; then
-    pass "Ubuntu 24.04 success fixture uses classic-sudo-shaped privilege-list output"
+  if grep -q 'timestamp_timeout=15' "${ROOT}/state/sudo-l"; then
+    pass "Ubuntu 24.04 success fixture permits a nonzero administrator timeout"
   else
-    fail "Ubuntu 24.04 success fixture uses classic-sudo-shaped privilege-list output"
+    fail "Ubuntu 24.04 success fixture permits a nonzero administrator timeout"
   fi
 else
   fail "named Pollinator selection" "stderr=$(tr '\n' ' ' <"${stderr_file}")"
@@ -3957,7 +3972,7 @@ preseed_tendril_user with-subid
 place_old_stem_binary
 seed_durable_stem_state
 write_floor_systemctl_show 2001
-prepare_upgrade_p2_provenance
+prepare_upgrade_sudo_policy
 run_governed_upgrade_installer --pollinator-user alice
 if [ "${status}" -ne 0 ] && grep -q 'neither /usr/local/lib/systemd/system/tendril.service nor /etc/systemd/system/tendril.service exists' "${stderr_file}"; then
   pass "governed upgrade fails if base unit is missing"
@@ -3972,7 +3987,7 @@ seed_durable_stem_state
 write_tendril_unit_file "${HOSTFS}/etc/systemd/system/tendril.service" 2001
 write_floor_systemctl_show 2001
 prepare_upgrade_rootless_runtime
-prepare_upgrade_p2_provenance
+prepare_upgrade_sudo_policy
 legacy_hash="$(file_hash "${HOSTFS}/etc/systemd/system/tendril.service")"
 run_governed_upgrade_installer --pollinator-user alice --version v0.3.0
 if [ "${status}" -eq 0 ] \
@@ -4001,7 +4016,7 @@ seed_durable_stem_state
 write_tendril_unit_file "${HOSTFS}/etc/systemd/system/tendril.service" 2001
 printf 'x' >>"${HOSTFS}/etc/systemd/system/tendril.service"
 write_floor_systemctl_show 2001
-prepare_upgrade_p2_provenance
+prepare_upgrade_sudo_policy
 before_legacy="$(cat "${HOSTFS}/etc/systemd/system/tendril.service")"
 before_stem="$(cat "${HOSTFS}/home/tendril/.local/bin/tendril")"
 run_governed_upgrade_installer --pollinator-user alice
@@ -4315,8 +4330,8 @@ if [ "${status}" -eq 0 ] \
   if assert_durable_untouched "Ubuntu 26.04 upgrade leaves durable Stem state untouched"; then
     :
   fi
-  if assert_upgrade_p2_posture "Ubuntu 26.04 upgrade success fixture uses canonical P2 provenance"; then
-    pass "Ubuntu 26.04 upgrade success fixture uses canonical P2 provenance"
+  if assert_upgrade_sudo_posture "Ubuntu 26.04 upgrade does not depend on OpenTendril sudo provenance"; then
+    pass "Ubuntu 26.04 upgrade leaves administrator sudo policy untouched"
   fi
   if grep -q 'timestamp_timeout' "${ROOT}/state/sudo-l"; then
     fail "Ubuntu 26.04 success fixture uses sudo-rs-shaped privilege-list output: listing still mentioned timestamp_timeout"
@@ -4555,51 +4570,93 @@ fi
 
 new_governed_case
 prepare_upgrade_host
+rewrite_host_file "${HOSTFS}/etc/sudoers" <<'EOF'
+Defaults env_reset
+alice ALL=(ALL:ALL) NOPASSWD: ALL
+#includedir /etc/sudoers.d
+EOF
 cat >"${ROOT}/state/sudo-l" <<'EOF'
 User alice may run the following commands on this host:
     (ALL) NOPASSWD: ALL
 EOF
 run_governed_upgrade_installer --pollinator-user alice
-if [ "${status}" -ne 0 ] && grep -qi 'passwordless sudo' "${stderr_file}"; then
-  if assert_upgrade_preflight_unmutated "Pollinator NOPASSWD ALL fails before mutation"; then
-    pass "Pollinator NOPASSWD ALL fails before mutation"
+if [ "${status}" -eq 0 ] \
+  && grep -q 'governed upgrade completed' "${stdout_file}" \
+  && grep -q 'Boundary warning: passwordless or cached sudo escalation was detected' "${stdout_file}" \
+  && grep -q 'Review it with tendril hardiness' "${stdout_file}"; then
+  pass "governed upgrade reports existing NOPASSWD posture instead of rejecting it"
+  if assert_upgrade_sudo_posture "governed upgrade with NOPASSWD leaves policy untouched"; then
+    pass "governed upgrade with NOPASSWD leaves policy and cache untouched"
   fi
 else
-  fail "Pollinator NOPASSWD ALL fails before mutation" "stderr=$(tr '\n' ' ' <"${stderr_file}")"
-fi
-
-new_governed_case
-prepare_upgrade_host
-cat >"${ROOT}/state/sudo-l" <<'EOF'
-User alice may run the following commands on this host:
-    (root) NOPASSWD: /bin/sh
-EOF
-run_governed_upgrade_installer --pollinator-user alice
-if [ "${status}" -ne 0 ] && grep -qi 'passwordless sudo' "${stderr_file}"; then
-  if assert_upgrade_preflight_unmutated "Pollinator root NOPASSWD fails before mutation"; then
-    pass "Pollinator root NOPASSWD fails before mutation"
-  fi
-else
-  fail "Pollinator root NOPASSWD fails before mutation" "stderr=$(tr '\n' ' ' <"${stderr_file}")"
+  fail "governed upgrade reports existing NOPASSWD posture instead of rejecting it" "status=${status} stderr=$(tr '\n' ' ' <"${stderr_file}") stdout=$(tr '\n' ' ' <"${stdout_file}")"
 fi
 
 new_governed_case
 prepare_upgrade_host
 touch "${ROOT}/state/passwordless-tendril"
 run_governed_upgrade_installer --pollinator-user alice
-if [ "${status}" -ne 0 ] && grep -qi 'non-interactively' "${stderr_file}"; then
-  if assert_upgrade_preflight_unmutated "Pollinator sudo -n to Stem fails before mutation"; then
-    pass "Pollinator sudo -n to Stem fails before mutation"
-    if events_match '^CMD sudo -l -U alice' \
-      && events_match '^CMD sudo -u alice sudo -n -u tendril true' \
-      && assert_no_sudo_timestamp_mutation "failed upgrade preflight performs no sudo -K"; then
-      pass "failed upgrade preflight performs no sudo -K"
-    else
-      fail "failed upgrade preflight performs no sudo -K" "events=$(tr '\n' ' ' <"${events_file}")"
-    fi
+if [ "${status}" -eq 0 ] \
+  && grep -q 'governed upgrade completed' "${stdout_file}" \
+  && grep -q 'Boundary warning: passwordless or cached sudo escalation was detected' "${stdout_file}" \
+  && grep -q 'Review it with tendril hardiness' "${stdout_file}"; then
+  pass "governed upgrade reports cached escalation instead of rejecting it"
+  if assert_upgrade_sudo_posture "governed upgrade with cached escalation leaves policy untouched"; then
+    pass "governed upgrade with cached escalation does not invalidate the cache"
   fi
 else
-  fail "Pollinator sudo -n to Stem fails before mutation" "stderr=$(tr '\n' ' ' <"${stderr_file}")"
+  fail "governed upgrade reports cached escalation instead of rejecting it" "status=${status} stderr=$(tr '\n' ' ' <"${stderr_file}") stdout=$(tr '\n' ' ' <"${stdout_file}")"
+fi
+
+new_governed_case
+prepare_upgrade_host
+rm -f "${HOSTFS}/etc/sudoers.d/opentendril-p2"
+run_governed_upgrade_installer --pollinator-user alice
+if [ "${status}" -eq 0 ] \
+  && grep -q 'governed upgrade completed' "${stdout_file}" \
+  && [ ! -e "${HOSTFS}/etc/sudoers.d/opentendril-p2" ]; then
+  pass "governed upgrade with sudo authority succeeds without the legacy drop-in"
+  if assert_upgrade_sudo_posture "upgrade without the legacy drop-in leaves policy untouched"; then
+    pass "upgrade without the legacy drop-in leaves sudo policy untouched"
+  fi
+else
+  fail "governed upgrade with sudo authority succeeds without the legacy drop-in" "status=${status} stderr=$(tr '\n' ' ' <"${stderr_file}") stdout=$(tr '\n' ' ' <"${stdout_file}")"
+fi
+
+new_governed_case
+prepare_upgrade_host
+write_sudo_rs_privilege_listing
+legacy_sudoers_file="${HOSTFS}/etc/sudoers.d/opentendril-p2"
+rewrite_host_file "${legacy_sudoers_file}" <<'EOF'
+Defaults:alice timestamp_timeout=37
+# legacy administrator file; installer must preserve these exact bytes
+EOF
+chmod 0644 "${legacy_sudoers_file}"
+printf 'alice\n' >"${ROOT}/meta/owners/%etc%sudoers.d%opentendril-p2"
+printf 'alice\n' >"${ROOT}/meta/groups/%etc%sudoers.d%opentendril-p2"
+rewrite_host_file "${HOSTFS}/etc/sudoers" <<'EOF'
+Defaults env_reset
+Defaults timestamp_timeout=23
+root ALL=(ALL:ALL) ALL
+EOF
+printf 'Defaults timestamp_timeout=11\n' >"${HOSTFS}/etc/sudoers.d/99-timeout"
+printf 'Defaults env_reset\n' >"${HOSTFS}/etc/sudoers-rs"
+cp -a "${legacy_sudoers_file}" "${ROOT}/legacy-sudoers.before"
+touch "${ROOT}/state/visudo-c-fail"
+run_governed_upgrade_installer --pollinator-user alice
+if [ "${status}" -eq 0 ] \
+  && grep -q 'governed upgrade completed' "${stdout_file}" \
+  && cmp -s "${legacy_sudoers_file}" "${ROOT}/legacy-sudoers.before" \
+  && [ "$(stat -c '%a' "${legacy_sudoers_file}")" = 644 ] \
+  && [ "$(cat "${ROOT}/meta/owners/%etc%sudoers.d%opentendril-p2")" = alice ] \
+  && [ "$(cat "${ROOT}/meta/groups/%etc%sudoers.d%opentendril-p2")" = alice ] \
+  && ! events_match '^CMD visudo '; then
+  pass "upgrade ignores host timeout/include/owner/mode provenance and preserves legacy bytes"
+  if assert_upgrade_sudo_posture "noncanonical sudo policy upgrade remains observational"; then
+    pass "noncanonical sudo policy and legacy file are byte-identical after upgrade"
+  fi
+else
+  fail "upgrade ignores host timeout/include/owner/mode provenance and preserves legacy bytes" "status=${status} stderr=$(tr '\n' ' ' <"${stderr_file}") stdout=$(tr '\n' ' ' <"${stdout_file}") events=$(tr '\n' ' ' <"${events_file}")"
 fi
 
 new_governed_case
@@ -4609,256 +4666,15 @@ cat >"${ROOT}/state/sudo-l" <<'EOF'
 User alice is not allowed to run sudo on testhost.
 EOF
 run_governed_upgrade_installer --pollinator-user alice --version v0.3.0
-if [ "${status}" -eq 0 ] && grep -q 'governed upgrade completed' "${stdout_file}"; then
-  pass "Pollinator without sudo authority is upgrade-admissible without the P2 snippet"
-  if assert_no_upgrade_bootstrap "Pollinator without sudo authority is upgrade-admissible without the P2 snippet"; then
-    pass "Pollinator without sudo authority does not bootstrap the host"
-  fi
-  if assert_p2_inspection_readonly "Pollinator without sudo authority is upgrade-admissible without the P2 snippet"; then
-    pass "Pollinator without sudo authority performs read-only P2 inspection"
-  fi
-  if events_match '^CMD visudo '; then
-    fail "Pollinator without sudo authority invoked visudo" "events=$(tr '\n' ' ' <"${events_file}")"
-  else
-    pass "Pollinator without sudo authority does not invoke visudo"
-  fi
-  if [ -e "${HOSTFS}/etc/sudoers.d/opentendril-p2" ]; then
-    fail "Pollinator without sudo authority is upgrade-admissible: wrote sudoers policy"
-  else
-    pass "Pollinator without sudo authority does not write sudoers policy"
+if [ "${status}" -eq 0 ] \
+  && grep -q 'governed upgrade completed' "${stdout_file}" \
+  && ! grep -q 'Boundary warning:' "${stdout_file}"; then
+  pass "Pollinator without sudo authority remains upgrade-admissible"
+  if assert_upgrade_sudo_posture "upgrade without Pollinator sudo authority leaves policy untouched"; then
+    pass "upgrade without Pollinator sudo authority leaves sudo policy untouched"
   fi
 else
-  fail "Pollinator without sudo authority is upgrade-admissible without the P2 snippet" "status=${status} stderr=$(tr '\n' ' ' <"${stderr_file}") stdout=$(tr '\n' ' ' <"${stdout_file}")"
-fi
-
-new_governed_case
-prepare_upgrade_host
-write_sudo_rs_privilege_listing
-run_governed_upgrade_installer --pollinator-user alice --version v0.3.0
-if [ "${status}" -eq 0 ] && grep -q 'governed upgrade completed' "${stdout_file}"; then
-  pass "sudo authority with canonical P2 provenance is admissible when sudo -l omits Defaults"
-  if assert_upgrade_p2_posture "sudo authority with canonical P2 provenance is admissible when sudo -l omits Defaults"; then
-    pass "canonical P2 provenance leaves P2 policy unwritten"
-  fi
-  if grep -q 'timestamp_timeout' "${ROOT}/state/sudo-l"; then
-    fail "sudo-rs-shaped listing still mentioned timestamp_timeout"
-  else
-    pass "sudo-rs-shaped listing omits timestamp_timeout"
-  fi
-  if events_match '^CMD sudo -l -U alice' \
-    && ! events_match '^CMD sudo -ll' \
-    && events_match '^CMD sudo -u alice sudo -n -u tendril true' \
-    && assert_p2_inspection_readonly "successful canonical P2 provenance preflight is read-only"; then
-    pass "successful canonical P2 provenance preflight is read-only"
-  else
-    fail "successful canonical P2 provenance preflight is read-only" "events=$(tr '\n' ' ' <"${events_file}")"
-  fi
-else
-  fail "sudo authority with canonical P2 provenance is admissible when sudo -l omits Defaults" "status=${status} stderr=$(tr '\n' ' ' <"${stderr_file}") stdout=$(tr '\n' ' ' <"${stdout_file}")"
-fi
-
-new_governed_case
-prepare_upgrade_host
-write_sudo_rs_privilege_listing
-rm -f "${HOSTFS}/etc/sudoers.d/opentendril-p2"
-run_governed_upgrade_installer --pollinator-user alice
-if [ "${status}" -ne 0 ] \
-  && grep -q '/etc/sudoers.d/opentendril-p2 is missing' "${stderr_file}" \
-  && grep -q 'will not rewrite sudo policy' "${stderr_file}"; then
-  if assert_upgrade_preflight_unmutated "canonical P2 file missing fails before mutation"; then
-    pass "canonical P2 file missing fails before mutation"
-    if events_match '^CMD visudo '; then
-      fail "missing P2 file invoked visudo" "events=$(tr '\n' ' ' <"${events_file}")"
-    elif assert_p2_inspection_readonly "missing P2 file inspection is read-only"; then
-      pass "missing P2 file inspection is read-only"
-    fi
-  fi
-else
-  fail "canonical P2 file missing fails before mutation" "status=${status} stderr=$(tr '\n' ' ' <"${stderr_file}")"
-fi
-
-new_governed_case
-prepare_upgrade_host
-write_sudo_rs_privilege_listing
-printf 'alice\n' >"${ROOT}/meta/owners/%etc%sudoers.d%opentendril-p2"
-run_governed_upgrade_installer --pollinator-user alice
-if [ "${status}" -ne 0 ] \
-  && grep -q 'owned by alice:root' "${stderr_file}" \
-  && grep -q 'will not rewrite sudo policy' "${stderr_file}"; then
-  if assert_upgrade_preflight_unmutated "wrong P2 owner fails before mutation"; then
-    pass "wrong P2 owner fails before mutation"
-    if assert_p2_inspection_readonly "wrong P2 owner inspection is read-only"; then
-      pass "wrong P2 owner inspection is read-only"
-    fi
-  fi
-else
-  fail "wrong P2 owner fails before mutation" "status=${status} stderr=$(tr '\n' ' ' <"${stderr_file}")"
-fi
-
-new_governed_case
-prepare_upgrade_host
-write_sudo_rs_privilege_listing
-printf 'alice\n' >"${ROOT}/meta/groups/%etc%sudoers.d%opentendril-p2"
-run_governed_upgrade_installer --pollinator-user alice
-if [ "${status}" -ne 0 ] \
-  && grep -q 'owned by root:alice' "${stderr_file}" \
-  && grep -q 'will not rewrite sudo policy' "${stderr_file}"; then
-  if assert_upgrade_preflight_unmutated "wrong P2 group fails before mutation"; then
-    pass "wrong P2 group fails before mutation"
-  fi
-else
-  fail "wrong P2 group fails before mutation" "status=${status} stderr=$(tr '\n' ' ' <"${stderr_file}")"
-fi
-
-new_governed_case
-prepare_upgrade_host
-write_sudo_rs_privilege_listing
-chmod 0644 "${HOSTFS}/etc/sudoers.d/opentendril-p2"
-run_governed_upgrade_installer --pollinator-user alice
-if [ "${status}" -ne 0 ] \
-  && grep -q 'mode is 644' "${stderr_file}" \
-  && grep -q 'will not rewrite sudo policy' "${stderr_file}"; then
-  if assert_upgrade_preflight_unmutated "wrong P2 mode fails before mutation"; then
-    pass "wrong P2 mode fails before mutation"
-  fi
-else
-  fail "wrong P2 mode fails before mutation" "status=${status} stderr=$(tr '\n' ' ' <"${stderr_file}")"
-fi
-
-new_governed_case
-prepare_upgrade_host
-write_sudo_rs_privilege_listing
-rewrite_host_file "${HOSTFS}/etc/sudoers.d/opentendril-p2" <<'EOF'
-Defaults:bob timestamp_timeout=0
-EOF
-chmod 0440 "${HOSTFS}/etc/sudoers.d/opentendril-p2"
-run_governed_upgrade_installer --pollinator-user alice
-if [ "${status}" -ne 0 ] \
-  && grep -q 'canonical Defaults:alice timestamp_timeout=0 rule' "${stderr_file}" \
-  && grep -q 'will not rewrite sudo policy' "${stderr_file}"; then
-  if assert_upgrade_preflight_unmutated "wrong Pollinator name in P2 file fails before mutation"; then
-    pass "wrong Pollinator name in P2 file fails before mutation"
-  fi
-else
-  fail "wrong Pollinator name in P2 file fails before mutation" "status=${status} stderr=$(tr '\n' ' ' <"${stderr_file}")"
-fi
-
-new_governed_case
-prepare_upgrade_host
-write_sudo_rs_privilege_listing
-rewrite_host_file "${HOSTFS}/etc/sudoers.d/opentendril-p2" <<'EOF'
-Defaults:alice timestamp_timeout=15
-EOF
-chmod 0440 "${HOSTFS}/etc/sudoers.d/opentendril-p2"
-run_governed_upgrade_installer --pollinator-user alice
-if [ "${status}" -ne 0 ] \
-  && grep -q 'canonical Defaults:alice timestamp_timeout=0 rule' "${stderr_file}" \
-  && grep -q 'will not rewrite sudo policy' "${stderr_file}"; then
-  if assert_upgrade_preflight_unmutated "non-zero timeout in P2 file fails before mutation"; then
-    pass "non-zero timeout in P2 file fails before mutation"
-    if assert_p2_inspection_readonly "non-zero timeout in P2 file inspection is read-only"; then
-      pass "non-zero timeout in P2 file inspection is read-only"
-    fi
-  fi
-else
-  fail "non-zero timeout in P2 file fails before mutation" "status=${status} stderr=$(tr '\n' ' ' <"${stderr_file}")"
-fi
-
-new_governed_case
-prepare_upgrade_host
-write_sudo_rs_privilege_listing
-printf 'Defaults env_reset\n' >"${HOSTFS}/etc/sudoers-rs"
-run_governed_upgrade_installer --pollinator-user alice
-if [ "${status}" -ne 0 ] \
-  && grep -q '/etc/sudoers-rs exists' "${stderr_file}" \
-  && grep -q 'will not rewrite sudo policy' "${stderr_file}"; then
-  if assert_upgrade_preflight_unmutated "alternate sudo policy source fails closed"; then
-    pass "alternate sudo policy source fails closed"
-    if assert_p2_inspection_readonly "alternate sudo policy source inspection is read-only"; then
-      pass "alternate sudo policy source inspection is read-only"
-    fi
-  fi
-else
-  fail "alternate sudo policy source fails closed" "status=${status} stderr=$(tr '\n' ' ' <"${stderr_file}")"
-fi
-
-new_governed_case
-prepare_upgrade_host
-write_sudo_rs_privilege_listing
-rewrite_host_file "${HOSTFS}/etc/sudoers" <<'EOF'
-Defaults env_reset
-root ALL=(ALL:ALL) ALL
-EOF
-chmod 0440 "${HOSTFS}/etc/sudoers"
-run_governed_upgrade_installer --pollinator-user alice
-if [ "${status}" -ne 0 ] \
-  && grep -q 'does not include /etc/sudoers.d' "${stderr_file}" \
-  && grep -q 'will not rewrite sudo policy' "${stderr_file}"; then
-  if assert_upgrade_preflight_unmutated "unprovable sudoers.d include fails closed"; then
-    pass "unprovable sudoers.d include fails closed"
-  fi
-else
-  fail "unprovable sudoers.d include fails closed" "status=${status} stderr=$(tr '\n' ' ' <"${stderr_file}")"
-fi
-
-new_governed_case
-prepare_upgrade_host
-write_sudo_rs_privilege_listing
-rewrite_host_file "${HOSTFS}/etc/sudoers" <<'EOF'
-Defaults env_reset
-Defaults timestamp_timeout=15
-root ALL=(ALL:ALL) ALL
-#includedir /etc/sudoers.d
-EOF
-chmod 0440 "${HOSTFS}/etc/sudoers"
-run_governed_upgrade_installer --pollinator-user alice
-if [ "${status}" -ne 0 ] \
-  && grep -q '/etc/sudoers declares timestamp_timeout' "${stderr_file}" \
-  && grep -q 'will not rewrite sudo policy' "${stderr_file}"; then
-  if assert_upgrade_preflight_unmutated "conflicting timestamp_timeout in /etc/sudoers fails closed"; then
-    pass "conflicting timestamp_timeout in /etc/sudoers fails closed"
-  fi
-else
-  fail "conflicting timestamp_timeout in /etc/sudoers fails closed" "status=${status} stderr=$(tr '\n' ' ' <"${stderr_file}")"
-fi
-
-new_governed_case
-prepare_upgrade_host
-write_sudo_rs_privilege_listing
-printf 'Defaults timestamp_timeout=15\n' >"${HOSTFS}/etc/sudoers.d/99-timeout"
-run_governed_upgrade_installer --pollinator-user alice
-if [ "${status}" -ne 0 ] \
-  && grep -q '/etc/sudoers.d/99-timeout declares timestamp_timeout' "${stderr_file}" \
-  && grep -q 'will not rewrite sudo policy' "${stderr_file}"; then
-  if assert_upgrade_preflight_unmutated "conflicting timestamp_timeout drop-in fails closed"; then
-    pass "conflicting timestamp_timeout drop-in fails closed"
-    if assert_p2_inspection_readonly "conflicting timestamp_timeout drop-in inspection is read-only"; then
-      pass "conflicting timestamp_timeout drop-in inspection is read-only"
-    fi
-  fi
-else
-  fail "conflicting timestamp_timeout drop-in fails closed" "status=${status} stderr=$(tr '\n' ' ' <"${stderr_file}")"
-fi
-
-new_governed_case
-prepare_upgrade_host
-write_sudo_rs_privilege_listing
-touch "${ROOT}/state/visudo-c-fail"
-run_governed_upgrade_installer --pollinator-user alice
-if [ "${status}" -ne 0 ] \
-  && grep -q 'visudo -c rejected the sudoers configuration' "${stderr_file}" \
-  && grep -q 'will not rewrite sudo policy' "${stderr_file}"; then
-  if assert_upgrade_preflight_unmutated "visudo -c failure fails before mutation"; then
-    pass "visudo -c failure fails before mutation"
-    if events_match '^CMD visudo -c$' \
-      && assert_p2_inspection_readonly "visudo -c failure inspection is read-only"; then
-      pass "visudo -c failure inspection is read-only"
-    else
-      fail "visudo -c failure inspection is read-only" "events=$(tr '\n' ' ' <"${events_file}")"
-    fi
-  fi
-else
-  fail "visudo -c failure fails before mutation" "status=${status} stderr=$(tr '\n' ' ' <"${stderr_file}")"
+  fail "Pollinator without sudo authority remains upgrade-admissible" "status=${status} stderr=$(tr '\n' ' ' <"${stderr_file}") stdout=$(tr '\n' ' ' <"${stdout_file}")"
 fi
 
 greenhouse_wrapper_test=""
