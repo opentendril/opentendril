@@ -4,7 +4,7 @@
 #
 # Why this exists: before workspace isolation, every delegated operation ran in
 # one shared directory per substrate. Two Pollinators granted the same substrate
-# corrupted each other silently — the delegated commit stages the whole tree, so
+# corrupted each other silently. The delegated commit stages the whole tree, so
 # one Pollinator's uncommitted files were committed by the other, onto the other's
 # branch, under the other's identity. That destroyed the attribution the
 # delegated commit exists to provide, produced no error, and was reachable with
@@ -30,7 +30,7 @@ set -euo pipefail
 adapter="cmd/stem/cmdgit.go"
 
 if [ ! -f "${adapter}" ]; then
-  echo "::error::${adapter} not found — this guard is out of date with the tree layout."
+  echo "::error::${adapter} not found. This guard is out of date with the tree layout."
   exit 1
 fi
 

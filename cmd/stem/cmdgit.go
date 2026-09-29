@@ -20,14 +20,14 @@ import (
 // use. `tendril git branch` gets the workspace onto a feature branch,
 // `tendril git commit` commits under the substrate's configured identity,
 // `tendril git push` publishes from the Stem, and `tendril git pr` opens the
-// pull request — the full delegated ladder, deliberately narrow beyond it (no
+// pull request opens the full delegated ladder. Keep it deliberately narrow beyond it (no
 // delete, no rename, no merge, no arbitrary checkout).
 //
 // A command line invocation is delegated only when a Pollen is declared
 // (TENDRIL_POLLEN): the operation-class is then authorised against the
 // grants, audited, and run in that Pollen's isolated workspace. Without one it
 // is a Botanist at a terminal, working in their own checkout. The deny-closed
-// attribution rule applies either way — a substrate without a configured commit
+// attribution rule applies either way. A substrate without a configured commit
 // identity is refused before any git command runs.
 func runGitCmd(ctx context.Context, args []string) {
 	if len(args) == 0 {
@@ -151,7 +151,7 @@ func buildGitCore(ctx context.Context) (core.Core, error) {
 }
 
 // gitOperations binds the delegated git execution port to the conductor's
-// commit runner — this wiring lives in the adapter layer precisely so the
+// commit runner. This wiring lives in the adapter layer precisely so the
 // Core never imports the conductor (see internal/core/boundary_test.go). It
 // owns named-substrate resolution, credential resolution (so the configured
 // commit identity flows to the conductor), and the translation between the
@@ -487,8 +487,8 @@ func resolveExistingGitApplyWorkspace(ctx context.Context, substrate string, sub
 // terminal still sees their working copy.
 //
 // Every git operation goes through here. Resolving a substrate's raw path for a
-// delegated call is exactly the bug this exists to prevent — two Pollinators sharing
-// one tree, staging each other's files — so the isolation cannot be bypassed by
+// delegated call is exactly the bug this exists to prevent: two Pollinators sharing
+// one tree, staging each other's files. The isolation cannot be bypassed by
 // one operation quietly doing its own resolution. TestDelegatedOperationsAreIsolated
 // pins that.
 func resolveGitWorkspace(ctx context.Context, substrate string, substratesConfig *conductor.SubstratesConfig) (conductor.DelegatedWorkspace, *conductor.SubstrateSpec, error) {
@@ -538,7 +538,7 @@ type gitCommand struct {
 }
 
 // gitCommands is the CLI command tree for `tendril git`. Like
-// stomaCommands, this registration — NOT core.CapabilityNames() — is
+// stomaCommands, this registration (NOT core.CapabilityNames()) is
 // the source of truth the parity coverage test reads for the CLI arm.
 var gitCommands = []gitCommand{
 	{"fetch", core.CapGitFetch},
@@ -737,10 +737,10 @@ func printGitUsage() {
 	fmt.Println("prune --substrate <path|name> [--confirm]")
 	fmt.Println("  Deletes local branches whose pull request MERGED, and nothing else. Without")
 	fmt.Println("  --confirm it only reports what it would delete. A squash-merged branch looks")
-	fmt.Println("  unmerged to git, so merge state comes from GitHub — never from a branch name.")
+	fmt.Println("  unmerged to git, so merge state comes from GitHub, never from a branch name.")
 	fmt.Println()
 	fmt.Println("branch --substrate <path|name> --branch <feature-branch>")
-	fmt.Println("  Creates the branch and switches to it — the governed way off the default")
+	fmt.Println("  Creates the branch and switches to it; this is the governed way off the default")
 	fmt.Println("  branch before committing. An existing branch is switched to, never reset;")
 	fmt.Println("  a branch named as the repository's default branch is refused.")
 	fmt.Println()
@@ -751,7 +751,7 @@ func printGitUsage() {
 	fmt.Println("commit --substrate <path|name> --message <message> [--path P ...]")
 	fmt.Println("  Commits the current state of a substrate's workspace under the substrate's")
 	fmt.Println("  configured commit identity. Deny-closed: a substrate without a configured")
-	fmt.Println("  identity is refused — an unattributable delegated commit is never created.")
+	fmt.Println("  identity is refused, so an unattributable delegated commit is never created.")
 	fmt.Println()
 	fmt.Println("push --substrate <path|name> [--branch B]")
 	fmt.Println("  Pushes the substrate's branch (current branch if --branch is omitted) to its")
@@ -759,7 +759,7 @@ func printGitUsage() {
 	fmt.Println("  never inside a sealed Sprout; the token travels only in the process environment.")
 	fmt.Println()
 	fmt.Println("pr --substrate <path|name> --title <title> [--body B] [--head H] [--base B] [--draft]")
-	fmt.Println("  Opens a pull request for an already-pushed branch (it never pushes — push and")
+	fmt.Println("  Opens a pull request for an already-pushed branch (it never pushes; push and")
 	fmt.Println("  pr are separately grantable). The base branch is READ from the repository when")
 	fmt.Println("  --base is omitted, never assumed to be \"main\"; the head branch defaults to the")
 	fmt.Println("  workspace's current branch. Opening from the default branch is refused, and an")
@@ -809,7 +809,7 @@ func printGitStatus(status core.GitStatusResult) {
 		fmt.Fprintln(os.Stderr, "   workspace: clean")
 		return
 	}
-	fmt.Fprintf(os.Stderr, "   workspace: %d change(s) — %d modified, %d added, %d deleted, %d renamed, %d untracked\n",
+	fmt.Fprintf(os.Stderr, "   workspace: %d change(s), %d modified, %d added, %d deleted, %d renamed, %d untracked\n",
 		status.ChangeCount, status.Modified, status.Added, status.Deleted, status.Renamed, status.Untracked)
 	for _, change := range status.Changes {
 		fmt.Fprintf(os.Stderr, "     %-9s %s\n", change.Kind, change.Path)
@@ -837,12 +837,12 @@ func toCoreBranchInfos(branches []conductor.GitBranchInfo) []core.GitBranchInfo 
 	return out
 }
 
-// printGitBranchList renders the classification, deletable branches first —
+// printGitBranchList renders the classification, deletable branches first:
 // that is what the reader is deciding about.
 func printGitBranchList(result core.GitBranchListResult) {
 	if !result.Verified {
 		fmt.Fprintln(os.Stderr, "⚠️  Merge state could not be established (no GitHub API credential on this connection).")
-		fmt.Fprintln(os.Stderr, "   Nothing is deletable without evidence — a squash-merged branch looks unmerged to git.")
+		fmt.Fprintln(os.Stderr, "   Nothing is deletable without evidence; a squash-merged branch looks unmerged to git.")
 	}
 	deletable := 0
 	for _, branch := range result.Branches {
@@ -864,7 +864,7 @@ func printGitBranchList(result core.GitBranchListResult) {
 // is the difference between a report and a destructive act.
 func printGitPrune(result core.GitPruneResult) {
 	if !result.Confirmed {
-		fmt.Fprintf(os.Stderr, "🔍 Report only — nothing was deleted. %d branch(es) would be removed; re-run with --confirm.\n", len(result.Deleted))
+		fmt.Fprintf(os.Stderr, "🔍 Report only; nothing was deleted. %d branch(es) would be removed; re-run with --confirm.\n", len(result.Deleted))
 	} else {
 		fmt.Fprintf(os.Stderr, "🌱 Deleted %d branch(es).\n", len(result.Deleted))
 	}

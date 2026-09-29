@@ -5,7 +5,7 @@ import (
 	"sort"
 )
 
-// Capability names — the canonical governed capability identity. Transports may
+// Capability names are the canonical governed capability identity. Transports may
 // project that identity according to their adapter contract; Core itself does
 // not own transport naming. Parity is asserted on this set (see the parity
 // tests under cmd/stem). Adding a name here without wiring every surface, or
@@ -49,7 +49,7 @@ const (
 )
 
 // CapSproutWatch is the read side of the sprout family: it authorises watching
-// a phytomer that a subject's own runs were dispatched into — the stored run
+// a phytomer that a subject's own runs were dispatched into: the stored run
 // record, the persisted events, the live stream, and the headless
 // current-state watch.
 //
@@ -64,7 +64,7 @@ const CapSproutWatch = "sprout.watch"
 // Capability is one declarative command capability. A single declaration is
 // projected onto every surface: MCP reads Name/Description/InputSchema to build
 // a tool, the CLI builds a subcommand, and all non-REST surfaces run it through
-// Invoke. Invoke's signature carries zero transport types — the litmus test for
+// Invoke. Invoke's signature carries zero transport types. This is the litmus test for
 // the Core boundary.
 type Capability struct {
 	Name        string
@@ -147,7 +147,7 @@ func DelegatedCapabilityNames() []string {
 }
 
 // IsDelegatedCapability reports whether the named capability is a delegated
-// operation-class — one that must be authorized by a delegation grant before
+// operation-class, which must be authorized by a delegation grant before
 // it is invoked on behalf of an external Pollinator.
 func IsDelegatedCapability(name string) bool {
 	for _, delegated := range DelegatedCapabilityNames() {

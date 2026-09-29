@@ -360,7 +360,7 @@ func TestLoadDelegationGrantsMissingFileMeansZeroGrants(t *testing.T) {
 
 // TestLoadDelegationGrantsNeverReadsSubstrateCarriedFile encodes the
 // no-self-escalation guarantee at the storage boundary: a grants file inside
-// a Substrate checkout is never consulted — only the Stem's own control-plane
+// a Substrate checkout is never consulted; only the Stem's own control-plane
 // directory is.
 func TestLoadDelegationGrantsNeverReadsSubstrateCarriedFile(t *testing.T) {
 	controlPlaneDir := t.TempDir()
@@ -385,7 +385,7 @@ func TestLoadDelegationGrantsNeverReadsSubstrateCarriedFile(t *testing.T) {
 		t.Fatalf("LoadDelegationGrants failed: %v", err)
 	}
 	if len(grants) != 0 {
-		t.Fatalf("grant count = %d, want 0 — a Substrate-carried grants file must never load", len(grants))
+		t.Fatalf("grant count = %d, want 0: a Substrate-carried grants file must never load", len(grants))
 	}
 
 	authorizer := core.NewDelegationAuthorizer(grants)

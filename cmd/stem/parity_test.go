@@ -65,7 +65,7 @@ func newParityFixture(t *testing.T) (core.Core, *receptors.SessionsHandler, *rec
 	gitRest := receptors.NewGitHandler(svc)
 	configRest := receptors.NewConfigHandler(svc, "")
 	// Register the REST routes so the handlers' Capabilities() reflect what is
-	// actually mounted on the mux (not the canonical list) — the independence
+	// actually mounted on the mux, not the canonical list. This is the independence
 	// the coverage test relies on.
 	mux := http.NewServeMux()
 	rest.Register(mux, nil, nil)
@@ -248,11 +248,11 @@ func TestInterfaceParityCoverage(t *testing.T) {
 	canonical := core.CapabilityNames()
 
 	// Each arm reflects what its surface ACTUALLY wires, independently derived:
-	//   REST — capabilities recorded while mounting routes on the mux
+	//   REST: capabilities recorded while mounting routes on the mux
 	//          (sessions + genome + plasmid + graft + trait + sequence + sprout handlers).
-	//   MCP  — declared Core names, plus live tools/list primary projections
+	//   MCP: declared Core names, plus live tools/list primary projections
 	//          resolved through the adapter projection table.
-	//   CLI  — capabilities of the subcommands registered on the command trees
+	//   CLI: capabilities of the subcommands registered on the command trees
 	//          (`tendril session` + `tendril genome` + `tendril plasmid` + `tendril mesh` + `tendril mesh trait` + `tendril sequence` + `tendril sprout`).
 	restCaps := append(rest.Capabilities(), genomeRest.Capabilities()...)
 	restCaps = append(restCaps, plasmidRest.Capabilities()...)
@@ -298,8 +298,8 @@ func TestInterfaceParityCoverage(t *testing.T) {
 // TestControlPlaneCapabilitiesExcluded asserts that core.CapabilityNames() contains no
 // control-plane verb.
 //
-// Why it matters: Control-plane operations — issuing or revoking a Pollinator credential,
-// git setup, writing grants — are deliberately not capabilities. That is what keeps
+// Why it matters: Stem control-plane operations include issuing or revoking a Pollinator credential,
+// git setup, and writing grants. These operations are deliberately not capabilities. That is what keeps
 // setting the Stem up reachable only as a subcommand run as the Stem's own
 // principal, where file ownership confines it, and off both Pollinator-facing
 // surfaces.
@@ -416,8 +416,8 @@ func samePreferences(a, b session.Preferences) bool {
 // ---------------------------------------------------------------------------
 // Behavioral parity, part two: TestInterfaceParityBehavioral_*
 // above proves REST and MCP produce equivalent *outputs* against a real
-// Core. This proves the adapters carry zero business logic of their own —
-// CLI included — by asserting on the *shape of the call itself*. A mock Core
+// Core. This proves the adapters carry zero business logic of their own.
+// The CLI is included; the test asserts on the *shape of the call itself*. A mock Core
 // records exactly which typed method it received and with what argument
 // struct; REST, MCP, and CLI must each decode an equivalent request into the
 // identical typed input and invoke the identical method, not merely produce
@@ -432,7 +432,7 @@ type mockCoreCall struct {
 }
 
 // mockCore is a stub core.Core. Every typed method only records its call and
-// returns a canned result — no orchestration, no session manager, no disk.
+// returns a canned result, with no orchestration, session manager, or disk.
 // Capabilities()/Invoke() route through those same typed methods via the
 // identical decode-then-dispatch pattern the real Service uses
 // (cmd/stem/internal/core/registry.go), so an MCP or CLI call and a direct
@@ -760,7 +760,7 @@ func (m *mockCore) GitPrune(_ context.Context, in core.GitPruneInput) (core.GitP
 }
 
 // Capabilities mirrors the real registry's declarative shape closely enough
-// for the MCP adapter's isCoreCapability/tool-listing checks — but every
+// for the MCP adapter's isCoreCapability/tool-listing checks, but every
 // Invoke closure below dispatches to this mock's own typed methods above,
 // exactly like core.Service.Capabilities() dispatches to Service's typed
 // methods (registry.go).
@@ -1105,7 +1105,7 @@ func (m *mockCore) Capabilities() []core.Capability {
 }
 
 // Invoke dispatches by capability name via the same declarative-registry
-// pattern the real Service uses — this is the path the MCP and CLI adapters
+// pattern the real Service uses. This is the path the MCP and CLI adapters
 // call through.
 func (m *mockCore) Invoke(ctx context.Context, name string, input map[string]any) (any, error) {
 	for _, capability := range m.Capabilities() {
@@ -1131,15 +1131,15 @@ func decodeMockInput(input map[string]any, target any) error {
 
 // newMockParityFixture wires the REST and MCP adapters over a mockCore
 // instead of a real Service, so assertions are about how each adapter
-// translates a request into a Core call — not about session-manager
+// translates a request into a Core call, not about session-manager
 // behavior (already covered above with a real Core).
 func newMockParityFixture(t *testing.T) (*mockCore, *http.ServeMux, *receptors.MCPHandler) {
 	t.Helper()
 	mock := &mockCore{}
 
 	// A real, empty, in-memory manager only backs the REST handler's
-	// ungoverned routes (events/sprout-runs/async-sequence) — never touched
-	// by this test — and MCP's non-core tools. No disk I/O (nil store).
+	// ungoverned routes (events/sprout-runs/async-sequence) are never touched
+	// by this test. MCP's non-core tools are also outside its scope. No disk I/O (nil store).
 	manager, err := session.NewManager(context.Background(), nil)
 	if err != nil {
 		t.Fatalf("new manager: %v", err)
@@ -1199,7 +1199,7 @@ func newMockParityFixture(t *testing.T) (*mockCore, *http.ServeMux, *receptors.M
 // TestBehavioralParity proves the CLI, REST, and MCP adapters carry zero
 // business logic: for each capability under test, an equivalent payload
 // fired through all three surfaces must decode into the identical typed
-// Core input and invoke the identical Core method exactly once — asserted
+// Core input and invoke the identical Core method exactly once, as asserted
 // against a mock Core that records exactly what it received, and that each
 // adapter maps the mock's canned result back to its own surface without
 // error.
@@ -1485,8 +1485,8 @@ func TestBehavioralParity(t *testing.T) {
 			// runSessionCmd itself constructs its own Core (buildSessionCore,
 			// backed by a real history DB) and calls os.Exit/prints to stdout
 			// on completion, so it cannot be driven directly in-process. This
-			// instead exercises the exact same three steps it performs —
-			// lookupSessionCommand, parseSessionArgs, then Core.Invoke — using
+			// instead exercises the exact same three steps it performs:
+			// lookupSessionCommand, parseSessionArgs, then Core.Invoke, using
 			// the real production functions, substituting only the mock for
 			// the terminal Core.Invoke call.
 			mock.reset()
@@ -2302,7 +2302,7 @@ func TestBehavioralParity_SequenceRun(t *testing.T) {
 	if parsed.Error != nil || parsed.Result.IsError {
 		t.Fatalf("MCP runSequence alias failed: %s", aliasResp)
 	}
-	// The alias never carried provider overrides — it maps to a bare run.
+	// The alias never carried provider overrides; it maps to a bare run.
 	assertOneRunCall(t, "MCP alias", core.SequenceRunInput{PathOrName: "deploy"})
 
 	// --- CLI --------------------------------------------------------------------

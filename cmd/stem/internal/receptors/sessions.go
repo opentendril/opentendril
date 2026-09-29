@@ -43,7 +43,7 @@ type SessionsHandler struct {
 	watchPoll time.Duration
 	// registered accumulates the governed capability names actually mounted by
 	// Register, so Capabilities() reflects the wired routes (not the canonical
-	// list) — the independence the parity coverage test relies on.
+	// list). This is the independence the parity coverage test relies on.
 	registered []string
 }
 
@@ -78,7 +78,7 @@ const phytomerWatchPattern = "GET /v1/phytomers/{sessionId}/watch"
 
 // governedRoutes is the single table of session-capability routes this adapter
 // wires. Register mounts exactly these and records their capabilities, so the
-// advertised set in Capabilities() reflects what is *actually registered* —
+// advertised set in Capabilities() reflects what is *actually registered*;
 // deleting an entry here both un-mounts the route and makes the parity coverage
 // test's REST arm diverge from the canonical registry.
 func (h *SessionsHandler) governedRoutes() []governedRoute {
@@ -180,7 +180,7 @@ func (h *SessionsHandler) Register(mux *http.ServeMux, auth, observeAuth func(ht
 	// routes truly registered. Each route is also mounted under the legacy
 	// /v1/sessions alias (same handler, same {sessionId} param) so existing
 	// clients keep working through the botanisation; the alias is not recorded
-	// in the parity set — the canonical /v1/phytomers surface is the contract.
+	// in the parity set; the canonical /v1/phytomers surface is the contract.
 	h.registered = h.registered[:0]
 	seen := make(map[string]bool)
 	for _, route := range h.governedRoutes() {
@@ -204,7 +204,7 @@ func (h *SessionsHandler) Register(mux *http.ServeMux, auth, observeAuth func(ht
 		}
 	}
 
-	// Observation views — not part of the parity registry, and gated per
+	// Observation views (not part of the parity registry), gated per
 	// request inside the handler against the phytomer named in the path.
 	// Canonical + legacy alias, as above.
 	for pattern, handler := range map[string]http.HandlerFunc{

@@ -90,7 +90,7 @@ func ResolveSubstrateWorkspace(substrate string, spec *SubstrateSpec) (string, e
 	return workspace, nil
 }
 
-// checkoutHasGitMetadata reports that path is itself a git checkout — a .git
+// checkoutHasGitMetadata reports that path is itself a git checkout. A .git
 // directory or file in THIS directory. git rev-parse walks parents, so an
 // empty managed placeholder under another repository must not count as ready.
 func checkoutHasGitMetadata(path string) bool {
@@ -150,7 +150,7 @@ func MaterializeManagedCheckouts(ctx context.Context, config *SubstratesConfig) 
 	}
 }
 
-// managedCheckoutRoot is the Tendril-owned base for managed checkouts — deliberately
+// managedCheckoutRoot is the Tendril-owned base for managed checkouts, deliberately
 // separate from any human-editable clone. Overridable via env for tests/ops.
 func managedCheckoutRoot() string {
 	if v := strings.TrimSpace(os.Getenv("TENDRIL_MANAGED_CHECKOUT_ROOT")); v != "" {
@@ -307,7 +307,7 @@ func ephemeralCheckoutPath(name string) (string, error) {
 
 // refreshExistingCheckout brings a persistent checkout up to date and clean:
 // fetch, then hard-reset to the target branch. Because a foreign substrate is
-// edited in place, this guarantees each run starts from a pristine tree —
+// edited in place, this guarantees each run starts from a pristine tree,
 // discarding any residue from a prior (e.g. read-only) run.
 //
 // That discarding is correct for a directory Tendril owns and maintains
@@ -315,7 +315,7 @@ func ephemeralCheckoutPath(name string) (string, error) {
 // themselves (path mode): a hard reset there silently deletes a human's
 // uncommitted work. So when the checkout is NOT Tendril-owned and has local
 // changes, the refresh refuses instead, and says what it found. Losing an
-// operator's work to make room for a run is never the right trade — the run
+// operator's work to make room for a run is never the right trade; the run
 // can wait, the work cannot be recovered.
 func refreshExistingCheckout(dir, branch string, gitEnv []string, tendrilOwned bool) error {
 	ctx := context.Background()
@@ -326,7 +326,7 @@ func refreshExistingCheckout(dir, branch string, gitEnv []string, tendrilOwned b
 			return fmt.Errorf("refresh checkout %q: %w", dir, err)
 		}
 		if strings.TrimSpace(strings.ReplaceAll(status, "\x00", "")) != "" {
-			return fmt.Errorf("refusing to refresh %q: it is your own checkout (checkout mode \"path\") and it has uncommitted changes, which this refresh would discard — commit or set those changes aside, or point the substrate at checkout mode \"managed\" so Tendril works in its own clone", dir)
+			return fmt.Errorf("refusing to refresh %q: it is your own checkout (checkout mode \"path\") and it has uncommitted changes, which this refresh would discard. Commit or set those changes aside, or point the substrate at checkout mode \"managed\" so Tendril works in its own clone", dir)
 		}
 	}
 	unlockRemoteRefs, lockErr := lockCommonGitRemoteRefs(ctx, dir)

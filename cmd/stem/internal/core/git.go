@@ -152,7 +152,7 @@ type GitFetchResult struct {
 
 // GitPushInput asks the Stem to push the substrate's current branch to its
 // remote using the substrate's configured credential. The push runs on the
-// Stem (the sole secret-holding zone), never inside a sealed Sprout — a
+// Stem (the sole secret-holding zone), never inside a sealed Sprout. A
 // delegated push is the Stem's mediated egress with the connection's dedicated
 // Personal Access Token.
 type GitPushInput struct {
@@ -202,7 +202,7 @@ type GitPRInput struct {
 	Head string `json:"head,omitempty"`
 	// Base optionally names the branch to merge into; empty resolves the
 	// repository's real default branch from the GitHub API. A default branch
-	// is never assumed to be "main" — assuming it is the failure this
+	// is never assumed to be "main"; avoiding that assumption is the failure this
 	// capability exists to design out.
 	Base string `json:"base,omitempty"`
 	// Draft opens the pull request as a draft.
@@ -227,7 +227,7 @@ type GitPRSpec struct {
 type GitPRResult struct {
 	// Status is "created" when a new pull request was opened, or "exists" when
 	// an open pull request for the same head branch was already there (the
-	// existing one is returned untouched — a repeat call never duplicates and
+	// existing one is returned untouched. A repeat call never duplicates and
 	// never rewrites a description a human may have edited).
 	Status string `json:"status"`
 	// Number is the pull request number.
@@ -267,7 +267,7 @@ type GitBranchSpec struct {
 type GitBranchResult struct {
 	// Status is "created" for a new branch, or "switched" when the branch
 	// already existed and the workspace moved onto it (an existing branch is
-	// never reset — that would discard work).
+	// never reset, which would discard work).
 	Status string `json:"status"`
 	// Branch is the branch now checked out.
 	Branch string `json:"branch"`
@@ -317,7 +317,7 @@ type GitStatusResult struct {
 	// DefaultBranch is the resolved default branch ("" when undetermined).
 	DefaultBranch string `json:"defaultBranch,omitempty"`
 	// DefaultBranchSource is how it was determined: config, api, remote-head,
-	// or unknown — in which case the protection floor is what is in force.
+	// or unknown. In that case, the protection floor is what is in force.
 	DefaultBranchSource string `json:"defaultBranchSource,omitempty"`
 	// Repository is the "owner/repo" the origin remote points at.
 	Repository string `json:"repository,omitempty"`
@@ -351,7 +351,7 @@ type GitStatusResult struct {
 	// Workspace is the directory this status describes. A delegated caller
 	// works in its own isolated worktree, not the substrate's checkout, and
 	// a Pollinator that cannot see that it is isolated will eventually assume it
-	// is not — the same "invited to guess" failure the read-side exists to
+	// is not. This is the same "invited to guess" failure the read-side exists to
 	// remove. So the isolation is reported rather than implied.
 	Workspace string `json:"workspace,omitempty"`
 	// Isolated reports that Workspace is a per-Pollinator worktree.
@@ -408,7 +408,7 @@ type GitBranchListResult struct {
 type GitPruneInput struct {
 	Substrate string `json:"substrate"`
 	// Confirm performs the deletion. Omitted or false reports what would be
-	// deleted and changes nothing — the safe path is the one taken by
+	// deleted and changes nothing. The safe path is the one taken by
 	// accident, which matters most for the ladder operation that can destroy
 	// work.
 	Confirm bool   `json:"confirm,omitempty"`
@@ -436,7 +436,7 @@ type GitPrunedBranch struct {
 type GitPruneResult struct {
 	// Confirmed reports whether this run actually deleted anything.
 	Confirmed bool `json:"confirmed"`
-	// Deleted lists branches removed, or — when not confirmed — the branches
+	// Deleted lists branches removed, or, when not confirmed, the branches
 	// that would be.
 	Deleted []GitPrunedBranch `json:"deleted"`
 	// Kept lists every branch not removed, with the reason.
@@ -696,7 +696,7 @@ func (s *Service) GitPrune(ctx context.Context, in GitPruneInput) (GitPruneResul
 }
 
 // gitCapabilities declares the git family's registry entry, bound to this
-// Service's typed method — identical in shape to the other families.
+// Service's typed method, identical in shape to the other families.
 func (s *Service) gitCapabilities() []Capability {
 	return []Capability{
 		{
@@ -738,7 +738,7 @@ func (s *Service) gitCapabilities() []Capability {
 		},
 		{
 			Name:        CapGitCommit,
-			Description: "Commit the current state of a substrate's workspace under the substrate's configured commit identity; refused when no identity is configured (deny-closed — an unattributable delegated commit is never created).",
+			Description: "Commit the current state of a substrate's workspace under the substrate's configured commit identity; refused when no identity is configured (deny-closed: an unattributable delegated commit is never created).",
 			InputSchema: schemaObject(map[string]any{
 				"substrate": stringProp("The absolute path or named substrate key for the target repository workspace."),
 				"message":   stringProp("The commit message."),
@@ -795,7 +795,7 @@ func (s *Service) gitCapabilities() []Capability {
 		},
 		{
 			Name:        CapGitBranch,
-			Description: "Create (or switch to) a feature branch in a substrate's workspace — the governed way to get off the default branch before committing. An existing branch is switched to, never reset; a branch named as the repository's default branch is refused.",
+			Description: "Create (or switch to) a feature branch in a substrate's workspace. This is the governed way to get off the default branch before committing. An existing branch is switched to, never reset; a branch named as the repository's default branch is refused.",
 			InputSchema: schemaObject(map[string]any{
 				"substrate": stringProp("The absolute path or named substrate key for the target repository workspace."),
 				"branch":    stringProp("The feature branch to create and switch to."),

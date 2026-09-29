@@ -46,7 +46,7 @@ type RunWorkspace struct {
 // After fetching the remote Fruit branch by name (GitHub does not advertise
 // arbitrary OIDs), the fetched tip is resolved locally and compared to the
 // GitHub-returned OID. If they do not match exactly, the workspace is left
-// untouched and an error is returned — the caller can inspect the workspace
+// untouched and an error is returned, so the caller can inspect the workspace
 // and no data is silently discarded.
 //
 // git reset --hard resets tracked files and the index to match the target
@@ -102,14 +102,14 @@ func (rw *RunWorkspace) ReconcilePublishedFruit(ctx context.Context, oid string)
 
 	// 5. Resolve the fetched tip locally and compare to the GitHub-returned OID
 	//    before any destructive operation. A mismatch means GitHub advertised a
-	//    different commit than the mutation returned — leave the workspace clean.
+	//    different commit than the mutation returned, leaving the workspace clean.
 	fetchedOID, err := runGitCommand(ctx, repo, "rev-parse", "--verify", "--end-of-options", "origin/"+branch+"^{commit}")
 	if err != nil {
 		return fmt.Errorf("reconcile: resolve fetched tip of origin/%s: %w", branch, err)
 	}
 	fetchedOID = strings.TrimSpace(fetchedOID)
 	if fetchedOID != targetOID {
-		return fmt.Errorf("reconcile: fetched tip of origin/%s is %s but GitHub returned %s — workspace left untouched", branch, fetchedOID, targetOID)
+		return fmt.Errorf("reconcile: fetched tip of origin/%s is %s but GitHub returned %s. Workspace left untouched", branch, fetchedOID, targetOID)
 	}
 
 	// 6. All checks passed: reset tracked files and index to match the published

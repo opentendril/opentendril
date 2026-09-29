@@ -21,7 +21,7 @@ import (
 // committed by the other, onto the other's branch, under the other's identity.
 //
 // A worktree shares the repository's object store, so commits are immediately
-// visible to the substrate as branches — which is what keeps push, pull requests
+// visible to the substrate as branches, which is what keeps push, pull requests
 // and review working. Git also refuses to check out one branch in two worktrees,
 // turning "two Pollinators on one branch" into a refusal rather than corruption.
 
@@ -57,7 +57,7 @@ func sanitizeWorkspaceComponent(value string) string {
 //
 // Isolation removes subject-versus-pollen corruption; it does not remove one
 // pollen issuing two overlapping calls. This is an in-process lock, which
-// covers the realistic case — one Stem serving many Pollinators — and
+// covers the realistic case: one Stem serving many Pollinators. It
 // deliberately does NOT claim to coordinate with a separate process on the same
 // directory. Claiming more than it delivers would be worse than the honest
 // limitation.
@@ -101,7 +101,7 @@ var ErrDelegatedWorkspaceAbsent = errors.New("delegated workspace is absent")
 
 // ResolveDelegatedWorkspace returns the workspace an operation should run in.
 //
-// With no pollen — a human at a terminal — it returns the substrate's own
+// With no pollen, for a human at a terminal, it returns the substrate's own
 // checkout unchanged. With a Pollinator, it returns that subject's private
 // worktree, created on first use ON AN OWNED BRANCH cut from the repository's
 // resolved default branch.
@@ -195,7 +195,7 @@ func ResolveDelegatedWorkspaceWithMode(ctx context.Context, substrateName, subst
 	}
 
 	// Cut from the repository's resolved default branch, never from whatever
-	// the substrate checkout happens to be on — the workspace's starting point
+	// the substrate checkout happens to be on. The workspace's starting point
 	// is as much a thing that must not be assumed as the default branch's name.
 	startPoint, err := workspaceStartPoint(ctx, base)
 	if err != nil {
@@ -228,7 +228,7 @@ func ResolveDelegatedWorkspaceWithMode(ctx context.Context, substrateName, subst
 }
 
 // rotateFinishedWorkspaceBranch resets a subject's working branch onto the
-// current default branch when the old one is finished — meaning it holds
+// current default branch when the old one is finished, meaning it holds
 // nothing, or everything it held has merged. It returns the branch name when
 // it rotated, and "" when the branch was left alone.
 //
@@ -298,7 +298,7 @@ func rotateFinishedWorkspaceBranch(ctx context.Context, base, workspacePath, bra
 //
 // It returns a resolved COMMIT, not a reference name, and that matters. A
 // worktree has its own HEAD, so a name like "HEAD" means one thing in the
-// substrate and another inside the workspace — resolving it here, against the
+// substrate and another inside the workspace. Resolving it here, against the
 // substrate, removes the ambiguity before the value travels anywhere.
 func workspaceStartPoint(ctx context.Context, base string) (string, error) {
 	unlockRemoteRefs, lockErr := lockCommonGitRemoteRefs(ctx, base)
@@ -316,8 +316,8 @@ func workspaceStartPoint(ctx context.Context, base string) (string, error) {
 		candidates = append(candidates, "origin/"+resolution.Branch, resolution.Branch)
 	}
 	// The protection floor, for the same reason IsProtected applies it: an
-	// undetermined default branch is a real outcome — a clone without an
-	// origin/HEAD record resolves to nothing — and without these the next
+	// undetermined default branch is a real outcome: a clone without an
+	// origin/HEAD record resolves to nothing. Without this protection, the next
 	// candidate is HEAD, which is whatever the checkout was last left on. A
 	// sibling branch still carrying another change's commits is exactly what
 	// this start point exists to avoid inheriting.
@@ -337,7 +337,7 @@ func workspaceStartPoint(ctx context.Context, base string) (string, error) {
 
 	// HEAD is the last resort rather than a silent one. A repository with no
 	// default branch and no floor name is usually a fresh single-branch one,
-	// where HEAD is correct — but it is also how work would be cut from a
+	// where HEAD is correct, but it is also how work would be cut from a
 	// sibling in-flight branch, so the caller is told which branch it inherited.
 	commit, err := runGitCommitCommandFn(ctx, base, "rev-parse", "--verify", "--quiet", "HEAD")
 	if err == nil && strings.TrimSpace(commit) != "" {

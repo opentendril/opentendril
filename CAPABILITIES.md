@@ -78,7 +78,7 @@ Current view:
   projections reuse the same ownership/grant rule:
 
   - REST/SSE: `GET /v1/phytomers/{sessionId}/watch`
-  - MCP: `sproutWatch({ sessionId })` — one current-state snapshot per call
+  - MCP: `sproutWatch({ sessionId })` (one current-state snapshot per call)
 
   A delegated caller must hold a `sprout.watch` grant covering every Substrate
   targeted by a Phytomer's runs. A Seed-owned Phytomer is observable under this
@@ -435,7 +435,7 @@ Phytomer without creating a replacement opening or work lifecycle. Reusing the
 key for a different semantic request conflicts. Synchronous Seed growth does
 not require this key.
 
-#### Direct interactive coding — `tendril chat`
+#### Direct interactive coding: `tendril chat`
 
 `tendril chat` provides lightweight direct interactive coding for the single-user
 posture. It is a Pollinator-facing presentation adapter over `seed.grow`,

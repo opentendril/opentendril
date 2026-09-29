@@ -31,7 +31,7 @@ type GitHandler struct {
 	delegation *DelegationGate
 	// registered accumulates the governed capability names actually mounted by
 	// Register, so Capabilities() reflects the wired routes (not the canonical
-	// list) — the independence the parity coverage test relies on.
+	// list). This is the independence the parity coverage test relies on.
 	registered []string
 }
 
