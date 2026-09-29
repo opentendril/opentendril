@@ -41,6 +41,7 @@ var lockedPrimaryMCPNames = map[string]string{
 	"git.branch.list":   "gitBranchList",
 	"git.prune":         "gitPrune",
 	"git.apply":         "gitApply",
+	"git.fetch":         "gitFetch",
 }
 
 var lockedCompatibilityAliases = map[string]string{

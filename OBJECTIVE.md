@@ -13,33 +13,28 @@ exists to make possible.
 
 ## Current
 
-**A Pollinator holding only OpenTendril authority can submit an exact deterministic patch for an authorized Substrate and obtain Git-reviewable Fruit without receiving repository credentials, requiring client-side Git-host authentication, or invoking Mycorrhizal reasoning for the patch handoff.**
+**A Pollinator holding only OpenTendril authority can synchronize the remote branch state of an authorized Substrate through a bounded governed Git fetch, without receiving repository credentials, modifying Botanist-owned local work, or invoking Mycorrhizal reasoning.**
 
 ## Done when
 
-* **Authority is exact.** An authenticated Pollinator is authorized by the exact Pollen, `git.apply` capability, and named Substrate.
-* **Application stays within delegated isolation.** The supplied patch is applied only inside that Pollinator's isolated delegated workspace.
-* **Handoff freshness is exact.** The handoff requires the exact expected `HEAD`; a stale handoff fails closed.
-* **Unsafe input and state fail closed.** A dirty workspace, invalid patch, unauthorized Substrate, oversized patch, or partial application all fail closed.
-* **Patch application is deterministic.** Applying the patch invokes no Mycorrhizal reasoning.
-* **Repository credentials stay with the Stem.** Credentials remain Stem-held and are not exposed to the Pollinator.
-* **`git.apply` only applies the patch.** It does not itself branch, commit, push, open a PR, merge, or accept Fruit.
-* **Separately granted Git capabilities can continue the lifecycle.** Existing separately granted capabilities can take the applied change through branch, commit, publication, and reviewable Fruit.
-* **Fruit remains under Botanist review.** The default branch remains unchanged until the Botanist reviews and merges the resulting Fruit.
-* **The capability is projected consistently.** Core, REST, MCP, and CLI expose consistent `git.apply` behavior.
-* **A real external-client qualification succeeds.** One real qualification demonstrates an external client handing OpenTendril a patch and reaching reviewable Git output using only OpenTendril authority.
+* **Authority is exact.** The exact Pollen, `git.fetch` capability, and named Substrate authority are required.
+* **Network authority is configured.** The configured Substrate defines network authority, and a local `origin` identity mismatch fails closed before network mutation.
+* **Synchronization is branch-only.** Only branch state under `refs/remotes/origin/*` is synchronized, including bounded pruning.
+* **Botanist-owned local state is unchanged.** No tags, `FETCH_HEAD`, local branches, owned refs, `HEAD`, index, or working-tree state is modified.
+* **An existing checkout is required.** No delegated workspace is created or rotated.
+* **Shared repository state is serialized.** Repository-scoped serialization is used where required.
+* **Credentials remain contained.** Credentials stay Stem-held and destination-contained.
+* **Interfaces remain in parity.** REST, MCP, and CLI project the same governed Core contract.
+* **`git.status` remains offline.** It observes refreshed state only when separately called.
+* **Real external-Pollinator qualification succeeds.** Fetch works using only OpenTendril authority while preserving the declared state and credential boundaries.
 
 This objective does not require:
 
-* generic `git.pull` or fetch redesign;
-* direct shared-working-tree mutation;
-* arbitrary host-path ingestion;
-* additional forge integrations;
-* Greenhouse redesign;
-* Internet deployment;
-* automatic merge;
-* marketing or site work; or
-* compound cognitive workflows such as automatic code review after publication.
+* `git.pull`, merge, rebase, reset, checkout, switch, or local branch synchronization;
+* arbitrary remotes or refspecs;
+* forge API fetch;
+* automatic pre-operation fetch or automatic merge; or
+* delegated workspace refresh, creation, or rotation.
 
 ---
 

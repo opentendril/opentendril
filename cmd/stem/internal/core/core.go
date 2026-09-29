@@ -6,7 +6,7 @@
 //
 // The parity tests assert that every governed capability is projected identically
 // by all three surfaces. plasmid.sign and the mesh key-management commands are
-// deliberately ungoverned — see plasmid.go and mesh.go.
+// deliberately ungoverned. See plasmid.go and mesh.go.
 package core
 
 import (
@@ -26,7 +26,7 @@ import (
 var ErrNotFound = errors.New("session not found")
 
 // Core is the capability service every interface adapter routes through. Every
-// method is expressible with plain domain types only — no net/http, no MCP,
+// method is expressible with plain domain types only. No net/http, no MCP,
 // no CLI types appear in any signature.
 type Core interface {
 	CreateSession(ctx context.Context, in CreateSessionInput) (session.Phytomer, error)
@@ -79,7 +79,7 @@ type Core interface {
 	// minimal delegable operation-class. Runs through the injected
 	// StomaOperations execution port.
 	StomaPass(ctx context.Context, in StomaPassInput) (StomaPassResult, error)
-	// Seed family: grow a Seed — a bounded intent — to Fruit, building toward a
+	// Seed family: grow a Seed (a bounded intent) to Fruit, building toward a
 	// goal and iterating until a verify predicate passes, within iteration/time
 	// bounds. Runs through the injected SeedOperations execution port.
 	SeedGrow(ctx context.Context, in SeedGrowInput) (SeedGrowResult, error)
@@ -90,7 +90,7 @@ type Core interface {
 	OpenPreparedSeed(ctx context.Context, growth SeedGrowth) (SeedDispatch, error)
 	// ObservePhytomer is the transport-free current-state view of one
 	// Seed-owned Phytomer. It is not a governed Pollinator command. Safety
-	// projection — which persisted fields may be released — is owned here.
+	// projection, specifically which persisted fields may be released, is owned here.
 	ObservePhytomer(ctx context.Context, phytomerID string) (PhytomerObservation, error)
 	// ObserveFruitInventory is the transport-free Botanist view of persisted
 	// Fruit joined with factual Git/forge evidence. It is not a governed
@@ -103,6 +103,9 @@ type Core interface {
 	// GitApply deterministically applies an exact bounded patch to the
 	// caller's existing clean isolated workspace. Runs through GitOperations.
 	GitApply(ctx context.Context, in GitApplyInput) (GitApplyResult, error)
+	// GitFetch refreshes only the configured Substrate's remote branch-tracking
+	// refs through Stem-held transport authority. It never changes local work.
+	GitFetch(ctx context.Context, in GitFetchInput) (GitFetchResult, error)
 	// GitPush pushes a substrate's branch to its remote using the substrate's
 	// configured credential; the push runs on the Stem, never inside a sealed
 	// Sprout. Runs through the injected GitOperations execution port.
@@ -116,13 +119,13 @@ type Core interface {
 	// workspace, so default-branch protection has a governed next move. Runs
 	// through the injected GitOperations execution port.
 	GitBranch(ctx context.Context, in GitBranchInput) (GitBranchResult, error)
-	// GitStatus reports a substrate's git state — the read-side of the
+	// GitStatus reports a substrate's git state. This is the read-side of the
 	// ladder, so a Pollinator can look before it acts instead of discovering the
 	// guardrails by being refused. Runs through the injected GitOperations
 	// execution port.
 	GitStatus(ctx context.Context, in GitStatusInput) (GitStatusResult, error)
 	// GitBranchList classifies a substrate's local branches against evidence
-	// from the forge — the only signal that survives squash merges. Read-only.
+	// from the forge, the only signal that survives squash merges. Read-only.
 	GitBranchList(ctx context.Context, in GitBranchListInput) (GitBranchListResult, error)
 	// GitPrune deletes local branches whose pull request merged, and nothing
 	// else. The ladder's only destructive operation: it reports by default and

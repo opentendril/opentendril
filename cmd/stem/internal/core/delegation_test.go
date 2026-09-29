@@ -360,7 +360,7 @@ func TestLoadDelegationGrantsMissingFileMeansZeroGrants(t *testing.T) {
 
 // TestLoadDelegationGrantsNeverReadsSubstrateCarriedFile encodes the
 // no-self-escalation guarantee at the storage boundary: a grants file inside
-// a Substrate checkout is never consulted — only the Stem's own control-plane
+// a Substrate checkout is never consulted; only the Stem's own control-plane
 // directory is.
 func TestLoadDelegationGrantsNeverReadsSubstrateCarriedFile(t *testing.T) {
 	controlPlaneDir := t.TempDir()
@@ -385,7 +385,7 @@ func TestLoadDelegationGrantsNeverReadsSubstrateCarriedFile(t *testing.T) {
 		t.Fatalf("LoadDelegationGrants failed: %v", err)
 	}
 	if len(grants) != 0 {
-		t.Fatalf("grant count = %d, want 0 — a Substrate-carried grants file must never load", len(grants))
+		t.Fatalf("grant count = %d, want 0: a Substrate-carried grants file must never load", len(grants))
 	}
 
 	authorizer := core.NewDelegationAuthorizer(grants)
@@ -441,9 +441,9 @@ func TestLoadDelegationGrantsRejectsMalformedGrants(t *testing.T) {
 // git.status is included deliberately: read-only does not mean ungated, since a
 // status response names branches and changed file paths.
 func TestDelegatedCapabilityTaxonomy(t *testing.T) {
-	delegated := []string{core.CapSproutGrow, core.CapStomaPass, core.CapSeedGrow, core.CapGitCommit, core.CapGitApply, core.CapGitPush, core.CapGitPR, core.CapGitBranch, core.CapGitStatus, core.CapGitBranchList, core.CapGitPrune, core.CapGenotypeCreate, core.CapContinuePhytomer}
-	if len(delegated) != 13 {
-		t.Fatalf("DelegatedCapabilityNames() has %d name(s), want 13: %v", len(delegated), delegated)
+	delegated := []string{core.CapSproutGrow, core.CapStomaPass, core.CapSeedGrow, core.CapGitCommit, core.CapGitApply, core.CapGitFetch, core.CapGitPush, core.CapGitPR, core.CapGitBranch, core.CapGitStatus, core.CapGitBranchList, core.CapGitPrune, core.CapGenotypeCreate, core.CapContinuePhytomer}
+	if len(delegated) != 14 {
+		t.Fatalf("DelegatedCapabilityNames() has %d name(s), want 14: %v", len(delegated), delegated)
 	}
 	for _, name := range delegated {
 		if !core.IsDelegatedCapability(name) {

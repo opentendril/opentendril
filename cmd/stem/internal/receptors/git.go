@@ -31,7 +31,7 @@ type GitHandler struct {
 	delegation *DelegationGate
 	// registered accumulates the governed capability names actually mounted by
 	// Register, so Capabilities() reflects the wired routes (not the canonical
-	// list) — the independence the parity coverage test relies on.
+	// list). This is the independence the parity coverage test relies on.
 	registered []string
 }
 
@@ -51,6 +51,7 @@ func (h *GitHandler) WithDelegation(gate *DelegationGate) *GitHandler {
 // wires (same contract as StomaHandler.governedRoutes).
 func (h *GitHandler) governedRoutes() []governedRoute {
 	return []governedRoute{
+		{"POST /v1/git/fetch", core.CapGitFetch, h.fetch},
 		{"POST /v1/git/apply", core.CapGitApply, h.apply},
 		{"POST /v1/git/commit", core.CapGitCommit, h.commit},
 		{"POST /v1/git/push", core.CapGitPush, h.push},
@@ -60,6 +61,74 @@ func (h *GitHandler) governedRoutes() []governedRoute {
 		{"POST /v1/git/branches", core.CapGitBranchList, h.branchList},
 		{"POST /v1/git/prune", core.CapGitPrune, h.prune},
 	}
+}
+
+// MaxGitFetchRequestBodyBytes bounds the small fixed transport projection.
+const MaxGitFetchRequestBodyBytes = 4096
+
+// fetch decodes only the configured Substrate name and adapter metadata,
+// authorizes the exact tuple, then projects the single Core fetch contract.
+func (h *GitHandler) fetch(w http.ResponseWriter, r *http.Request) {
+	var req core.GitFetchInput
+	if r.ContentLength > MaxGitFetchRequestBodyBytes {
+		http.Error(w, "request body too large", http.StatusRequestEntityTooLarge)
+		return
+	}
+	if r.Body == nil {
+		http.Error(w, "invalid request body", http.StatusBadRequest)
+		return
+	}
+	r.Body = http.MaxBytesReader(w, r.Body, MaxGitFetchRequestBodyBytes)
+	decoder := json.NewDecoder(r.Body)
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&req); err != nil {
+		var maxErr *http.MaxBytesError
+		if errors.As(err, &maxErr) {
+			http.Error(w, "request body too large", http.StatusRequestEntityTooLarge)
+		} else {
+			http.Error(w, "invalid request body", http.StatusBadRequest)
+		}
+		return
+	}
+	var trailing any
+	if err := decoder.Decode(&trailing); !errors.Is(err, io.EOF) {
+		http.Error(w, "invalid request body", http.StatusBadRequest)
+		return
+	}
+	if strings.TrimSpace(req.Substrate) == "" {
+		http.Error(w, "substrate is required", http.StatusBadRequest)
+		return
+	}
+	if h.delegation == nil {
+		http.Error(w, "git.fetch requires an authorized Pollinator", http.StatusForbidden)
+		return
+	}
+	pollen, credentialOK := h.delegation.PollenFor(r)
+	if !credentialOK || pollen == "" {
+		http.Error(w, "git.fetch requires an authorized Pollinator", http.StatusForbidden)
+		return
+	}
+	request := core.DelegationRequest{
+		Pollen:         pollen,
+		OperationClass: core.CapGitFetch,
+		Substrate:      strings.TrimSpace(req.Substrate),
+		Impact:         core.CapabilityImpact(core.CapGitFetch),
+	}
+	decision := h.delegation.Authorize(request)
+	if !decision.Authorized {
+		http.Error(w, "delegation denied: "+decision.Reason, http.StatusForbidden)
+		return
+	}
+	ctx := core.WithAuthorizedDelegationRequest(core.WithPollen(r.Context(), pollen), request)
+	if strings.TrimSpace(req.Origin) == "" {
+		req.Origin = session.OriginREST
+	}
+	result, err := h.core.GitFetch(ctx, req)
+	if err != nil {
+		writeCoreErr(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, result)
 }
 
 // MaxGitApplyRequestBodyBytes bounds the JSON envelope for one maximum-size

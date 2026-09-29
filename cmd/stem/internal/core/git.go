@@ -12,6 +12,34 @@ import (
 // projection of git.apply. The Core enforces it before calling the Git port.
 const MaxGitApplyPatchBytes = 1_048_576
 
+const (
+	MaxGitFetchRefDetails  = 50
+	MaxGitFetchResultBytes = 16_384
+)
+
+const (
+	GitFetchFailureAuthorizationDenied    = "authorization-denied"
+	GitFetchFailureSubstrateUnavailable   = "substrate-or-repository-unavailable"
+	GitFetchFailureRemoteIdentityMismatch = "remote-identity-mismatch"
+	GitFetchFailureAuthentication         = "authentication-failure"
+	GitFetchFailureNetwork                = "network-or-remote-unavailable"
+	GitFetchFailureDestinationDenied      = "network-destination-denied"
+	GitFetchFailureGit                    = "git-fetch-failure"
+)
+
+// GitFetchError is a safe, typed failure category. It intentionally carries
+// no raw Git diagnostic, URL, filesystem path, or credential-derived value.
+type GitFetchError struct {
+	Category string
+}
+
+func (e GitFetchError) Error() string {
+	if e.Category == "" {
+		return "git.fetch: " + GitFetchFailureGit
+	}
+	return "git.fetch: " + e.Category
+}
+
 // The git capability family: the delegated-execution ladder. A Pollinator asks
 // the Stem to do git work under the substrate's configured connection rather
 // than shelling out git on the host. Each operation-class is separately
@@ -86,9 +114,45 @@ type GitApplyResult struct {
 	ChangedPaths []string `json:"changedPaths"`
 }
 
+// GitFetchInput accepts only a configured Substrate name and adapter metadata.
+// Remote, URL, refspec, branch, tags, prune, path, and Git options are not
+// caller-selectable.
+type GitFetchInput struct {
+	Substrate string `json:"substrate"`
+	Origin    string `json:"origin,omitempty"`
+}
+
+// GitFetchSpec is the transport-free request passed to the Stem-side port.
+type GitFetchSpec struct {
+	Substrate string
+	Origin    string
+}
+
+// GitFetchRefChange is one bounded branch-tracking ref delta.
+type GitFetchRefChange struct {
+	Ref    string `json:"ref"`
+	Change string `json:"change"`
+	OldOID string `json:"oldOid,omitempty"`
+	NewOID string `json:"newOid,omitempty"`
+}
+
+// GitFetchResult reports deterministic facts about the fixed origin branch
+// namespace. Details are lexically ordered and bounded independently of totals.
+type GitFetchResult struct {
+	Status           string              `json:"status"`
+	Substrate        string              `json:"substrate"`
+	Remote           string              `json:"remote"`
+	Created          int                 `json:"created"`
+	Updated          int                 `json:"updated"`
+	Pruned           int                 `json:"pruned"`
+	Total            int                 `json:"total"`
+	DetailsTruncated bool                `json:"detailsTruncated"`
+	Changes          []GitFetchRefChange `json:"changes"`
+}
+
 // GitPushInput asks the Stem to push the substrate's current branch to its
 // remote using the substrate's configured credential. The push runs on the
-// Stem (the sole secret-holding zone), never inside a sealed Sprout — a
+// Stem (the sole secret-holding zone), never inside a sealed Sprout. A
 // delegated push is the Stem's mediated egress with the connection's dedicated
 // Personal Access Token.
 type GitPushInput struct {
@@ -137,9 +201,9 @@ type GitPRInput struct {
 	// assumed name).
 	Head string `json:"head,omitempty"`
 	// Base optionally names the branch to merge into; empty resolves the
-	// repository's real default branch from the GitHub API. A default branch
-	// is never assumed to be "main" — assuming it is the failure this
-	// capability exists to design out.
+	// repository's real default branch from the GitHub API. It never falls back
+	// to a guessed branch name; preventing that assumption is why this capability
+	// exists.
 	Base string `json:"base,omitempty"`
 	// Draft opens the pull request as a draft.
 	Draft bool `json:"draft,omitempty"`
@@ -163,7 +227,7 @@ type GitPRSpec struct {
 type GitPRResult struct {
 	// Status is "created" when a new pull request was opened, or "exists" when
 	// an open pull request for the same head branch was already there (the
-	// existing one is returned untouched — a repeat call never duplicates and
+	// existing one is returned untouched. A repeat call never duplicates and
 	// never rewrites a description a human may have edited).
 	Status string `json:"status"`
 	// Number is the pull request number.
@@ -203,7 +267,7 @@ type GitBranchSpec struct {
 type GitBranchResult struct {
 	// Status is "created" for a new branch, or "switched" when the branch
 	// already existed and the workspace moved onto it (an existing branch is
-	// never reset — that would discard work).
+	// never reset, which would discard work).
 	Status string `json:"status"`
 	// Branch is the branch now checked out.
 	Branch string `json:"branch"`
@@ -253,7 +317,7 @@ type GitStatusResult struct {
 	// DefaultBranch is the resolved default branch ("" when undetermined).
 	DefaultBranch string `json:"defaultBranch,omitempty"`
 	// DefaultBranchSource is how it was determined: config, api, remote-head,
-	// or unknown — in which case the protection floor is what is in force.
+	// or unknown. In that case, the protection floor is what is in force.
 	DefaultBranchSource string `json:"defaultBranchSource,omitempty"`
 	// Repository is the "owner/repo" the origin remote points at.
 	Repository string `json:"repository,omitempty"`
@@ -287,7 +351,7 @@ type GitStatusResult struct {
 	// Workspace is the directory this status describes. A delegated caller
 	// works in its own isolated worktree, not the substrate's checkout, and
 	// a Pollinator that cannot see that it is isolated will eventually assume it
-	// is not — the same "invited to guess" failure the read-side exists to
+	// is not. This is the same "invited to guess" failure the read-side exists to
 	// remove. So the isolation is reported rather than implied.
 	Workspace string `json:"workspace,omitempty"`
 	// Isolated reports that Workspace is a per-Pollinator worktree.
@@ -344,7 +408,7 @@ type GitBranchListResult struct {
 type GitPruneInput struct {
 	Substrate string `json:"substrate"`
 	// Confirm performs the deletion. Omitted or false reports what would be
-	// deleted and changes nothing — the safe path is the one taken by
+	// deleted and changes nothing. The safe path is the one taken by
 	// accident, which matters most for the ladder operation that can destroy
 	// work.
 	Confirm bool   `json:"confirm,omitempty"`
@@ -372,7 +436,7 @@ type GitPrunedBranch struct {
 type GitPruneResult struct {
 	// Confirmed reports whether this run actually deleted anything.
 	Confirmed bool `json:"confirmed"`
-	// Deleted lists branches removed, or — when not confirmed — the branches
+	// Deleted lists branches removed, or, when not confirmed, the branches
 	// that would be.
 	Deleted []GitPrunedBranch `json:"deleted"`
 	// Kept lists every branch not removed, with the reason.
@@ -389,6 +453,10 @@ type GitOperations struct {
 	// isolated workspace. Implementations own configured-Substrate resolution,
 	// clean-state and expected-HEAD checks, path containment, and Git execution.
 	Apply func(ctx context.Context, spec GitApplySpec) (GitApplyResult, error)
+	// Fetch synchronizes only fixed origin branch-tracking refs from the
+	// configured Substrate URL. Implementations own identity, transport,
+	// credential, object-import, ref-transaction, and repository-lock boundaries.
+	Fetch func(ctx context.Context, spec GitFetchSpec) (GitFetchResult, error)
 	// Commit stages and commits the spec against the resolved workspace under
 	// the substrate's configured commit identity. Implementations own
 	// substrate resolution, credential resolution, and the deny-closed
@@ -458,6 +526,24 @@ func (s *Service) GitApply(ctx context.Context, in GitApplyInput) (GitApplyResul
 		Patch:        in.Patch,
 		Origin:       in.Origin,
 	})
+}
+
+// GitFetch validates the exact trusted Pollen + capability + named Substrate
+// authority before invoking the Stem-side transport port.
+func (s *Service) GitFetch(ctx context.Context, in GitFetchInput) (GitFetchResult, error) {
+	substrate := strings.TrimSpace(in.Substrate)
+	if substrate == "" {
+		return GitFetchResult{}, GitFetchError{Category: GitFetchFailureSubstrateUnavailable}
+	}
+	pollen := PollenFromContext(ctx)
+	authorized, ok := AuthorizedDelegationRequestFromContext(ctx)
+	if pollen == "" || !ok || authorized.Pollen != pollen || authorized.OperationClass != CapGitFetch || authorized.Substrate != substrate || authorized.Impact != DelegationImpactMedium {
+		return GitFetchResult{}, GitFetchError{Category: GitFetchFailureAuthorizationDenied}
+	}
+	if s.git.Fetch == nil {
+		return GitFetchResult{}, GitFetchError{Category: GitFetchFailureGit}
+	}
+	return s.git.Fetch(ctx, GitFetchSpec{Substrate: substrate, Origin: in.Origin})
 }
 
 func isFullGitObjectID(value string) bool {
@@ -610,9 +696,29 @@ func (s *Service) GitPrune(ctx context.Context, in GitPruneInput) (GitPruneResul
 }
 
 // gitCapabilities declares the git family's registry entry, bound to this
-// Service's typed method — identical in shape to the other families.
+// Service's typed method, identical in shape to the other families.
 func (s *Service) gitCapabilities() []Capability {
 	return []Capability{
+		{
+			Name:        CapGitFetch,
+			Description: "Synchronize configured remote branch state into origin remote-tracking refs without changing local work, tags, or FETCH_HEAD.",
+			InputSchema: schemaObject(map[string]any{
+				"substrate": stringProp("The configured named Substrate."),
+				"origin":    stringProp("Interaction origin recorded on the operation (cli, mcp, rest)."),
+			}, []string{"substrate"}),
+			Invoke: func(ctx context.Context, input map[string]any) (any, error) {
+				for key := range input {
+					if key != "substrate" && key != "origin" {
+						return nil, fmt.Errorf("git.fetch input contains an unsupported field")
+					}
+				}
+				var in GitFetchInput
+				if err := decodeInput(input, &in); err != nil {
+					return nil, err
+				}
+				return s.GitFetch(ctx, in)
+			},
+		},
 		{
 			Name:        CapGitApply,
 			Description: "Apply a deterministic UTF-8 Git patch to the caller's existing isolated workspace. Requires an exact full expected HEAD and a clean workspace; changes remain unstaged and unpublished.",
@@ -632,7 +738,7 @@ func (s *Service) gitCapabilities() []Capability {
 		},
 		{
 			Name:        CapGitCommit,
-			Description: "Commit the current state of a substrate's workspace under the substrate's configured commit identity; refused when no identity is configured (deny-closed — an unattributable delegated commit is never created).",
+			Description: "Commit the current state of a substrate's workspace under the substrate's configured commit identity; refused when no identity is configured (deny-closed: an unattributable delegated commit is never created).",
 			InputSchema: schemaObject(map[string]any{
 				"substrate": stringProp("The absolute path or named substrate key for the target repository workspace."),
 				"message":   stringProp("The commit message."),
@@ -689,7 +795,7 @@ func (s *Service) gitCapabilities() []Capability {
 		},
 		{
 			Name:        CapGitBranch,
-			Description: "Create (or switch to) a feature branch in a substrate's workspace — the governed way to get off the default branch before committing. An existing branch is switched to, never reset; a branch named as the repository's default branch is refused.",
+			Description: "Create (or switch to) a feature branch in a substrate's workspace. This is the governed way to get off the default branch before committing. An existing branch is switched to, never reset; a branch named as the repository's default branch is refused.",
 			InputSchema: schemaObject(map[string]any{
 				"substrate": stringProp("The absolute path or named substrate key for the target repository workspace."),
 				"branch":    stringProp("The feature branch to create and switch to."),
