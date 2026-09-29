@@ -168,6 +168,9 @@ func gitOperationsForConfig(substratesConfig *conductor.SubstratesConfig) core.G
 	return core.GitOperations{
 		Fetch: func(ctx context.Context, spec core.GitFetchSpec) (core.GitFetchResult, error) {
 			name := strings.TrimSpace(spec.Substrate)
+			if name == "" {
+				return core.GitFetchResult{}, core.GitFetchError{Category: core.GitFetchFailureSubstrateUnavailable}
+			}
 			substrateSpec, configured := conductor.ResolveSubstrate(name, substratesConfig)
 			if !configured || substrateSpec == nil {
 				return core.GitFetchResult{}, core.GitFetchError{Category: core.GitFetchFailureSubstrateUnavailable}

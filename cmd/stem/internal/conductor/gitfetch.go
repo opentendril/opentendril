@@ -53,6 +53,7 @@ type gitFetchChange struct {
 type gitFetchHooks struct {
 	allowFileTransport bool
 	importObjects      func(context.Context, string, string, string, []string, map[string]string) (string, error)
+	verifyPackKeep     func(string, string, string) (string, error)
 	updateRefs         func(context.Context, string, string, []string, []gitFetchChange) error
 }
 
@@ -163,6 +164,10 @@ func runGitFetchWithHooks(ctx context.Context, execution GitFetchExecution, hook
 	if err != nil || !sameGitFetchIdentity(configured, local) {
 		return core.GitFetchResult{}, gitFetchError(core.GitFetchFailureRemoteIdentityMismatch)
 	}
+	objectFormat, err := gitFetchStorageObjectFormat(ctx, commonDir, fetchLocalEnv())
+	if err != nil {
+		return core.GitFetchResult{}, gitFetchError(core.GitFetchFailureGit)
+	}
 	credential := execution.Credential
 	if execution.ResolveCredential != nil {
 		credential, err = execution.ResolveCredential()
@@ -183,7 +188,7 @@ func runGitFetchWithHooks(ctx context.Context, execution GitFetchExecution, hook
 	if err != nil {
 		return core.GitFetchResult{}, err
 	}
-	if err := initializeGitFetchStage(ctx, root, stageDir, env); err != nil {
+	if err := initializeGitFetchStage(ctx, root, stageDir, env, objectFormat); err != nil {
 		return core.GitFetchResult{}, classifyGitFetchCommand(err)
 	}
 	if err := fetchGitFetchBranches(ctx, root, stageDir, env, configured); err != nil {
@@ -228,14 +233,17 @@ func runGitFetchWithHooks(ctx context.Context, execution GitFetchExecution, hook
 
 	importObjects := hooks.importObjects
 	if importObjects == nil {
-		importObjects = importMissingGitFetchObjects
+		verifyPackKeep := hooks.verifyPackKeep
+		if verifyPackKeep == nil {
+			verifyPackKeep = verifyGitFetchPackKeep
+		}
+		importObjects = func(ctx context.Context, root, stageDir, commonDir string, env []string, refs map[string]string) (string, error) {
+			return importMissingGitFetchObjects(ctx, root, stageDir, commonDir, env, refs, verifyPackKeep)
+		}
 	}
 	keepPath, err := importObjects(ctx, root, stageDir, commonDir, env.local, newRefs)
 	if err != nil {
 		return core.GitFetchResult{}, classifyGitFetchCommand(err)
-	}
-	if keepPath != "" {
-		defer os.Remove(keepPath)
 	}
 	for _, oid := range newRefs {
 		if _, err := runGitFetchCommand(ctx, root, env.local, "--git-dir="+commonDir, "cat-file", "-e", oid+"^{commit}"); err != nil {
@@ -252,6 +260,9 @@ func runGitFetchWithHooks(ctx context.Context, execution GitFetchExecution, hook
 		if err := updateRefs(ctx, root, commonDir, env.local, changes); err != nil {
 			return core.GitFetchResult{}, classifyGitFetchCommand(err)
 		}
+	}
+	if keepPath != "" {
+		_ = os.Remove(keepPath)
 	}
 	return makeGitFetchResult(substrate, changes), nil
 }
@@ -470,9 +481,35 @@ func seedStemKnownHosts() (string, error) {
 	return target, nil
 }
 
-func initializeGitFetchStage(ctx context.Context, root, stageDir string, env gitFetchEnvironment) error {
-	_, err := runGitFetchCommand(ctx, root, env.base, "init", "--bare", "--quiet", "--template="+filepath.Join(root, "template"), stageDir)
-	return err
+func gitFetchStorageObjectFormat(ctx context.Context, gitDir string, env []string) (string, error) {
+	output, err := runGitFetchCommand(ctx, "", env, "--git-dir="+gitDir, "rev-parse", "--show-object-format=storage")
+	if err != nil {
+		return "", err
+	}
+	format := strings.TrimSpace(string(output))
+	switch format {
+	case "sha1", "sha256":
+		return format, nil
+	default:
+		return "", errors.New("unsupported Git storage object format")
+	}
+}
+
+func initializeGitFetchStage(ctx context.Context, root, stageDir string, env gitFetchEnvironment, objectFormat string) error {
+	if objectFormat != "sha1" && objectFormat != "sha256" {
+		return errors.New("unsupported Git storage object format")
+	}
+	if _, err := runGitFetchCommand(ctx, root, env.base, "init", "--bare", "--quiet", "--object-format="+objectFormat, "--template="+filepath.Join(root, "template"), stageDir); err != nil {
+		return err
+	}
+	stageFormat, err := gitFetchStorageObjectFormat(ctx, stageDir, env.base)
+	if err != nil {
+		return err
+	}
+	if stageFormat != objectFormat {
+		return errors.New("staging repository object format does not match substrate")
+	}
+	return nil
 }
 
 func fetchGitFetchBranches(ctx context.Context, root, stageDir string, env gitFetchEnvironment, remote gitFetchRemote) error {
@@ -547,7 +584,7 @@ func readGitFetchRefs(ctx context.Context, root, gitDir string, env []string, na
 	return refs, nil
 }
 
-func importMissingGitFetchObjects(ctx context.Context, root, stageDir, commonDir string, env []string, refs map[string]string) (string, error) {
+func importMissingGitFetchObjects(ctx context.Context, root, stageDir, commonDir string, env []string, refs map[string]string, verifyPackKeep func(string, string, string) (string, error)) (string, error) {
 	missing := false
 	for _, oid := range refs {
 		if _, err := runGitFetchCommand(ctx, root, env, "--git-dir="+commonDir, "cat-file", "-e", oid+"^{commit}"); err != nil {
@@ -613,18 +650,36 @@ func importMissingGitFetchObjects(ctx context.Context, root, stageDir, commonDir
 	if fields := strings.SplitN(packOID, "\t", 2); len(fields) == 2 && fields[0] == "keep" {
 		packOID = strings.TrimSpace(fields[1])
 	}
-	if !validGitFetchOID(packOID) {
+	if !validGitFetchOID(packOID) || len(oids) == 0 || len(packOID) != len(oids[0]) {
 		return "", errors.New("index-pack returned invalid pack identity")
 	}
 	packDir := filepath.Join(commonDir, "objects", "pack")
-	keepPath := filepath.Join(packDir, "pack-"+packOID+".keep")
-	if info, statErr := os.Stat(keepPath); statErr == nil && info.Size() <= int64(len(marker)+64) {
-		contents, readErr := os.ReadFile(keepPath)
-		if readErr == nil && string(bytes.TrimSpace(contents)) == marker {
-			return keepPath, nil
-		}
+	if verifyPackKeep == nil {
+		verifyPackKeep = verifyGitFetchPackKeep
 	}
-	return "", nil
+	return verifyPackKeep(packDir, packOID, marker)
+}
+
+func verifyGitFetchPackKeep(packDir, packOID, marker string) (string, error) {
+	if !validGitFetchOID(packOID) || marker == "" || strings.ContainsAny(marker, "\x00\r\n") {
+		return "", errors.New("invalid imported pack protection evidence")
+	}
+	keepPath := filepath.Join(packDir, "pack-"+packOID+".keep")
+	info, err := os.Lstat(keepPath)
+	if err != nil {
+		return "", errors.New("imported pack protection marker is unavailable")
+	}
+	if !info.Mode().IsRegular() || info.Size() != int64(len(marker)+1) {
+		return "", errors.New("imported pack protection marker is malformed")
+	}
+	contents, err := os.ReadFile(keepPath)
+	if err != nil {
+		return "", errors.New("imported pack protection marker is unreadable")
+	}
+	if string(contents) != marker+"\n" {
+		return "", errors.New("imported pack protection marker does not match")
+	}
+	return keepPath, nil
 }
 
 func updateGitFetchRefs(ctx context.Context, root, commonDir string, env []string, changes []gitFetchChange) error {

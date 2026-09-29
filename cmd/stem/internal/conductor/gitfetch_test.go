@@ -87,10 +87,17 @@ func newGitFetchFixture(t *testing.T) gitFetchFixture {
 }
 
 func initFetchTestRepo(t *testing.T, path string, bare bool) {
+	initFetchTestRepoWithObjectFormat(t, path, bare, "")
+}
+
+func initFetchTestRepoWithObjectFormat(t *testing.T, path string, bare bool, objectFormat string) {
 	t.Helper()
 	args := []string{"init", "--initial-branch=main"}
 	if bare {
 		args = append(args, "--bare")
+	}
+	if objectFormat != "" {
+		args = append(args, "--object-format="+objectFormat)
 	}
 	args = append(args, path)
 	command := exec.Command("git", args...)
@@ -255,6 +262,7 @@ type localGitFetchState struct {
 	head         string
 	branchRefs   string
 	tagRefs      string
+	ownedRefs    string
 	originHead   []byte
 	index        []byte
 	status       string
@@ -286,6 +294,7 @@ func snapshotLocalGitFetchState(t *testing.T, repo string) localGitFetchState {
 		head:         strings.TrimSpace(gitFetchTestGit(t, repo, "rev-parse", "HEAD")),
 		branchRefs:   gitFetchTestGit(t, repo, "for-each-ref", "--format=%(refname) %(objectname)", "refs/heads"),
 		tagRefs:      gitFetchTestGit(t, repo, "for-each-ref", "--format=%(refname) %(objectname)", "refs/tags"),
+		ownedRefs:    gitFetchTestGit(t, repo, "for-each-ref", "--format=%(refname) %(objectname)", "refs/opentendril/owned"),
 		originHead:   originHead,
 		index:        index,
 		status:       gitFetchTestGit(t, repo, "status", "--porcelain", "-z"),
@@ -293,6 +302,111 @@ func snapshotLocalGitFetchState(t *testing.T, repo string) localGitFetchState {
 		untracked:    untracked,
 		stagedDiff:   gitFetchTestGit(t, repo, "diff", "--cached", "--binary"),
 		unstagedDiff: gitFetchTestGit(t, repo, "diff", "--binary"),
+	}
+}
+
+func TestGitFetchPreservesSHA256ObjectFormatAndBackingState(t *testing.T) {
+	probe := filepath.Join(t.TempDir(), "sha256-probe.git")
+	command := exec.Command("git", "init", "--quiet", "--bare", "--object-format=sha256", probe)
+	if output, err := command.CombinedOutput(); err != nil {
+		message := strings.ToLower(string(output))
+		capabilityAbsent := (strings.Contains(message, "unknown option") && strings.Contains(message, "object-format")) ||
+			strings.Contains(message, "unsupported object format") ||
+			(strings.Contains(message, "sha-256") && strings.Contains(message, "not supported"))
+		if capabilityAbsent {
+			t.Skipf("installed Git cannot create SHA-256 repositories: %s", strings.TrimSpace(string(output)))
+		}
+		t.Fatalf("probe Git SHA-256 repository creation: %v\n%s", err, output)
+	}
+	if got := strings.TrimSpace(gitFetchTestGit(t, probe, "rev-parse", "--show-object-format=storage")); got != "sha256" {
+		t.Fatalf("SHA-256 probe storage format = %q", got)
+	}
+
+	root := t.TempDir()
+	remote := filepath.Join(root, "remote.git")
+	seed := filepath.Join(root, "seed")
+	backing := filepath.Join(root, "backing")
+	initFetchTestRepoWithObjectFormat(t, remote, true, "sha256")
+	initFetchTestRepoWithObjectFormat(t, seed, false, "sha256")
+	initFetchTestRepoWithObjectFormat(t, backing, false, "sha256")
+	configureFetchTestIdentity(t, seed)
+	configureFetchTestIdentity(t, backing)
+	writeFetchTestFile(t, seed, "tracked.txt", "remote sha256 state\n")
+	gitFetchTestGit(t, seed, "add", "tracked.txt")
+	gitFetchTestGit(t, seed, "commit", "-m", "remote sha256 state")
+	remoteOID := strings.TrimSpace(gitFetchTestGit(t, seed, "rev-parse", "HEAD"))
+	if len(remoteOID) != 64 {
+		t.Fatalf("remote commit OID length = %d, want 64: %s", len(remoteOID), remoteOID)
+	}
+	remoteURL := (&url.URL{Scheme: "file", Path: remote}).String()
+	gitFetchTestGit(t, seed, "remote", "add", "origin", remoteURL)
+	gitFetchTestGit(t, seed, "push", "-u", "origin", "main")
+
+	writeFetchTestFile(t, backing, "tracked.txt", "local sha256 base\n")
+	gitFetchTestGit(t, backing, "add", "tracked.txt")
+	gitFetchTestGit(t, backing, "commit", "-m", "local sha256 base")
+	localOID := strings.TrimSpace(gitFetchTestGit(t, backing, "rev-parse", "HEAD"))
+	if len(localOID) != 64 {
+		t.Fatalf("backing commit OID length = %d, want 64: %s", len(localOID), localOID)
+	}
+	gitFetchTestGit(t, backing, "remote", "add", "origin", remoteURL)
+	gitFetchTestGit(t, backing, "update-ref", "refs/remotes/origin/main", localOID)
+	gitFetchTestGit(t, backing, "symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/main")
+	gitFetchTestGit(t, backing, "tag", "local-tag", localOID)
+	gitFetchTestGit(t, backing, "update-ref", "refs/opentendril/owned/qualification", localOID)
+	writeFetchTestFile(t, backing, ".git/FETCH_HEAD", "backing SHA-256 FETCH_HEAD sentinel\n")
+	writeFetchTestFile(t, backing, "tracked.txt", "staged sha256 work\n")
+	gitFetchTestGit(t, backing, "add", "tracked.txt")
+	writeFetchTestFile(t, backing, "tracked.txt", "staged plus unstaged sha256 work\n")
+	writeFetchTestFile(t, backing, "untracked.txt", "untracked sha256 work\n")
+
+	configBefore, err := os.ReadFile(filepath.Join(backing, ".git", "config"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	fetchHeadBefore, err := os.ReadFile(filepath.Join(backing, ".git", "FETCH_HEAD"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	stateBefore := snapshotLocalGitFetchState(t, backing)
+	result, err := runGitFetchWithHooks(context.Background(), GitFetchExecution{
+		Repository: backing, Substrate: "demo", URL: remoteURL,
+		Credential: ResolvedCredential{Method: CredentialNone},
+	}, gitFetchHooks{allowFileTransport: true})
+	if err != nil {
+		t.Fatalf("governed SHA-256 fetch: %v", err)
+	}
+	if result.Updated != 1 || result.Created != 0 || result.Pruned != 0 {
+		t.Fatalf("SHA-256 fetch result counts = created:%d updated:%d pruned:%d", result.Created, result.Updated, result.Pruned)
+	}
+	for _, detail := range result.Changes {
+		for _, oid := range []string{detail.OldOID, detail.NewOID} {
+			if oid != "" && len(oid) != 64 {
+				t.Errorf("result OID length = %d, want 64: %s", len(oid), oid)
+			}
+		}
+	}
+	trackingOID := strings.TrimSpace(gitFetchTestGit(t, backing, "rev-parse", "refs/remotes/origin/main^{commit}"))
+	if trackingOID != remoteOID || len(trackingOID) != 64 {
+		t.Fatalf("backing origin/main = %s, want 64-hex %s after staging cleanup", trackingOID, remoteOID)
+	}
+	if _, err := exec.Command("git", "-C", backing, "cat-file", "-e", trackingOID+"^{commit}").CombinedOutput(); err != nil {
+		t.Fatalf("imported SHA-256 commit is unavailable after staging cleanup: %v", err)
+	}
+	if got := strings.TrimSpace(gitFetchTestGit(t, backing, "rev-parse", "--show-object-format=storage")); got != "sha256" {
+		t.Fatalf("backing storage object format changed to %q", got)
+	}
+	stateAfter := snapshotLocalGitFetchState(t, backing)
+	if !reflect.DeepEqual(stateBefore, stateAfter) {
+		t.Fatalf("forbidden backing state changed\nbefore: %#v\nafter:  %#v", stateBefore, stateAfter)
+	}
+	configAfter, err := os.ReadFile(filepath.Join(backing, ".git", "config"))
+	if err != nil || !bytes.Equal(configBefore, configAfter) {
+		t.Fatalf("backing repository config changed: %v", err)
+	}
+	fetchHeadAfter, err := os.ReadFile(filepath.Join(backing, ".git", "FETCH_HEAD"))
+	if err != nil || !bytes.Equal(fetchHeadBefore, fetchHeadAfter) {
+		t.Fatalf("backing FETCH_HEAD changed: %v", err)
 	}
 }
 
@@ -382,6 +496,85 @@ func TestGitFetchFailedOrUnavailableObjectImportStartsNoRefTransaction(t *testin
 				t.Fatal("tracking ref changed despite unavailable object import")
 			}
 		})
+	}
+}
+
+func TestGitFetchPackKeepEvidenceFailuresStartNoRefTransaction(t *testing.T) {
+	for _, test := range []struct {
+		name      string
+		breakKeep func(string, string) error
+	}{
+		{name: "missing marker", breakKeep: func(path, _ string) error { return os.Remove(path) }},
+		{name: "malformed marker", breakKeep: func(path, marker string) error {
+			return os.WriteFile(path, []byte(marker+"\nextra\n"), 0o600)
+		}},
+		{name: "mismatched marker", breakKeep: func(path, marker string) error {
+			return os.WriteFile(path, []byte(strings.Repeat("x", len(marker))+"\n"), 0o600)
+		}},
+		{name: "non-regular marker", breakKeep: func(path, _ string) error { return os.Mkdir(path, 0o700) }},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			f := newGitFetchFixture(t)
+			_, _ = f.advanceRemote(t)
+			refsBefore := gitFetchTestGit(t, f.backing, "for-each-ref", "--format=%(refname)%00%(objectname)%00%(symref)", "refs/remotes/origin")
+			transactions := 0
+			hooks := gitFetchHooks{
+				allowFileTransport: true,
+				verifyPackKeep: func(packDir, packOID, marker string) (string, error) {
+					path := filepath.Join(packDir, "pack-"+packOID+".keep")
+					if err := test.breakKeep(path, marker); err != nil {
+						return "", err
+					}
+					return verifyGitFetchPackKeep(packDir, packOID, marker)
+				},
+				updateRefs: func(context.Context, string, string, []string, []gitFetchChange) error {
+					transactions++
+					return nil
+				},
+			}
+			_, err := runGitFetchWithHooks(context.Background(), GitFetchExecution{
+				Repository: f.backing, Substrate: "demo", URL: f.remoteURL,
+				Credential: ResolvedCredential{Method: CredentialNone},
+			}, hooks)
+			var fetchErr core.GitFetchError
+			if !errors.As(err, &fetchErr) || fetchErr.Category != core.GitFetchFailureGit {
+				t.Fatalf("error = %v, want safe git-fetch-failure", err)
+			}
+			if strings.Contains(err.Error(), f.backing) || strings.Contains(err.Error(), test.name) {
+				t.Fatalf("raw protection-marker failure escaped: %v", err)
+			}
+			if transactions != 0 {
+				t.Fatalf("ref transaction calls = %d after invalid keep evidence", transactions)
+			}
+			refsAfter := gitFetchTestGit(t, f.backing, "for-each-ref", "--format=%(refname)%00%(objectname)%00%(symref)", "refs/remotes/origin")
+			if refsAfter != refsBefore {
+				t.Fatalf("remote-tracking refs changed after invalid keep evidence\nbefore: %q\nafter:  %q", refsBefore, refsAfter)
+			}
+		})
+	}
+}
+
+func TestGitFetchDoesNotRequireKeepWhenAllTargetObjectsExist(t *testing.T) {
+	f := newGitFetchFixture(t)
+	verifyCalls := 0
+	result, err := runGitFetchWithHooks(context.Background(), GitFetchExecution{
+		Repository: f.backing, Substrate: "demo", URL: f.remoteURL,
+		Credential: ResolvedCredential{Method: CredentialNone},
+	}, gitFetchHooks{
+		allowFileTransport: true,
+		verifyPackKeep: func(string, string, string) (string, error) {
+			verifyCalls++
+			return "", errors.New("keep verification must not run when import is unnecessary")
+		},
+	})
+	if err != nil {
+		t.Fatalf("fetch with all target objects already present: %v", err)
+	}
+	if verifyCalls != 0 {
+		t.Fatalf("pack keep verification calls = %d, want 0 without object import", verifyCalls)
+	}
+	if result.Pruned != 1 {
+		t.Fatalf("existing-object fetch result = %#v, want the fixture's stale branch pruned", result)
 	}
 }
 

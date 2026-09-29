@@ -33,7 +33,7 @@ func TestGitFetchRequiresConfiguredNameAndExistingCheckout(t *testing.T) {
 	if !errors.As(err, &fetchErr) || fetchErr.Category != core.GitFetchFailureRemoteIdentityMismatch {
 		t.Fatalf("configured name did not resolve to existing checkout before identity check: %v", err)
 	}
-	for _, name := range []string{repo, "unknown"} {
+	for _, name := range []string{"", repo, "unknown"} {
 		_, err := fetch(context.Background(), core.GitFetchSpec{Substrate: name})
 		if !errors.As(err, &fetchErr) || fetchErr.Category != core.GitFetchFailureSubstrateUnavailable {
 			t.Errorf("unconfigured Substrate %q error = %v, want safe unavailable category", name, err)
