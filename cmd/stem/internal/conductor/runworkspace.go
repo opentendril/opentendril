@@ -109,7 +109,7 @@ func (rw *RunWorkspace) ReconcilePublishedFruit(ctx context.Context, oid string)
 	}
 	fetchedOID = strings.TrimSpace(fetchedOID)
 	if fetchedOID != targetOID {
-		return fmt.Errorf("reconcile: fetched tip of origin/%s is %s but GitHub returned %s. Workspace left untouched", branch, fetchedOID, targetOID)
+		return fmt.Errorf("reconcile: fetched tip of origin/%s is %s but GitHub returned %s. workspace left untouched", branch, fetchedOID, targetOID)
 	}
 
 	// 6. All checks passed: reset tracked files and index to match the published
