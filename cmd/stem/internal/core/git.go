@@ -201,9 +201,9 @@ type GitPRInput struct {
 	// assumed name).
 	Head string `json:"head,omitempty"`
 	// Base optionally names the branch to merge into; empty resolves the
-	// repository's real default branch from the GitHub API. A default branch
-	// is never assumed to be "main"; avoiding that assumption is the failure this
-	// capability exists to design out.
+	// repository's real default branch from the GitHub API. It never falls back
+	// to a guessed branch name; preventing that assumption is why this capability
+	// exists.
 	Base string `json:"base,omitempty"`
 	// Draft opens the pull request as a draft.
 	Draft bool `json:"draft,omitempty"`
