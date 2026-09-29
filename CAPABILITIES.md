@@ -154,6 +154,7 @@ Examples:
 
 | Canonical Core / grant operation-class | Primary MCP tool |
 |---|---|
+| `git.fetch` | `gitFetch` |
 | `git.status` | `gitStatus` |
 | `sprout.grow` | `sproutGrow` |
 | `git.branch.list` | `gitBranchList` |
@@ -348,7 +349,7 @@ Not every governed capability is delegated. The current delegated set is:
 | Sprout | `sprout.grow` |
 | Stoma | `stoma.pass` |
 | Seed | `seed.grow` |
-| Git | `git.commit`, `git.apply`, `git.push`, `git.pr`, `git.branch`, `git.status`, `git.branch.list`, `git.prune` |
+| Git | `git.fetch`, `git.commit`, `git.apply`, `git.push`, `git.pr`, `git.branch`, `git.status`, `git.branch.list`, `git.prune` |
 
 `phytomer.continue` is delegated. Phytomer create/list/get/update/delete/history
 retain their current non-delegated command posture. Other families outside this
@@ -492,11 +493,12 @@ unchanged by this Seed growth.
 
 The delegated Git family. Each operation-class is separately grantable. Git
 execution runs on the Stem (the sole secret-holding zone), never inside a
-sealed Sprout - a delegated push is the Stem's mediated egress with the
-Substrate's dedicated credential.
+sealed Sprout. Fetch and push use the configured Substrate connection and its
+Stem-held credential.
 
 | Capability | Behavior |
 |---|---|
+| `git.fetch` | Synchronize the configured named Substrate's remote branch tips into direct `refs/remotes/origin/*` tracking refs. The configured Substrate URL controls the destination; the checkout's single local `origin` URL is identity evidence and must match before credentials or network use. Fetch uses an isolated staging repository, imports and verifies objects before one atomic tracking-ref transaction, and prunes stale direct branch-tracking refs only. It leaves `origin/HEAD`, tags, `FETCH_HEAD`, local branches, `HEAD`, index, working tree, and remote configuration unchanged. It uses only an existing configured checkout and never creates or rotates a delegated workspace. |
 | `git.apply` | Apply a UTF-8 Git patch of at most 1 MiB to the trusted Pollen's existing clean isolated workspace for a configured named Substrate. Requires an exact full expected HEAD; supports Git binary patches; leaves changes unstaged and does not create or rotate a workspace or branch. Returns only the configured Substrate, current branch, unchanged HEAD, and sorted workspace-relative changed paths. |
 | `git.commit` | Commit the workspace state. Two modes are determined by the Substrate's connection configuration (see below). Both modes use the same default-branch commit guard: commits to the repository's default branch are refused unless the Substrate explicitly sets `protectDefaultBranch: false`. |
 | `git.push` | Push `HEAD` to a target branch on the remote (`HEAD:refs/heads/<branch>`). If no explicit branch is supplied, the workspace's current branch is used; if a branch is supplied, `HEAD` is pushed to that named remote branch. Uses the Substrate's credential. |
@@ -505,6 +507,10 @@ Substrate's dedicated credential.
 | `git.status` | Read-only report of workspace state: current branch, resolved default branch, uncommitted changes, ahead/behind, and whether a commit would be allowed. |
 | `git.branch.list` | Classify local branches against forge evidence (merged, open PR, closed-unmerged, unpushed, etc.). Read-only. |
 | `git.prune` | Delete local branches whose PR merged. Reports what would be deleted unless `confirm` is true. Never deletes the current or default branch, a branch with an open or unmerged PR, one the remote has never seen, or one held by another subject's workspace. |
+
+`git.status` remains offline and is not invoked automatically by `git.fetch` or
+another Git capability. REST, MCP, and CLI are projections of the same Core
+contract; none carries fetch business logic.
 
 **`git.commit` modes.** The Substrate's connection configuration determines
 which mode is used:

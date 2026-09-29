@@ -700,6 +700,11 @@ func (m *mockCore) GitApply(_ context.Context, in core.GitApplyInput) (core.GitA
 	}, nil
 }
 
+func (m *mockCore) GitFetch(_ context.Context, in core.GitFetchInput) (core.GitFetchResult, error) {
+	m.record("GitFetch", in)
+	return core.GitFetchResult{Status: "fetched", Substrate: in.Substrate, Remote: "origin", Changes: []core.GitFetchRefChange{}}, nil
+}
+
 func (m *mockCore) GitPush(_ context.Context, in core.GitPushInput) (core.GitPushResult, error) {
 	m.record("GitPush", in)
 	return core.GitPushResult{
@@ -998,6 +1003,17 @@ func (m *mockCore) Capabilities() []core.Capability {
 			},
 		},
 		{
+			Name:        core.CapGitFetch,
+			InputSchema: map[string]any{},
+			Invoke: func(ctx context.Context, input map[string]any) (any, error) {
+				var in core.GitFetchInput
+				if err := decodeMockInput(input, &in); err != nil {
+					return nil, err
+				}
+				return m.GitFetch(ctx, in)
+			},
+		},
+		{
 			Name:        core.CapGitCommit,
 			InputSchema: map[string]any{},
 			Invoke: func(ctx context.Context, input map[string]any) (any, error) {
@@ -1145,6 +1161,7 @@ func newMockParityFixture(t *testing.T) (*mockCore, *http.ServeMux, *receptors.M
 				core.CapSeedGrow,
 				core.CapGitCommit,
 				core.CapGitApply,
+				core.CapGitFetch,
 				core.CapGitPush,
 				core.CapGitPR,
 				core.CapGitBranch,
@@ -2672,6 +2689,16 @@ func TestBehavioralParity_Git(t *testing.T) {
 		cliArgs       []string
 	}{
 		{
+			name:          core.CapGitFetch,
+			method:        "GitFetch",
+			want:          core.GitFetchInput{Substrate: "core", Origin: "parity-origin"},
+			restPath:      "/v1/git/fetch",
+			restBody:      `{"substrate":"core","origin":"parity-origin"}`,
+			mcpArgs:       `{"substrate":"core","origin":"parity-origin"}`,
+			cliSubcommand: "fetch",
+			cliArgs:       []string{"--substrate", "core", "--origin", "parity-origin"},
+		},
+		{
 			name:          core.CapGitCommit,
 			method:        "GitCommit",
 			want:          core.GitCommitInput{Substrate: "core", Message: "hello", Origin: "parity-origin"},
@@ -2778,7 +2805,7 @@ func TestBehavioralParity_Git(t *testing.T) {
 				t.Fatalf("REST %s request: %v", tc.name, err)
 			}
 			restRequest.Header.Set("Content-Type", "application/json")
-			if tc.name == core.CapGitApply {
+			if tc.name == core.CapGitApply || tc.name == core.CapGitFetch {
 				restRequest.Header.Set(receptors.PollenHeader, "parity-pollen")
 			}
 			resp, err := http.DefaultClient.Do(restRequest)

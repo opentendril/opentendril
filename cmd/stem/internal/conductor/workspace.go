@@ -301,6 +301,12 @@ func rotateFinishedWorkspaceBranch(ctx context.Context, base, workspacePath, bra
 // substrate and another inside the workspace — resolving it here, against the
 // substrate, removes the ambiguity before the value travels anywhere.
 func workspaceStartPoint(ctx context.Context, base string) (string, error) {
+	unlockRemoteRefs, lockErr := lockCommonGitRemoteRefs(ctx, base)
+	if lockErr != nil {
+		return "", fmt.Errorf("lock repository remote refs: %w", lockErr)
+	}
+	defer unlockRemoteRefs()
+
 	resolution := ResolveDefaultBranchLocal(ctx, base, "")
 
 	refreshRemoteDefaultBranch(ctx, base, resolution)

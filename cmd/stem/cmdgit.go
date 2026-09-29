@@ -79,12 +79,12 @@ func runGitCmd(ctx context.Context, args []string) {
 	defer delegation.Close()
 	substrate, _ := input["substrate"].(string)
 	ctx = delegation.Authorize(ctx, command.capability, substrate)
-	if command.capability == core.CapGitApply && delegation.Pollen != "" {
+	if (command.capability == core.CapGitApply || command.capability == core.CapGitFetch) && delegation.Pollen != "" {
 		ctx = core.WithAuthorizedDelegationRequest(ctx, core.DelegationRequest{
 			Pollen:         delegation.Pollen,
-			OperationClass: core.CapGitApply,
+			OperationClass: command.capability,
 			Substrate:      strings.TrimSpace(substrate),
-			Impact:         core.CapabilityImpact(core.CapGitApply),
+			Impact:         core.CapabilityImpact(command.capability),
 		})
 	}
 
@@ -132,6 +132,11 @@ func runGitCmd(ctx context.Context, args []string) {
 			fmt.Fprintln(os.Stderr, "❌ Failed to encode git.apply result")
 			os.Exit(1)
 		}
+	case core.GitFetchResult:
+		if err := json.NewEncoder(os.Stdout).Encode(typed); err != nil {
+			fmt.Fprintln(os.Stderr, "❌ Failed to encode git.fetch result")
+			os.Exit(1)
+		}
 	}
 }
 
@@ -156,8 +161,30 @@ func gitOperations() core.GitOperations {
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "⚠️ Failed to load substrates config: %v\n", err)
 	}
+	return gitOperationsForConfig(substratesConfig)
+}
 
+func gitOperationsForConfig(substratesConfig *conductor.SubstratesConfig) core.GitOperations {
 	return core.GitOperations{
+		Fetch: func(ctx context.Context, spec core.GitFetchSpec) (core.GitFetchResult, error) {
+			name := strings.TrimSpace(spec.Substrate)
+			substrateSpec, configured := conductor.ResolveSubstrate(name, substratesConfig)
+			if !configured || substrateSpec == nil {
+				return core.GitFetchResult{}, core.GitFetchError{Category: core.GitFetchFailureSubstrateUnavailable}
+			}
+			repository, err := conductor.ResolveSubstrateWorkspace(name, substrateSpec)
+			if err != nil {
+				return core.GitFetchResult{}, core.GitFetchError{Category: core.GitFetchFailureSubstrateUnavailable}
+			}
+			return conductor.RunGitFetch(ctx, conductor.GitFetchExecution{
+				Repository: repository,
+				Substrate:  name,
+				URL:        substrateSpec.URL,
+				ResolveCredential: func() (conductor.ResolvedCredential, error) {
+					return conductor.ResolveSubstrateCredential(*substrateSpec, substratesConfig)
+				},
+			})
+		},
 		Apply: func(ctx context.Context, spec core.GitApplySpec) (core.GitApplyResult, error) {
 			workspace, substrateSpec, err := resolveExistingGitApplyWorkspace(ctx, spec.Substrate, substratesConfig)
 			if err != nil {
@@ -511,6 +538,7 @@ type gitCommand struct {
 // stomaCommands, this registration — NOT core.CapabilityNames() — is
 // the source of truth the parity coverage test reads for the CLI arm.
 var gitCommands = []gitCommand{
+	{"fetch", core.CapGitFetch},
 	{"apply", core.CapGitApply},
 	{"commit", core.CapGitCommit},
 	{"push", core.CapGitPush},
@@ -559,6 +587,9 @@ func parseGitArgs(capName string, args []string) (map[string]any, error) {
 	for i := 0; i < len(args); i++ {
 		if capName == core.CapGitApply && args[i] != "--substrate" && args[i] != "--expected-head" && args[i] != "--origin" {
 			return nil, fmt.Errorf("git.apply accepts only --substrate, --expected-head, and --origin; patch bytes are read from stdin")
+		}
+		if capName == core.CapGitFetch && args[i] != "--substrate" && args[i] != "--origin" && args[i] != "--json" {
+			return nil, fmt.Errorf("git.fetch accepts only --substrate and --origin")
 		}
 		var err error
 		switch args[i] {
@@ -611,7 +642,7 @@ func parseGitArgs(capName string, args []string) (map[string]any, error) {
 	}
 	if substrate, _ := input["substrate"].(string); strings.TrimSpace(substrate) == "" {
 		substrateTarget := "<path|name>"
-		if capName == core.CapGitApply {
+		if capName == core.CapGitApply || capName == core.CapGitFetch {
 			substrateTarget = "<name>"
 		}
 		return nil, fmt.Errorf("missing substrate. Usage: tendril git %s --substrate %s%s", strings.TrimPrefix(capName, "git."), substrateTarget, gitUsageSuffix(capName))
@@ -677,7 +708,7 @@ func readGitApplyInput(input map[string]any, stdin io.Reader) (map[string]any, e
 }
 
 func printGitUsage() {
-	fmt.Println("Usage: tendril git <setup|bootstrap|status|branches|branch|apply|commit|push|pr|prune> --substrate <path|name> [flags]")
+	fmt.Println("Usage: tendril git <setup|bootstrap|fetch|status|branches|branch|apply|commit|push|pr|prune> --substrate <path|name> [flags]")
 	fmt.Println()
 	fmt.Println("setup --substrate <name> --repo <owner/repo> [--posture app|pat] ...")
 	fmt.Println("  Writes a git connection (substrates.yaml) and prints the")
@@ -686,6 +717,10 @@ func printGitUsage() {
 	fmt.Println("bootstrap --substrate <name> [--branch <branch>] [--confirm]")
 	fmt.Println("  Botanist-only: create exactly one empty-tree root commit in an empty managed")
 	fmt.Println("  GitHub App/API Substrate. It is setup state, never Fruit, and never overwrites a ref.")
+	fmt.Println()
+	fmt.Println("fetch --substrate <name>")
+	fmt.Println("  Synchronizes configured remote branch state into origin remote-tracking refs.")
+	fmt.Println("  It does not update local branches, tags, HEAD, the index, or working-tree files.")
 	fmt.Println()
 	fmt.Println("status --substrate <path|name>")
 	fmt.Println("  Reports the workspace's branch, the resolved default branch, uncommitted")

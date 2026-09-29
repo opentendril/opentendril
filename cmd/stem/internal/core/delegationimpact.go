@@ -8,7 +8,7 @@ func CapabilityImpact(operationClass string) string {
 	switch operationClass {
 	case CapGitPrune, CapGitPush, CapGitPR, CapSproutGrow, CapSeedGrow, CapMeshPromote, CapMeshGraft, CapContinuePhytomer:
 		return DelegationImpactHigh
-	case CapGitCommit, CapGitBranch, CapGitApply, CapStomaPass, CapPlasmidInject, CapGenotypeCreate:
+	case CapGitCommit, CapGitBranch, CapGitApply, CapGitFetch, CapStomaPass, CapPlasmidInject, CapGenotypeCreate:
 		return DelegationImpactMedium
 	case CapGitStatus, CapGitBranchList, CapSequenceList, CapMeshTraitList, CapSproutWatch:
 		return DelegationImpactLow

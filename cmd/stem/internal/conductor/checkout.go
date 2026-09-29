@@ -329,6 +329,11 @@ func refreshExistingCheckout(dir, branch string, gitEnv []string, tendrilOwned b
 			return fmt.Errorf("refusing to refresh %q: it is your own checkout (checkout mode \"path\") and it has uncommitted changes, which this refresh would discard — commit or set those changes aside, or point the substrate at checkout mode \"managed\" so Tendril works in its own clone", dir)
 		}
 	}
+	unlockRemoteRefs, lockErr := lockCommonGitRemoteRefs(ctx, dir)
+	if lockErr != nil {
+		return fmt.Errorf("refresh managed checkout: unable to lock repository remote refs")
+	}
+	defer unlockRemoteRefs()
 	// Only the network fetch needs auth (gitEnv); checkout/reset are local.
 	if _, err := runGitCommandWithEnv(ctx, dir, gitEnv, "fetch", "origin"); err != nil {
 		return fmt.Errorf("refresh managed checkout %q: %w", dir, err)

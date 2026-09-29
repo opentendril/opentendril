@@ -12,6 +12,34 @@ import (
 // projection of git.apply. The Core enforces it before calling the Git port.
 const MaxGitApplyPatchBytes = 1_048_576
 
+const (
+	MaxGitFetchRefDetails  = 50
+	MaxGitFetchResultBytes = 16_384
+)
+
+const (
+	GitFetchFailureAuthorizationDenied    = "authorization-denied"
+	GitFetchFailureSubstrateUnavailable   = "substrate-or-repository-unavailable"
+	GitFetchFailureRemoteIdentityMismatch = "remote-identity-mismatch"
+	GitFetchFailureAuthentication         = "authentication-failure"
+	GitFetchFailureNetwork                = "network-or-remote-unavailable"
+	GitFetchFailureDestinationDenied      = "network-destination-denied"
+	GitFetchFailureGit                    = "git-fetch-failure"
+)
+
+// GitFetchError is a safe, typed failure category. It intentionally carries
+// no raw Git diagnostic, URL, filesystem path, or credential-derived value.
+type GitFetchError struct {
+	Category string
+}
+
+func (e GitFetchError) Error() string {
+	if e.Category == "" {
+		return "git.fetch: " + GitFetchFailureGit
+	}
+	return "git.fetch: " + e.Category
+}
+
 // The git capability family: the delegated-execution ladder. A Pollinator asks
 // the Stem to do git work under the substrate's configured connection rather
 // than shelling out git on the host. Each operation-class is separately
@@ -84,6 +112,42 @@ type GitApplyResult struct {
 	Branch       string   `json:"branch"`
 	Head         string   `json:"head"`
 	ChangedPaths []string `json:"changedPaths"`
+}
+
+// GitFetchInput accepts only a configured Substrate name and adapter metadata.
+// Remote, URL, refspec, branch, tags, prune, path, and Git options are not
+// caller-selectable.
+type GitFetchInput struct {
+	Substrate string `json:"substrate"`
+	Origin    string `json:"origin,omitempty"`
+}
+
+// GitFetchSpec is the transport-free request passed to the Stem-side port.
+type GitFetchSpec struct {
+	Substrate string
+	Origin    string
+}
+
+// GitFetchRefChange is one bounded branch-tracking ref delta.
+type GitFetchRefChange struct {
+	Ref    string `json:"ref"`
+	Change string `json:"change"`
+	OldOID string `json:"oldOid,omitempty"`
+	NewOID string `json:"newOid,omitempty"`
+}
+
+// GitFetchResult reports deterministic facts about the fixed origin branch
+// namespace. Details are lexically ordered and bounded independently of totals.
+type GitFetchResult struct {
+	Status           string              `json:"status"`
+	Substrate        string              `json:"substrate"`
+	Remote           string              `json:"remote"`
+	Created          int                 `json:"created"`
+	Updated          int                 `json:"updated"`
+	Pruned           int                 `json:"pruned"`
+	Total            int                 `json:"total"`
+	DetailsTruncated bool                `json:"detailsTruncated"`
+	Changes          []GitFetchRefChange `json:"changes"`
 }
 
 // GitPushInput asks the Stem to push the substrate's current branch to its
@@ -389,6 +453,10 @@ type GitOperations struct {
 	// isolated workspace. Implementations own configured-Substrate resolution,
 	// clean-state and expected-HEAD checks, path containment, and Git execution.
 	Apply func(ctx context.Context, spec GitApplySpec) (GitApplyResult, error)
+	// Fetch synchronizes only fixed origin branch-tracking refs from the
+	// configured Substrate URL. Implementations own identity, transport,
+	// credential, object-import, ref-transaction, and repository-lock boundaries.
+	Fetch func(ctx context.Context, spec GitFetchSpec) (GitFetchResult, error)
 	// Commit stages and commits the spec against the resolved workspace under
 	// the substrate's configured commit identity. Implementations own
 	// substrate resolution, credential resolution, and the deny-closed
@@ -458,6 +526,24 @@ func (s *Service) GitApply(ctx context.Context, in GitApplyInput) (GitApplyResul
 		Patch:        in.Patch,
 		Origin:       in.Origin,
 	})
+}
+
+// GitFetch validates the exact trusted Pollen + capability + named Substrate
+// authority before invoking the Stem-side transport port.
+func (s *Service) GitFetch(ctx context.Context, in GitFetchInput) (GitFetchResult, error) {
+	substrate := strings.TrimSpace(in.Substrate)
+	if substrate == "" {
+		return GitFetchResult{}, GitFetchError{Category: GitFetchFailureSubstrateUnavailable}
+	}
+	pollen := PollenFromContext(ctx)
+	authorized, ok := AuthorizedDelegationRequestFromContext(ctx)
+	if pollen == "" || !ok || authorized.Pollen != pollen || authorized.OperationClass != CapGitFetch || authorized.Substrate != substrate || authorized.Impact != DelegationImpactMedium {
+		return GitFetchResult{}, GitFetchError{Category: GitFetchFailureAuthorizationDenied}
+	}
+	if s.git.Fetch == nil {
+		return GitFetchResult{}, GitFetchError{Category: GitFetchFailureGit}
+	}
+	return s.git.Fetch(ctx, GitFetchSpec{Substrate: substrate, Origin: in.Origin})
 }
 
 func isFullGitObjectID(value string) bool {
@@ -613,6 +699,26 @@ func (s *Service) GitPrune(ctx context.Context, in GitPruneInput) (GitPruneResul
 // Service's typed method — identical in shape to the other families.
 func (s *Service) gitCapabilities() []Capability {
 	return []Capability{
+		{
+			Name:        CapGitFetch,
+			Description: "Synchronize configured remote branch state into origin remote-tracking refs without changing local work, tags, or FETCH_HEAD.",
+			InputSchema: schemaObject(map[string]any{
+				"substrate": stringProp("The configured named Substrate."),
+				"origin":    stringProp("Interaction origin recorded on the operation (cli, mcp, rest)."),
+			}, []string{"substrate"}),
+			Invoke: func(ctx context.Context, input map[string]any) (any, error) {
+				for key := range input {
+					if key != "substrate" && key != "origin" {
+						return nil, fmt.Errorf("git.fetch input contains an unsupported field")
+					}
+				}
+				var in GitFetchInput
+				if err := decodeInput(input, &in); err != nil {
+					return nil, err
+				}
+				return s.GitFetch(ctx, in)
+			},
+		},
 		{
 			Name:        CapGitApply,
 			Description: "Apply a deterministic UTF-8 Git patch to the caller's existing isolated workspace. Requires an exact full expected HEAD and a clean workspace; changes remain unstaged and unpublished.",

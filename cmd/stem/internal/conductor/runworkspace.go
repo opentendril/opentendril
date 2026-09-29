@@ -88,6 +88,11 @@ func (rw *RunWorkspace) ReconcilePublishedFruit(ctx context.Context, oid string)
 	if !registered {
 		return fmt.Errorf("reconcile: path %q is not the registered linked worktree for branch %q", path, branch)
 	}
+	unlockRemoteRefs, lockErr := lockCommonGitRemoteRefs(ctx, repo)
+	if lockErr != nil {
+		return fmt.Errorf("reconcile: repository remote refs are unavailable")
+	}
+	defer unlockRemoteRefs()
 
 	// 4. Fetch the run-specific Fruit branch from origin. Fetching by branch
 	//    name is required because GitHub does not advertise arbitrary OIDs.

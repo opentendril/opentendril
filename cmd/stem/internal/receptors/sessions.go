@@ -112,6 +112,22 @@ func (h *SessionsHandler) Capabilities() []string {
 
 // writeCoreErr maps a transport-neutral core error onto an HTTP status.
 func writeCoreErr(w http.ResponseWriter, err error) {
+	var fetchErr core.GitFetchError
+	if errors.As(err, &fetchErr) {
+		status := http.StatusBadGateway
+		switch fetchErr.Category {
+		case core.GitFetchFailureAuthorizationDenied:
+			status = http.StatusForbidden
+		case core.GitFetchFailureSubstrateUnavailable:
+			status = http.StatusServiceUnavailable
+		case core.GitFetchFailureRemoteIdentityMismatch:
+			status = http.StatusConflict
+		case core.GitFetchFailureDestinationDenied:
+			status = http.StatusForbidden
+		}
+		http.Error(w, fetchErr.Error(), status)
+		return
+	}
 	switch {
 	case errors.Is(err, core.ErrNotFound):
 		http.Error(w, "session not found", http.StatusNotFound)
