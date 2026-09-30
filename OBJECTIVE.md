@@ -13,28 +13,27 @@ exists to make possible.
 
 ## Current
 
-**A Pollinator holding only OpenTendril authority can synchronize the remote branch state of an authorized Substrate through a bounded governed Git fetch, without receiving repository credentials, modifying Botanist-owned local work, or invoking Mycorrhizal reasoning.**
+**A Pollinator holding only OpenTendril authority can carry one coherent governed Git change from synchronized remote state through an isolated feature branch, deterministic patch, commit, push, and Git-reviewable pull request, regardless of configured commit posture, without receiving repository credentials or modifying the default branch.**
 
 ## Done when
 
-* **Authority is exact.** The exact Pollen, `git.fetch` capability, and named Substrate authority are required.
-* **Network authority is configured.** The configured Substrate defines network authority, and a local `origin` identity mismatch fails closed before network mutation.
-* **Synchronization is branch-only.** Only branch state under `refs/remotes/origin/*` is synchronized, including bounded pruning.
-* **Botanist-owned local state is unchanged.** No tags, `FETCH_HEAD`, local branches, owned refs, `HEAD`, index, or working-tree state is modified.
-* **An existing checkout is required.** No delegated workspace is created or rotated.
-* **Shared repository state is serialized.** Repository-scoped serialization is used where required.
-* **Credentials remain contained.** Credentials stay Stem-held and destination-contained.
-* **Interfaces remain in parity.** REST, MCP, and CLI project the same governed Core contract.
-* **`git.status` remains offline.** It observes refreshed state only when separately called.
-* **Real external-Pollinator qualification succeeds.** Fetch works using only OpenTendril authority while preserving the declared state and credential boundaries.
+* The same governed workflow works for local and GitHub App/API commit modes:
+  `git.fetch -> git.status -> git.branch -> git.apply -> git.status -> git.commit -> git.status -> git.push -> git.pr`.
+* A successful `git.commit` leaves the delegated workspace on the same feature branch, clean, with `HEAD` equal to the returned commit OID.
+* API-mode commit can safely establish only its exact feature branch at the exact expected pre-commit OID.
+* Existing remote state at another OID fails closed and is never overwritten.
+* Ambiguous remote mutations are reconciled from bounded read-only evidence before any retry.
+* One commit intent cannot create duplicate remote commits.
+* `git.push` remains independently authorized and is idempotent after an API-mode commit already published the same OID.
+* `git.fetch` retains its branch-tracking-only contract.
+* Exact Pollen, operation-class, and named Substrate authority remains required.
+* Credentials remain Stem-held.
+* REST, MCP, and CLI remain projections of the same governed Core semantics.
+* The repository default branch remains unchanged.
+* Real external Pollinator qualification reaches a draft Git-reviewable pull request using only OpenTendril authority.
 
-This objective does not require:
-
-* `git.pull`, merge, rebase, reset, checkout, switch, or local branch synchronization;
-* arbitrary remotes or refspecs;
-* forge API fetch;
-* automatic pre-operation fetch or automatic merge; or
-* delegated workspace refresh, creation, or rotation.
+This objective does not require general pull, reset, checkout, switch, merge,
+rebase, arbitrary remote-ref mutation, or automatic merge.
 
 ---
 
