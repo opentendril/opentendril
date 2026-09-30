@@ -1,10 +1,14 @@
 package conductor
 
 import (
+	"bytes"
 	"context"
+	"encoding/base64"
 	"errors"
 	"fmt"
+	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 )
 
@@ -31,19 +35,25 @@ func runDelegatedAPICommit(ctx context.Context, execution GitCommitExecution) (G
 	}
 	headOID = strings.TrimSpace(headOID)
 
-	additions, deletions, err := apiCommitFileChangesFromWorkspace(ctx, execution.Workspace, nil)
+	allAdditions, allDeletions, err := apiCommitFileChangesFromWorkspace(ctx, execution.Workspace, nil)
 	if err != nil {
 		return GitCommitResult{}, fmt.Errorf("api-mode delegated commit: enumerate workspace changes: %w", err)
-	}
-	if len(additions) == 0 && len(deletions) == 0 {
-		return GitCommitResult{Status: "nothing-to-commit"}, nil
 	}
 	selectedAdditions, selectedDeletions, err := apiCommitFileChangesFromWorkspace(ctx, execution.Workspace, execution.Paths)
 	if err != nil {
 		return GitCommitResult{}, fmt.Errorf("api-mode delegated commit: enumerate selected changes: %w", err)
 	}
-	if !sameAPICommitChanges(additions, deletions, selectedAdditions, selectedDeletions) {
-		return GitCommitResult{}, fmt.Errorf("api-mode delegated commit requires all workspace changes so its successful result can be reconciled cleanly")
+	if len(selectedAdditions) == 0 && len(selectedDeletions) == 0 {
+		if len(allAdditions)+len(allDeletions) > 0 {
+			recovered, found, recoveryErr := recoverDelegatedAPICommitAtHead(ctx, execution, branch, headOID)
+			if recoveryErr != nil {
+				return GitCommitResult{}, fmt.Errorf("api-mode delegated commit: verify previously reconciled intent: %w", recoveryErr)
+			}
+			if found {
+				return recovered, nil
+			}
+		}
+		return GitCommitResult{Status: "nothing-to-commit"}, nil
 	}
 
 	originURL, err := runGitCommitCommandFn(ctx, execution.Workspace, "remote", "get-url", "origin")
@@ -60,7 +70,7 @@ func runDelegatedAPICommit(ctx context.Context, execution GitCommitExecution) (G
 		return GitCommitResult{}, fmt.Errorf("api-mode delegated commit: GitHub App authentication failed")
 	}
 
-	intent, err := validateAPIFruitIntent(owner, repo, branch, headOID, execution.Message, additions, deletions)
+	intent, err := validateAPIFruitIntent(owner, repo, branch, headOID, execution.Message, selectedAdditions, selectedDeletions)
 	if err != nil {
 		return GitCommitResult{}, err
 	}
@@ -76,10 +86,151 @@ func runDelegatedAPICommit(ctx context.Context, execution GitCommitExecution) (G
 		}
 	}
 
-	if err := reconcileDelegatedAPICommitWorkspace(ctx, execution, intent, token, commitOID, additions, deletions); err != nil {
+	if err := reconcileDelegatedAPICommitWorkspace(ctx, execution, intent, token, commitOID, allAdditions, allDeletions, selectedAdditions, selectedDeletions); err != nil {
 		return GitCommitResult{}, fmt.Errorf("api-mode delegated commit: remote commit %s exists but local workspace reconciliation failed: %w", commitOID, err)
 	}
 	return GitCommitResult{Status: "committed", CommitHash: commitOID}, nil
+}
+
+func recoverDelegatedAPICommitAtHead(ctx context.Context, execution GitCommitExecution, branch, headOID string) (GitCommitResult, bool, error) {
+	message, err := runGitCommitCommandFn(ctx, execution.Workspace, "show", "-s", "--format=%B", "HEAD")
+	if err != nil {
+		return GitCommitResult{}, false, err
+	}
+	gotHeadline, gotBody := splitCommitMessage(message)
+	wantHeadline, wantBody := splitCommitMessage(execution.Message)
+	if gotHeadline != wantHeadline || gotBody != wantBody {
+		return GitCommitResult{}, false, nil
+	}
+	baseOID, err := runGitCommitCommandFn(ctx, execution.Workspace, "rev-parse", "--verify", "HEAD^^{commit}")
+	if err != nil {
+		return GitCommitResult{}, false, nil
+	}
+	baseOID = strings.TrimSpace(baseOID)
+	additions, deletions, err := apiCommitFileChangesBetweenCommits(ctx, execution.Workspace, baseOID, headOID)
+	if err != nil {
+		return GitCommitResult{}, false, err
+	}
+	if len(additions)+len(deletions) == 0 {
+		return GitCommitResult{}, false, nil
+	}
+	if len(execution.Paths) > 0 {
+		args := []string{"diff", "--name-only", "-z", "--no-renames", baseOID, headOID, "--"}
+		args = append(args, execution.Paths...)
+		selectedPaths, err := runGitCommandRawOutput(ctx, execution.Workspace, args...)
+		if err != nil {
+			return GitCommitResult{}, false, err
+		}
+		if !sameAPICommitPathSet(apiCommitChangePaths(additions, deletions), strings.Split(strings.TrimSuffix(selectedPaths, "\x00"), "\x00")) {
+			return GitCommitResult{}, false, nil
+		}
+	}
+	originURL, err := runGitCommitCommandFn(ctx, execution.Workspace, "remote", "get-url", "origin")
+	if err != nil {
+		return GitCommitResult{}, false, err
+	}
+	originURL = strings.TrimSpace(originURL)
+	owner, repo, err := parseOwnerRepo(originURL)
+	if err != nil {
+		return GitCommitResult{}, false, err
+	}
+	token, err := githubAppInstallationToken(ctx, execution.Credential.App, originURL)
+	if err != nil {
+		return GitCommitResult{}, false, fmt.Errorf("GitHub App authentication failed")
+	}
+	intent, err := validateAPIFruitIntent(owner, repo, branch, baseOID, execution.Message, additions, deletions)
+	if err != nil {
+		return GitCommitResult{}, false, err
+	}
+	state, err := reconcileAPIFruit(ctx, intent, token)
+	if err != nil {
+		return GitCommitResult{}, false, err
+	}
+	if state.Outcome != apiFruitReconciledExact || state.OID != headOID {
+		return GitCommitResult{}, false, nil
+	}
+	currentBranch, err := runGitCommitCommandFn(ctx, execution.Workspace, "branch", "--show-current")
+	if err != nil {
+		return GitCommitResult{}, false, err
+	}
+	currentHead, err := runGitCommitCommandFn(ctx, execution.Workspace, "rev-parse", "--verify", "HEAD^{commit}")
+	if err != nil {
+		return GitCommitResult{}, false, err
+	}
+	if strings.TrimSpace(currentBranch) != branch || strings.TrimSpace(currentHead) != headOID {
+		return GitCommitResult{}, false, fmt.Errorf("workspace branch or HEAD changed while verifying the existing commit")
+	}
+	selectedAdditions, selectedDeletions, err := apiCommitFileChangesFromWorkspace(ctx, execution.Workspace, execution.Paths)
+	if err != nil {
+		return GitCommitResult{}, false, err
+	}
+	if len(selectedAdditions)+len(selectedDeletions) != 0 {
+		return GitCommitResult{}, false, fmt.Errorf("selected workspace paths changed while verifying the existing commit")
+	}
+	return GitCommitResult{Status: "committed", CommitHash: headOID}, true, nil
+}
+
+func apiCommitFileChangesBetweenCommits(ctx context.Context, workspace, baseOID, headOID string) ([]apiCommitFileAddition, []apiCommitFileDeletion, error) {
+	raw, err := runGitCommandRawOutput(ctx, workspace, "diff", "--name-status", "-z", "--no-renames", baseOID, headOID)
+	if err != nil {
+		return nil, nil, err
+	}
+	entries := strings.Split(raw, "\x00")
+	var additions []apiCommitFileAddition
+	var deletions []apiCommitFileDeletion
+	for index := 0; index+1 < len(entries); index += 2 {
+		status := entries[index]
+		path := filepath.ToSlash(entries[index+1])
+		if status == "" || path == "" {
+			continue
+		}
+		if strings.HasPrefix(status, "D") {
+			deletions = append(deletions, apiCommitFileDeletion{Path: path})
+			continue
+		}
+		contents, err := runGitCommandRawOutput(ctx, workspace, "show", headOID+":"+path)
+		if err != nil {
+			return nil, nil, fmt.Errorf("read committed path %s: %w", path, err)
+		}
+		additions = append(additions, apiCommitFileAddition{Path: path, Contents: base64.StdEncoding.EncodeToString([]byte(contents))})
+	}
+	sort.Slice(additions, func(i, j int) bool { return additions[i].Path < additions[j].Path })
+	sort.Slice(deletions, func(i, j int) bool { return deletions[i].Path < deletions[j].Path })
+	if additions == nil {
+		additions = []apiCommitFileAddition{}
+	}
+	if deletions == nil {
+		deletions = []apiCommitFileDeletion{}
+	}
+	return additions, deletions, nil
+}
+
+func apiCommitChangePaths(additions []apiCommitFileAddition, deletions []apiCommitFileDeletion) []string {
+	paths := make([]string, 0, len(additions)+len(deletions))
+	for _, addition := range additions {
+		paths = append(paths, addition.Path)
+	}
+	for _, deletion := range deletions {
+		paths = append(paths, deletion.Path)
+	}
+	sort.Strings(paths)
+	return paths
+}
+
+func sameAPICommitPathSet(want, got []string) bool {
+	if len(got) == 1 && got[0] == "" {
+		got = nil
+	}
+	if len(want) != len(got) {
+		return false
+	}
+	sort.Strings(got)
+	for index := range want {
+		if want[index] != got[index] {
+			return false
+		}
+	}
+	return true
 }
 
 func sameAPICommitChanges(wantAdditions []apiCommitFileAddition, wantDeletions []apiCommitFileDeletion, gotAdditions []apiCommitFileAddition, gotDeletions []apiCommitFileDeletion) bool {
@@ -208,7 +359,7 @@ func establishDelegatedAPICommitBranch(ctx context.Context, intent apiFruitPubli
 	return apiFruitReconciliation{}, newAPIFruitPublicationFailure("target-ref-creation", apiFruitOutcomeRetryExhausted, false, mutationRequestID(secondErr), apiFruitFailureMessage(apiFruitOutcomeRetryExhausted))
 }
 
-func reconcileDelegatedAPICommitWorkspace(ctx context.Context, execution GitCommitExecution, intent apiFruitPublicationIntent, token, targetOID string, additions []apiCommitFileAddition, deletions []apiCommitFileDeletion) error {
+func reconcileDelegatedAPICommitWorkspace(ctx context.Context, execution GitCommitExecution, intent apiFruitPublicationIntent, token, targetOID string, allAdditions []apiCommitFileAddition, allDeletions []apiCommitFileDeletion, selectedAdditions []apiCommitFileAddition, selectedDeletions []apiCommitFileDeletion) error {
 	branch, err := runGitCommitCommandFn(ctx, execution.Workspace, "branch", "--show-current")
 	if err != nil || strings.TrimSpace(branch) != intent.Branch {
 		return fmt.Errorf("workspace branch changed before reconciliation")
@@ -221,9 +372,14 @@ func reconcileDelegatedAPICommitWorkspace(ctx context.Context, execution GitComm
 	if err != nil {
 		return fmt.Errorf("inspect workspace changes: %w", err)
 	}
-	if !sameAPICommitChanges(additions, deletions, currentAdditions, currentDeletions) {
-		return fmt.Errorf("workspace changes differ from the committed intent")
+	if !sameAPICommitChanges(allAdditions, allDeletions, currentAdditions, currentDeletions) {
+		return fmt.Errorf("workspace changes differ from the captured pre-commit state")
 	}
+	beforeSnapshot, err := snapshotDelegatedAPIWorkspaceChanges(execution.Workspace, allAdditions, allDeletions)
+	if err != nil {
+		return fmt.Errorf("snapshot workspace changes before reconciliation: %w", err)
+	}
+	expectedRemainingAdditions, expectedRemainingDeletions := withoutSelectedAPICommitChanges(allAdditions, allDeletions, selectedAdditions, selectedDeletions)
 
 	repository, err := absoluteRunWorkspaceRepository(ctx, execution.Repository)
 	if err != nil {
@@ -247,8 +403,34 @@ func reconcileDelegatedAPICommitWorkspace(ctx context.Context, execution GitComm
 		return fmt.Errorf("remote feature branch is at %s, not authoritative commit %s", strings.TrimSpace(fetchedOID), targetOID)
 	}
 
-	if _, err := runGitAPICommitReconcileCommandFn(ctx, execution.Workspace, nil, "reset", "--hard", targetOID); err != nil {
-		return fmt.Errorf("reset isolated workspace to authoritative commit: %w", err)
+	// Recheck immediately before moving HEAD. The mixed reset updates HEAD and
+	// the index to the authoritative commit while preserving every worktree
+	// file, including unselected changes.
+	branch, err = runGitCommitCommandFn(ctx, execution.Workspace, "branch", "--show-current")
+	if err != nil || strings.TrimSpace(branch) != intent.Branch {
+		return fmt.Errorf("workspace branch changed before authoritative reconciliation")
+	}
+	head, err = runGitCommitCommandFn(ctx, execution.Workspace, "rev-parse", "--verify", "HEAD^{commit}")
+	if err != nil || strings.TrimSpace(head) != intent.BaseCommit {
+		return fmt.Errorf("workspace HEAD changed before authoritative reconciliation")
+	}
+	currentAdditions, currentDeletions, err = apiCommitFileChangesFromWorkspace(ctx, execution.Workspace, nil)
+	if err != nil {
+		return fmt.Errorf("reinspect workspace changes before reconciliation: %w", err)
+	}
+	if !sameAPICommitChanges(allAdditions, allDeletions, currentAdditions, currentDeletions) {
+		return fmt.Errorf("workspace changes changed before authoritative reconciliation")
+	}
+	currentSnapshot, err := snapshotDelegatedAPIWorkspaceChanges(execution.Workspace, allAdditions, allDeletions)
+	if err != nil {
+		return fmt.Errorf("resnapshot workspace changes before reconciliation: %w", err)
+	}
+	if !sameDelegatedAPIWorkspaceSnapshot(beforeSnapshot, currentSnapshot) {
+		return fmt.Errorf("workspace file contents changed before authoritative reconciliation")
+	}
+
+	if _, err := runGitAPICommitReconcileCommandFn(ctx, execution.Workspace, nil, "reset", "--mixed", targetOID); err != nil {
+		return fmt.Errorf("move isolated workspace HEAD to authoritative commit while preserving worktree changes: %w", err)
 	}
 	branch, err = runGitCommitCommandFn(ctx, execution.Workspace, "branch", "--show-current")
 	if err != nil || strings.TrimSpace(branch) != intent.Branch {
@@ -258,12 +440,97 @@ func reconcileDelegatedAPICommitWorkspace(ctx context.Context, execution GitComm
 	if err != nil || strings.TrimSpace(head) != targetOID {
 		return fmt.Errorf("workspace HEAD does not match authoritative commit")
 	}
-	status, err := runGitCommandRawOutput(ctx, execution.Workspace, "status", "--porcelain", "-uall", "-z")
+	afterSnapshot, err := snapshotDelegatedAPIWorkspaceChanges(execution.Workspace, allAdditions, allDeletions)
+	if err != nil {
+		return fmt.Errorf("snapshot workspace changes after reconciliation: %w", err)
+	}
+	if !sameDelegatedAPIWorkspaceSnapshot(beforeSnapshot, afterSnapshot) {
+		return fmt.Errorf("workspace file contents changed during authoritative reconciliation")
+	}
+	remainingAdditions, remainingDeletions, err := apiCommitFileChangesFromWorkspace(ctx, execution.Workspace, nil)
 	if err != nil {
 		return fmt.Errorf("verify reconciled workspace status: %w", err)
 	}
-	if status != "" {
-		return fmt.Errorf("workspace is not clean after reconciliation")
+	if !sameAPICommitChanges(expectedRemainingAdditions, expectedRemainingDeletions, remainingAdditions, remainingDeletions) {
+		return fmt.Errorf("reconciled workspace does not contain exactly the preserved unselected changes")
 	}
 	return nil
+}
+
+type delegatedAPIWorkspaceFileSnapshot struct {
+	mode    os.FileMode
+	content []byte
+	exists  bool
+	link    string
+}
+
+func snapshotDelegatedAPIWorkspaceChanges(workspace string, additions []apiCommitFileAddition, deletions []apiCommitFileDeletion) (map[string]delegatedAPIWorkspaceFileSnapshot, error) {
+	paths := make(map[string]struct{}, len(additions)+len(deletions))
+	for _, addition := range additions {
+		paths[addition.Path] = struct{}{}
+	}
+	for _, deletion := range deletions {
+		paths[deletion.Path] = struct{}{}
+	}
+	snapshot := make(map[string]delegatedAPIWorkspaceFileSnapshot, len(paths))
+	for path := range paths {
+		fullPath := filepath.Join(workspace, filepath.FromSlash(path))
+		info, err := os.Lstat(fullPath)
+		if os.IsNotExist(err) {
+			snapshot[path] = delegatedAPIWorkspaceFileSnapshot{}
+			continue
+		}
+		if err != nil {
+			return nil, fmt.Errorf("inspect %s: %w", path, err)
+		}
+		entry := delegatedAPIWorkspaceFileSnapshot{exists: true, mode: info.Mode()}
+		if info.Mode()&os.ModeSymlink != 0 {
+			entry.link, err = os.Readlink(fullPath)
+		} else if info.Mode().IsRegular() {
+			entry.content, err = os.ReadFile(fullPath)
+		} else {
+			return nil, fmt.Errorf("unsupported workspace file type for %s", path)
+		}
+		if err != nil {
+			return nil, fmt.Errorf("read %s: %w", path, err)
+		}
+		snapshot[path] = entry
+	}
+	return snapshot, nil
+}
+
+func sameDelegatedAPIWorkspaceSnapshot(left, right map[string]delegatedAPIWorkspaceFileSnapshot) bool {
+	if len(left) != len(right) {
+		return false
+	}
+	for path, want := range left {
+		got, ok := right[path]
+		if !ok || want.exists != got.exists || want.mode != got.mode || want.link != got.link || !bytes.Equal(want.content, got.content) {
+			return false
+		}
+	}
+	return true
+}
+
+func withoutSelectedAPICommitChanges(allAdditions []apiCommitFileAddition, allDeletions []apiCommitFileDeletion, selectedAdditions []apiCommitFileAddition, selectedDeletions []apiCommitFileDeletion) ([]apiCommitFileAddition, []apiCommitFileDeletion) {
+	selectedPaths := make(map[string]struct{}, len(selectedAdditions)+len(selectedDeletions))
+	for _, addition := range selectedAdditions {
+		selectedPaths[addition.Path] = struct{}{}
+	}
+	for _, deletion := range selectedDeletions {
+		selectedPaths[deletion.Path] = struct{}{}
+	}
+	remainingAdditions := make([]apiCommitFileAddition, 0, len(allAdditions))
+	for _, addition := range allAdditions {
+		if _, selected := selectedPaths[addition.Path]; !selected {
+			remainingAdditions = append(remainingAdditions, addition)
+		}
+	}
+	remainingDeletions := make([]apiCommitFileDeletion, 0, len(allDeletions))
+	for _, deletion := range allDeletions {
+		if _, selected := selectedPaths[deletion.Path]; !selected {
+			remainingDeletions = append(remainingDeletions, deletion)
+		}
+	}
+	return remainingAdditions, remainingDeletions
 }

@@ -1,6 +1,7 @@
 package conductor
 
 import (
+	"bytes"
 	"context"
 	"encoding/base64"
 	"encoding/json"
@@ -147,6 +148,15 @@ func (fixture *delegatedAPIGitFixture) startOID(branch string) string {
 		fixture.t.Fatalf("read remote %s OID: %v", branch, err)
 	}
 	return strings.TrimSpace(out)
+}
+
+func (fixture *delegatedAPIGitFixture) resetWorkspaceChanges(t *testing.T) {
+	t.Helper()
+	for _, args := range [][]string{{"reset", "--hard", "HEAD"}, {"clean", "-fd"}} {
+		if _, err := runGitCommand(context.Background(), fixture.workspace.Path, args...); err != nil {
+			t.Fatalf("reset fixture workspace: git %s: %v", strings.Join(args, " "), err)
+		}
+	}
 }
 
 func (f *delegatedAPIGitForge) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -372,6 +382,106 @@ func TestDelegatedAPICommitCreatesAbsentFeatureBranchAndReconcilesWorkspace(t *t
 	}
 }
 
+func TestDelegatedAPICommitPreservesUnselectedChangesForPathLimitedCommits(t *testing.T) {
+	cases := []struct {
+		name           string
+		selectedPath   string
+		unselectedPath string
+		prepare        func(*testing.T, *delegatedAPIGitFixture)
+		unselectedData []byte
+	}{
+		{
+			name:           "selected modification and unselected modification",
+			selectedPath:   "keep.txt",
+			unselectedPath: "remove.txt",
+			unselectedData: []byte("unselected modification\n"),
+			prepare: func(t *testing.T, f *delegatedAPIGitFixture) {
+				writeWorkspaceFile(t, f.workspace.Path, "keep.txt", []byte("selected modification\n"))
+				writeWorkspaceFile(t, f.workspace.Path, "remove.txt", []byte("unselected modification\n"))
+			},
+		},
+		{
+			name:           "selected addition and unselected modification",
+			selectedPath:   "new.txt",
+			unselectedPath: "keep.txt",
+			unselectedData: []byte("unselected modification\n"),
+			prepare: func(t *testing.T, f *delegatedAPIGitFixture) {
+				writeWorkspaceFile(t, f.workspace.Path, "new.txt", []byte("selected addition\n"))
+				writeWorkspaceFile(t, f.workspace.Path, "keep.txt", []byte("unselected modification\n"))
+			},
+		},
+		{
+			name:           "selected deletion and unselected modification",
+			selectedPath:   "remove.txt",
+			unselectedPath: "keep.txt",
+			unselectedData: []byte("unselected modification\n"),
+			prepare: func(t *testing.T, f *delegatedAPIGitFixture) {
+				if err := os.Remove(filepath.Join(f.workspace.Path, "remove.txt")); err != nil {
+					t.Fatalf("delete selected path: %v", err)
+				}
+				writeWorkspaceFile(t, f.workspace.Path, "keep.txt", []byte("unselected modification\n"))
+			},
+		},
+	}
+
+	for _, testCase := range cases {
+		t.Run(testCase.name, func(t *testing.T) {
+			f := newDelegatedAPIGitFixture(t, "absent")
+			f.resetWorkspaceChanges(t)
+			testCase.prepare(t, f)
+			execution := f.execution("feat: commit selected paths")
+			execution.Paths = []string{testCase.selectedPath}
+
+			result, err := RunGitCommit(context.Background(), execution)
+			if err != nil {
+				t.Fatalf("path-limited delegated API commit: %v", err)
+			}
+			if result.Status != "committed" || result.CommitHash == "" {
+				t.Fatalf("result = %+v, want authoritative commit", result)
+			}
+			if got := f.startOID("feat/api"); got != result.CommitHash {
+				t.Fatalf("remote tip = %s, want returned commit %s", got, result.CommitHash)
+			}
+			if got, err := runGitCommand(context.Background(), f.workspace.Path, "rev-parse", "HEAD"); err != nil || strings.TrimSpace(got) != result.CommitHash {
+				t.Fatalf("local HEAD = %q, err=%v; want authoritative commit %s", strings.TrimSpace(got), err, result.CommitHash)
+			}
+
+			remotePaths, err := runGitCommand(context.Background(), f.origin, "diff", "--name-only", "--no-renames", f.baseOID, result.CommitHash)
+			if err != nil {
+				t.Fatalf("inspect remote commit paths: %v", err)
+			}
+			if got := strings.Fields(remotePaths); len(got) != 1 || got[0] != testCase.selectedPath {
+				t.Fatalf("remote commit paths = %q, want only %q", got, testCase.selectedPath)
+			}
+			if got := f.startOID("main"); got != f.mainOID {
+				t.Fatalf("default branch moved to %s, want %s", got, f.mainOID)
+			}
+
+			unselected, err := os.ReadFile(filepath.Join(f.workspace.Path, testCase.unselectedPath))
+			if err != nil || !bytes.Equal(unselected, testCase.unselectedData) {
+				t.Fatalf("unselected %s = %q, err=%v; want unchanged bytes %q", testCase.unselectedPath, unselected, err, testCase.unselectedData)
+			}
+			status, err := RunGitStatus(context.Background(), GitStatusExecution{Workspace: f.workspace.Path, ConfiguredBranch: "main"})
+			if err != nil {
+				t.Fatalf("post-commit git.status: %v", err)
+			}
+			if status.Branch != "feat/api" || status.Head != result.CommitHash || status.Clean || len(status.Changes) != 1 || status.Changes[0].Path != testCase.unselectedPath {
+				t.Fatalf("post-commit status = %+v, want only unchanged unselected path %s", status, testCase.unselectedPath)
+			}
+			if f.fake.graphQLCalls != 1 || f.fake.commitCount != 1 {
+				t.Fatalf("remote mutations = GraphQL:%d commits:%d, want one selected commit", f.fake.graphQLCalls, f.fake.commitCount)
+			}
+		})
+	}
+}
+
+func writeWorkspaceFile(t *testing.T, workspace, name string, contents []byte) {
+	t.Helper()
+	if err := os.WriteFile(filepath.Join(workspace, name), contents, 0o644); err != nil {
+		t.Fatalf("write workspace file %s: %v", name, err)
+	}
+}
+
 func TestDelegatedAPICommitAcceptsMatchingRemoteFeatureBranch(t *testing.T) {
 	f := newDelegatedAPIGitFixture(t, "base")
 	result, err := RunGitCommit(context.Background(), f.execution("feat: existing exact branch"))
@@ -456,6 +566,15 @@ func TestDelegatedAPICommitRecognizesExactExistingIntentIdempotently(t *testing.
 
 func TestDelegatedAPICommitRecoversAfterLocalReconciliationFailure(t *testing.T) {
 	f := newDelegatedAPIGitFixture(t, "absent")
+	f.resetWorkspaceChanges(t)
+	writeWorkspaceFile(t, f.workspace.Path, "keep.txt", []byte("selected change\n"))
+	writeWorkspaceFile(t, f.workspace.Path, "remove.txt", []byte("preserved unselected change\n"))
+	execution := f.execution("feat: recover local reconciliation")
+	execution.Paths = []string{"keep.txt"}
+	unselectedBefore, err := os.ReadFile(filepath.Join(f.workspace.Path, "remove.txt"))
+	if err != nil {
+		t.Fatalf("read unselected work before commit: %v", err)
+	}
 	original := runGitAPICommitReconcileCommandFn
 	failed := false
 	runGitAPICommitReconcileCommandFn = func(ctx context.Context, dir string, env []string, args ...string) (string, error) {
@@ -466,13 +585,13 @@ func TestDelegatedAPICommitRecoversAfterLocalReconciliationFailure(t *testing.T)
 		return original(ctx, dir, env, args...)
 	}
 	t.Cleanup(func() { runGitAPICommitReconcileCommandFn = original })
-	if _, err := RunGitCommit(context.Background(), f.execution("feat: recover local reconciliation")); err == nil {
+	if _, err := RunGitCommit(context.Background(), execution); err == nil {
 		t.Fatal("commit reported success despite local reconciliation failure")
 	}
 	if f.fake.commitCount != 1 || f.fake.graphQLCalls != 1 {
 		t.Fatalf("first call mutations = GraphQL:%d commits:%d, want exactly one remote commit", f.fake.graphQLCalls, f.fake.commitCount)
 	}
-	result, err := RunGitCommit(context.Background(), f.execution("feat: recover local reconciliation"))
+	result, err := RunGitCommit(context.Background(), execution)
 	if err != nil {
 		t.Fatalf("recover delegated API commit: %v", err)
 	}
@@ -480,11 +599,72 @@ func TestDelegatedAPICommitRecoversAfterLocalReconciliationFailure(t *testing.T)
 		t.Fatalf("recovery = %+v; GraphQL:%d commits:%d, want no second remote mutation", result, f.fake.graphQLCalls, f.fake.commitCount)
 	}
 	status, err := RunGitStatus(context.Background(), GitStatusExecution{Workspace: f.workspace.Path, ConfiguredBranch: "main"})
-	if err != nil || status.Branch != "feat/api" || status.Head != result.CommitHash || !status.Clean {
+	if err != nil || status.Branch != "feat/api" || status.Head != result.CommitHash || status.Clean || len(status.Changes) != 1 || status.Changes[0].Path != "remove.txt" {
 		t.Fatalf("recovered status = %+v, err=%v", status, err)
+	}
+	selectedAdditions, selectedDeletions, err := apiCommitFileChangesFromWorkspace(context.Background(), f.workspace.Path, []string{"keep.txt"})
+	if err != nil || len(selectedAdditions)+len(selectedDeletions) != 0 {
+		t.Fatalf("selected path remains dirty after recovery: additions=%v deletions=%v err=%v", selectedAdditions, selectedDeletions, err)
+	}
+	unselectedAfter, err := os.ReadFile(filepath.Join(f.workspace.Path, "remove.txt"))
+	if err != nil || !bytes.Equal(unselectedBefore, unselectedAfter) {
+		t.Fatalf("unselected work changed during recovery: before=%q after=%q err=%v", unselectedBefore, unselectedAfter, err)
 	}
 	if got := f.startOID("main"); got != f.mainOID {
 		t.Fatalf("default branch moved to %s, want %s", got, f.mainOID)
+	}
+}
+
+func TestDelegatedAPICommitRetryRecognizesAlreadyReconciledHead(t *testing.T) {
+	f := newDelegatedAPIGitFixture(t, "absent")
+	f.resetWorkspaceChanges(t)
+	writeWorkspaceFile(t, f.workspace.Path, "keep.txt", []byte("selected change\n"))
+	writeWorkspaceFile(t, f.workspace.Path, "remove.txt", []byte("preserved unselected change\n"))
+	execution := f.execution("feat: retry after mixed reconciliation")
+	execution.Paths = []string{"keep.txt"}
+	unselectedBefore, err := os.ReadFile(filepath.Join(f.workspace.Path, "remove.txt"))
+	if err != nil {
+		t.Fatalf("read unselected work before commit: %v", err)
+	}
+	original := runGitAPICommitReconcileCommandFn
+	failed := false
+	runGitAPICommitReconcileCommandFn = func(ctx context.Context, dir string, env []string, args ...string) (string, error) {
+		if !failed && len(args) >= 2 && args[0] == "reset" && args[1] == "--mixed" {
+			failed = true
+			output, err := original(ctx, dir, env, args...)
+			if err != nil {
+				return output, err
+			}
+			return output, errors.New("injected failure after mixed reset")
+		}
+		return original(ctx, dir, env, args...)
+	}
+	t.Cleanup(func() { runGitAPICommitReconcileCommandFn = original })
+	if _, err := RunGitCommit(context.Background(), execution); err == nil {
+		t.Fatal("commit reported success despite a failed local reconciliation command")
+	}
+	remoteOID := f.startOID("feat/api")
+	if head, err := runGitCommand(context.Background(), f.workspace.Path, "rev-parse", "HEAD"); err != nil || strings.TrimSpace(head) != remoteOID {
+		t.Fatalf("HEAD after injected failure = %q, err=%v; want remote OID %s", strings.TrimSpace(head), err, remoteOID)
+	}
+	if f.fake.graphQLCalls != 1 || f.fake.commitCount != 1 {
+		t.Fatalf("first call mutations = GraphQL:%d commits:%d, want one commit", f.fake.graphQLCalls, f.fake.commitCount)
+	}
+
+	result, err := RunGitCommit(context.Background(), execution)
+	if err != nil {
+		t.Fatalf("retry after mixed reconciliation: %v", err)
+	}
+	if result.Status != "committed" || result.CommitHash != remoteOID || f.fake.graphQLCalls != 1 || f.fake.commitCount != 1 {
+		t.Fatalf("retry = %+v; GraphQL:%d commits:%d, want exact idempotent recovery", result, f.fake.graphQLCalls, f.fake.commitCount)
+	}
+	status, err := RunGitStatus(context.Background(), GitStatusExecution{Workspace: f.workspace.Path, ConfiguredBranch: "main"})
+	if err != nil || status.Head != remoteOID || status.Clean || len(status.Changes) != 1 || status.Changes[0].Path != "remove.txt" {
+		t.Fatalf("post-retry status = %+v, err=%v", status, err)
+	}
+	unselectedAfter, err := os.ReadFile(filepath.Join(f.workspace.Path, "remove.txt"))
+	if err != nil || !bytes.Equal(unselectedBefore, unselectedAfter) {
+		t.Fatalf("unselected work changed during retry: before=%q after=%q err=%v", unselectedBefore, unselectedAfter, err)
 	}
 }
 
@@ -528,6 +708,43 @@ func TestDelegatedLocalCommitModeRemainsLocal(t *testing.T) {
 	}
 	if got := f.startOID("main"); got != f.mainOID {
 		t.Fatalf("default branch moved to %s, want %s", got, f.mainOID)
+	}
+}
+
+func TestDelegatedLocalCommitPathsRemainLimited(t *testing.T) {
+	f := newDelegatedAPIGitFixture(t, "absent")
+	execution := f.execution("feat: local path-limited commit")
+	execution.Credential = ResolvedCredential{Method: CredentialNone, CommitMode: CommitModeLocal, Identity: ResolvedIdentity{Name: "Local Botanist", Email: "local@example.invalid"}}
+	execution.Paths = []string{"keep.txt"}
+	result, err := RunGitCommit(context.Background(), execution)
+	if err != nil {
+		t.Fatalf("local path-limited commit: %v", err)
+	}
+	if result.Status != "committed" || result.CommitHash == "" {
+		t.Fatalf("result = %+v, want local commit", result)
+	}
+	committedPaths, err := runGitCommand(context.Background(), f.workspace.Path, "show", "--format=", "--name-only", result.CommitHash)
+	if err != nil {
+		t.Fatalf("inspect local commit paths: %v", err)
+	}
+	if got := strings.Fields(committedPaths); len(got) != 1 || got[0] != "keep.txt" {
+		t.Fatalf("local commit paths = %q, want only keep.txt", got)
+	}
+	status, err := RunGitStatus(context.Background(), GitStatusExecution{Workspace: f.workspace.Path, ConfiguredBranch: "main"})
+	if err != nil {
+		t.Fatalf("status after local path-limited commit: %v", err)
+	}
+	if status.Head != result.CommitHash || status.Clean || status.ChangeCount != 2 {
+		t.Fatalf("local path-limited status = %+v, want HEAD at commit and two untouched unselected changes", status)
+	}
+	if _, err := os.Stat(filepath.Join(f.workspace.Path, "new.txt")); err != nil {
+		t.Fatalf("unselected addition was removed: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(f.workspace.Path, "remove.txt")); !os.IsNotExist(err) {
+		t.Fatalf("unselected deletion was restored or inaccessible: err=%v", err)
+	}
+	if f.fake.createRefCalls != 0 || f.fake.graphQLCalls != 0 {
+		t.Fatalf("local path-limited commit invoked API mutations: ref=%d GraphQL=%d", f.fake.createRefCalls, f.fake.graphQLCalls)
 	}
 }
 

@@ -528,7 +528,10 @@ which mode is used:
   commit before reporting success. The change is already published, but a
   separately authorized subsequent `git.push` remains an ordinary up-to-date
   push; unexpected remote advancement fails through normal non-fast-forward
-  protection.
+  protection. When `paths` limits the commit, only matching changes enter the
+  commit and unselected workspace changes are preserved; `git.status` reports
+  those remaining changes. A commit covering all workspace changes leaves the
+  workspace clean.
   **Managed readiness requirement:** for `checkout.mode=managed`,
   `tendril git setup --verify` additionally confirms that the GitHub App
   installation holds repository **contents write** permission before the first

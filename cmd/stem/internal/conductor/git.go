@@ -160,8 +160,8 @@ type GitCommitExecution struct {
 	Pollen string
 	// Message is the commit message.
 	Message string
-	// Paths optionally limits staging to the given workspace-relative paths;
-	// empty stages all changes.
+	// Paths optionally limits the commit to the given workspace-relative Git
+	// pathspecs; empty commits the full workspace state.
 	Paths []string
 	// Credential is the substrate's resolved credential; its Identity must be
 	// fully configured (deny-closed) and its Sign configuration is applied
@@ -554,31 +554,23 @@ func splitCommitMessage(message string) (headline, body string) {
 // changes (tracked modifications, deletions, and untracked files — the same
 // scope `git add -A` would stage) via `git status --porcelain`, and reads
 // each surviving addition's current file contents. When paths is non-empty,
-// only entries whose path is in that list are included, matching the local
-// path's optional Paths staging filter.
+// Git's pathspec matching selects changes, consistent with local git add.
 func apiCommitFileChangesFromWorkspace(ctx context.Context, workspace string, paths []string) ([]apiCommitFileAddition, []apiCommitFileDeletion, error) {
 	// -uall recurses into untracked directories instead of reporting the
 	// directory itself; -z NUL-separates entries so a path is never
 	// corrupted by trimming (the leading space of a worktree-only status
 	// code, e.g. " M path", is otherwise indistinguishable from padding —
 	// see the identical rationale at docker.go's own -z status read).
-	status, err := runGitCommandRawOutput(ctx, workspace, "status", "--porcelain", "-uall", "-z")
+	statusArgs := []string{"status", "--porcelain", "-uall", "-z"}
+	if len(paths) > 0 {
+		// Let Git interpret pathspecs so API commits match local `git add`
+		// semantics for files, directories, and supported pathspec patterns.
+		statusArgs = append(statusArgs, "--")
+		statusArgs = append(statusArgs, paths...)
+	}
+	status, err := runGitCommandRawOutput(ctx, workspace, statusArgs...)
 	if err != nil {
 		return nil, nil, err
-	}
-
-	filter := make(map[string]struct{}, len(paths))
-	for _, p := range paths {
-		if normalized := filepath.ToSlash(strings.TrimSpace(p)); normalized != "" {
-			filter[normalized] = struct{}{}
-		}
-	}
-	allowed := func(path string) bool {
-		if len(filter) == 0 {
-			return true
-		}
-		_, ok := filter[path]
-		return ok
 	}
 
 	var additions []apiCommitFileAddition
@@ -587,7 +579,7 @@ func apiCommitFileChangesFromWorkspace(ctx context.Context, workspace string, pa
 	seenDeletion := make(map[string]struct{})
 
 	addAddition := func(path string) error {
-		if _, ok := seenAddition[path]; ok || !allowed(path) {
+		if _, ok := seenAddition[path]; ok {
 			return nil
 		}
 		contents, readErr := os.ReadFile(filepath.Join(workspace, filepath.FromSlash(path)))
@@ -602,7 +594,7 @@ func apiCommitFileChangesFromWorkspace(ctx context.Context, workspace string, pa
 		return nil
 	}
 	addDeletion := func(path string) {
-		if _, ok := seenDeletion[path]; ok || !allowed(path) {
+		if _, ok := seenDeletion[path]; ok {
 			return
 		}
 		deletions = append(deletions, apiCommitFileDeletion{Path: path})
