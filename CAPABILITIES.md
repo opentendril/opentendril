@@ -503,7 +503,7 @@ Stem-held credential.
 | `git.commit` | Commit the workspace state. Two modes are determined by the Substrate's connection configuration (see below). Both modes use the same default-branch commit guard: commits to the repository's default branch are refused unless the Substrate explicitly sets `protectDefaultBranch: false`. |
 | `git.push` | Push `HEAD` to a target branch on the remote (`HEAD:refs/heads/<branch>`). If no explicit branch is supplied, the workspace's current branch is used; if a branch is supplied, `HEAD` is pushed to that named remote branch. Uses the Substrate's credential. |
 | `git.pr` | Open a pull request. The base branch is resolved from the repository (never assumed). An existing open PR for the same head is returned rather than duplicated. A head branch that is the default branch is refused. PR creation does not merge. |
-| `git.branch` | Create or switch to a feature branch. An existing branch is switched to, never reset. A branch named as the repository's default branch is refused. |
+| `git.branch` | Create or switch to a feature branch in the delegated local workspace only. An existing branch is switched to, never reset. It does not create or move remote refs. A branch named as the repository's default branch is refused. |
 | `git.status` | Read-only report of workspace state: current branch, resolved default branch, uncommitted changes, ahead/behind, and whether a commit would be allowed. |
 | `git.branch.list` | Classify local branches against forge evidence (merged, open PR, closed-unmerged, unpushed, etc.). Read-only. |
 | `git.prune` | Delete local branches whose PR merged. Reports what would be deleted unless `confirm` is true. Never deletes the current or default branch, a branch with an open or unmerged PR, one the remote has never seen, or one held by another subject's workspace. |
@@ -521,8 +521,17 @@ which mode is used:
   A subsequent `git.push` is required to publish.
 - **API mode** (`commit: api`) - requires a GitHub App connection. Creates the
   commit server-side through the GitHub API; GitHub supplies the identity and
-  signature. Because the API commit advances the remote branch directly, it
-  also publishes the change - a subsequent `git.push` is unnecessary.
+  signature. For a delegated workspace, `git.commit` establishes only the
+  current feature branch at the exact pre-commit `HEAD` (or accepts that
+  already-matching remote state), refuses a conflicting remote tip, creates the
+  commit, and reconciles the isolated workspace to the authoritative remote
+  commit before reporting success. The change is already published, but a
+  separately authorized subsequent `git.push` remains an ordinary up-to-date
+  push; unexpected remote advancement fails through normal non-fast-forward
+  protection. When `paths` limits the commit, only matching changes enter the
+  commit and unselected workspace changes are preserved; `git.status` reports
+  those remaining changes. A commit covering all workspace changes leaves the
+  workspace clean.
   **Managed readiness requirement:** for `checkout.mode=managed`,
   `tendril git setup --verify` additionally confirms that the GitHub App
   installation holds repository **contents write** permission before the first

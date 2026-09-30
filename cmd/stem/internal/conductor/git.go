@@ -150,10 +150,18 @@ func isGitRepo(path string) bool {
 type GitCommitExecution struct {
 	// Workspace is the resolved local workspace directory the commit targets.
 	Workspace string
+	// Repository is the configured Substrate checkout that owns Workspace.
+	// It is required with Pollen for delegated API-mode reconciliation.
+	Repository string
+	// Substrate is the named Substrate whose delegated workspace is targeted.
+	Substrate string
+	// Pollen is the authenticated Pollinator identity. Empty for non-delegated
+	// calls, whose existing API-mode behavior remains unchanged.
+	Pollen string
 	// Message is the commit message.
 	Message string
-	// Paths optionally limits staging to the given workspace-relative paths;
-	// empty stages all changes.
+	// Paths optionally limits the commit to the given workspace-relative Git
+	// pathspecs; empty commits the full workspace state.
 	Paths []string
 	// Credential is the substrate's resolved credential; its Identity must be
 	// fully configured (deny-closed) and its Sign configuration is applied
@@ -205,10 +213,10 @@ var runGitCommitCommandFn = runGitCommand
 // command (or any other side effect) runs.
 //
 // Mode routing: when the resolved credential's CommitMode is CommitModeAPI,
-// the commit is delegated to runAPICommit — the GitHub GraphQL
-// createCommitOnBranch mutation, server-signed by GitHub — instead of the
-// local git path below. Local-mode behavior (the default, empty
-// CommitMode, or CommitModeLocal) is unchanged.
+// a delegated Pollen uses the coherent remote-branch/commit/workspace lifecycle
+// while non-delegated calls retain runAPICommit. Both use GitHub's
+// createCommitOnBranch mutation and server-side signature. Local-mode behavior
+// (the default, empty CommitMode, or CommitModeLocal) is unchanged.
 func RunGitCommit(ctx context.Context, execution GitCommitExecution) (GitCommitResult, error) {
 	if ctx == nil {
 		ctx = context.Background()
@@ -251,6 +259,9 @@ func RunGitCommit(ctx context.Context, execution GitCommitExecution) (GitCommitR
 	}
 
 	if !localMode {
+		if strings.TrimSpace(execution.Pollen) != "" {
+			return runDelegatedAPICommit(ctx, execution)
+		}
 		return runAPICommit(ctx, execution)
 	}
 
@@ -372,18 +383,12 @@ func AssessDefaultBranchCommit(ctx context.Context, workspace, configuredBranch 
 	return assessment
 }
 
-// API-mode delegated commit (commit: api) — the recommended default git
-// connection posture: a GitHub App connection creates the commit server-side
-// via the GraphQL createCommitOnBranch mutation, so GitHub itself signs it
-// (a verified commit with no local key material) rather than the Stem
-// running local git and an optional GPG/SSH signature.
-//
-// IMPORTANT semantic difference from local mode: createCommitOnBranch creates
-// the commit directly ON THE REMOTE BRANCH and advances the remote ref — it
-// does not touch the local workspace at all. Api-mode commit therefore also
-// PUBLISHES the change; a subsequent push is unnecessary (and would be a
-// no-op once the local workspace is later synced, e.g. via `git fetch` +
-// reset, since the remote already carries the new commit).
+// API-mode delegated commits and managed Fruit publication use the GitHub
+// GraphQL createCommitOnBranch mutation. GitHub supplies the identity and
+// signature; local signing keys are not involved. Non-delegated API commits
+// retain their existing workspace behavior in runAPICommit, while delegated
+// calls establish and reconcile their exact feature branch in
+// runDelegatedAPICommit.
 
 // createCommitOnBranchMutation is the GraphQL document RunGitCommit's api
 // mode sends. Its shape follows GitHub's CreateCommitOnBranchInput schema:
@@ -451,10 +456,9 @@ type createCommitOnBranchResponse struct {
 	} `json:"createCommitOnBranch"`
 }
 
-// runAPICommit implements the commit: api execution mode. It never touches
-// the local git index or working tree state (no staging, no local commit) —
-// it reads the workspace's current file contents and the remote's expected
-// head, and asks GitHub to create the commit remotely.
+// runAPICommit implements the existing non-delegated commit: api execution
+// mode. Delegated Pollinator calls use runDelegatedAPICommit so the GitHub
+// commit and local workspace have one coherent postcondition.
 func runAPICommit(ctx context.Context, execution GitCommitExecution) (GitCommitResult, error) {
 	cred := execution.Credential
 
@@ -550,31 +554,23 @@ func splitCommitMessage(message string) (headline, body string) {
 // changes (tracked modifications, deletions, and untracked files — the same
 // scope `git add -A` would stage) via `git status --porcelain`, and reads
 // each surviving addition's current file contents. When paths is non-empty,
-// only entries whose path is in that list are included, matching the local
-// path's optional Paths staging filter.
+// Git's pathspec matching selects changes, consistent with local git add.
 func apiCommitFileChangesFromWorkspace(ctx context.Context, workspace string, paths []string) ([]apiCommitFileAddition, []apiCommitFileDeletion, error) {
 	// -uall recurses into untracked directories instead of reporting the
 	// directory itself; -z NUL-separates entries so a path is never
 	// corrupted by trimming (the leading space of a worktree-only status
 	// code, e.g. " M path", is otherwise indistinguishable from padding —
 	// see the identical rationale at docker.go's own -z status read).
-	status, err := runGitCommandRawOutput(ctx, workspace, "status", "--porcelain", "-uall", "-z")
+	statusArgs := []string{"status", "--porcelain", "-uall", "-z"}
+	if len(paths) > 0 {
+		// Let Git interpret pathspecs so API commits match local `git add`
+		// semantics for files, directories, and supported pathspec patterns.
+		statusArgs = append(statusArgs, "--")
+		statusArgs = append(statusArgs, paths...)
+	}
+	status, err := runGitCommandRawOutput(ctx, workspace, statusArgs...)
 	if err != nil {
 		return nil, nil, err
-	}
-
-	filter := make(map[string]struct{}, len(paths))
-	for _, p := range paths {
-		if normalized := filepath.ToSlash(strings.TrimSpace(p)); normalized != "" {
-			filter[normalized] = struct{}{}
-		}
-	}
-	allowed := func(path string) bool {
-		if len(filter) == 0 {
-			return true
-		}
-		_, ok := filter[path]
-		return ok
 	}
 
 	var additions []apiCommitFileAddition
@@ -583,7 +579,7 @@ func apiCommitFileChangesFromWorkspace(ctx context.Context, workspace string, pa
 	seenDeletion := make(map[string]struct{})
 
 	addAddition := func(path string) error {
-		if _, ok := seenAddition[path]; ok || !allowed(path) {
+		if _, ok := seenAddition[path]; ok {
 			return nil
 		}
 		contents, readErr := os.ReadFile(filepath.Join(workspace, filepath.FromSlash(path)))
@@ -598,7 +594,7 @@ func apiCommitFileChangesFromWorkspace(ctx context.Context, workspace string, pa
 		return nil
 	}
 	addDeletion := func(path string) {
-		if _, ok := seenDeletion[path]; ok || !allowed(path) {
+		if _, ok := seenDeletion[path]; ok {
 			return
 		}
 		deletions = append(deletions, apiCommitFileDeletion{Path: path})
@@ -1510,6 +1506,14 @@ func publishAPIFruit(ctx context.Context, repoPath, branch, baseCommit string, a
 		return "", newAPIFruitPublicationFailure("target-ref-creation", outcome, false, mutationRequestID(err), apiFruitFailureMessage(outcome))
 	}
 
+	return publishAPIFruitCommit(ctx, token, intent)
+}
+
+// publishAPIFruitCommit issues one intended GitHub-signed commit, then uses
+// bounded read-only forge evidence to resolve any ambiguous result. The sole
+// retry is allowed only when reconciliation proves the ref remains at the
+// exact expected base; an exact already-created commit is returned directly.
+func publishAPIFruitCommit(ctx context.Context, token string, intent apiFruitPublicationIntent) (string, error) {
 	commitOID, metadata, commitErr := createAPIFruitCommit(ctx, token, intent)
 	if commitErr == nil {
 		return commitOID, nil

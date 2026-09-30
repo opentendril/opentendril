@@ -232,6 +232,9 @@ func gitOperationsForConfig(substratesConfig *conductor.SubstratesConfig) core.G
 
 			result, err := conductor.RunGitCommit(ctx, conductor.GitCommitExecution{
 				Workspace:                workspace.Path,
+				Repository:               workspace.Repository,
+				Substrate:                spec.Substrate,
+				Pollen:                   workspace.Pollen,
 				Message:                  spec.Message,
 				Paths:                    spec.Paths,
 				Credential:               credential,

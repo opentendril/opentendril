@@ -76,6 +76,8 @@ func LockWorkspace(path string) func() {
 type DelegatedWorkspace struct {
 	// Path is the directory the operation runs in.
 	Path string
+	// Repository is the Substrate checkout whose Git metadata this worktree uses.
+	Repository string
 	// Pollen is the Pollen it belongs to ("" when the operation
 	// is not delegated).
 	Pollen string
@@ -137,7 +139,7 @@ func ResolveDelegatedWorkspaceWithMode(ctx context.Context, substrateName, subst
 		if mode == ExistingDelegatedWorkspaceOnly {
 			return DelegatedWorkspace{}, fmt.Errorf("existing delegated workspace requires a Pollen")
 		}
-		return DelegatedWorkspace{Path: base}, nil
+		return DelegatedWorkspace{Path: base, Repository: base}, nil
 	}
 
 	name := sanitizeWorkspaceComponent(substrateName)
@@ -146,7 +148,7 @@ func ResolveDelegatedWorkspaceWithMode(ctx context.Context, substrateName, subst
 	}
 	path := filepath.Join(delegatedWorkspaceRoot(), name, sanitizeWorkspaceComponent(trimmedPollen))
 
-	workspace := DelegatedWorkspace{Path: path, Pollen: trimmedPollen, Isolated: true}
+	workspace := DelegatedWorkspace{Path: path, Repository: base, Pollen: trimmedPollen, Isolated: true}
 	if mode == ExistingDelegatedWorkspaceOnly {
 		workspaceRoot := delegatedWorkspaceRoot()
 		rootResolved, rootErr := filepath.EvalSymlinks(workspaceRoot)
