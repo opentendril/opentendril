@@ -19,7 +19,7 @@ exists to make possible.
 
 * The same governed workflow works for local and GitHub App/API commit modes:
   `git.fetch -> git.status -> git.branch -> git.apply -> git.status -> git.commit -> git.status -> git.push -> git.pr`.
-* A successful `git.commit` leaves the delegated workspace on the same feature branch, clean, with `HEAD` equal to the returned commit OID.
+* A successful `git.commit` leaves the delegated workspace on the same feature branch with `HEAD` equal to the returned commit OID. A full-workspace commit leaves it clean; a path-limited commit preserves only the unchanged unselected workspace changes.
 * API-mode commit can safely establish only its exact feature branch at the exact expected pre-commit OID.
 * Existing remote state at another OID fails closed and is never overwritten.
 * Ambiguous remote mutations are reconciled from bounded read-only evidence before any retry.
