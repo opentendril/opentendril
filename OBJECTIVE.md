@@ -13,27 +13,27 @@ exists to make possible.
 
 ## Current
 
-**A Pollinator holding only OpenTendril authority can carry one coherent governed Git change from synchronized remote state through an isolated feature branch, deterministic patch, commit, push, and Git-reviewable pull request, regardless of configured commit posture, without receiving repository credentials or modifying the default branch.**
+**A Botanist unfamiliar with OpenTendril can go from a clean supported machine to one reviewed Git Fruit using the governed installation path and Greenhouse as the primary workbench, without needing OpenTendril-internal knowledge or separate command-line orchestration for the normal work lifecycle.**
 
 ## Done when
 
-* The same governed workflow works for local and GitHub App/API commit modes:
-  `git.fetch -> git.status -> git.branch -> git.apply -> git.status -> git.commit -> git.status -> git.push -> git.pr`.
-* A successful `git.commit` leaves the delegated workspace on the same feature branch with `HEAD` equal to the returned commit OID. A full-workspace commit leaves it clean; a path-limited commit preserves only the unchanged unselected workspace changes.
-* API-mode commit can safely establish only its exact feature branch at the exact expected pre-commit OID.
-* Existing remote state at another OID fails closed and is never overwritten.
-* Ambiguous remote mutations are reconciled from bounded read-only evidence before any retry.
-* One commit intent cannot create duplicate remote commits.
-* `git.push` remains independently authorized and is idempotent after an API-mode commit already published the same OID.
-* `git.fetch` retains its branch-tracking-only contract.
-* Exact Pollen, operation-class, and named Substrate authority remains required.
-* Credentials remain Stem-held.
-* REST, MCP, and CLI remain projections of the same governed Core semantics.
-* The repository default branch remains unchanged.
-* Real external Pollinator qualification reaches a draft Git-reviewable pull request using only OpenTendril authority.
+* Governed installation is reachable from the documented public entrypoint.
+* The security boundary is established before useful work.
+* Required first-use provider, Substrate, Git connection, and other Botanist configuration is explicit and finite.
+* Greenhouse is reachable through the documented installed path.
+* Botanist authentication is understandable without weakening the authority boundary.
+* After setup, the normal governed work lifecycle remains in Greenhouse through task, execution, intervention where required, verification, terminal settlement, and Fruit.
+* Pollinator credentials, DelegationGrants, access-token minting, raw REST calls, and internal identifiers are not required for ordinary first value.
+* Boundary, activity, verification, failures, pending Botanist action, and terminal status remain legible from Stem-owned facts.
+* Successful work exposes repository, Fruit branch, Fruit commit, and verification outcome for Botanist review.
+* The default branch remains unchanged until maintainer review or merge.
+* Browser refresh and supported local restart do not duplicate work.
+* Supported failures identify the failed category and the supported action required next.
+* Fresh-machine qualification records elapsed time, manual decisions, commands outside Greenhouse, ambiguity, and boundary/default-branch state.
 
-This objective does not require general pull, reset, checkout, switch, merge,
-rebase, arbitrary remote-ref mutation, or automatic merge.
+This objective does not require public Internet Pollinator ingress, GitHub-native
+Pollinators, automatic merge, removal of administrative CLI authority, a new
+execution engine, or exposure of private Mycorrhizal reasoning.
 
 ---
 
