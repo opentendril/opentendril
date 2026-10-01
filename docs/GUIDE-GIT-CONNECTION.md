@@ -5,7 +5,8 @@ authenticate to GitHub (which token? SSH? gh? App?) and often gets it wrong.
 Tendril gives a **Pollinator** — an external requester, human or Mycorrhizal —
 **one pre-configured, correct git method**. It
 calls `git.status` / `git.branch` / `git.commit` / `git.push` / `git.pr`, and can
-tidy up afterwards with `git.branch.list` / `git.prune`; it never touches
+update an existing pull request through the separately granted `git.pr.update`.
+It can tidy up afterwards with `git.branch.list` / `git.prune`; it never touches
 credentials. You
 configure the connection **once**, on any machine, and every pollen you authorise
 inherits it.
@@ -533,11 +534,17 @@ What that means in practice:
 ```bash
 # The loop, in the order the guardrails expect:
 tendril git status --substrate myrepo                      # look before acting
-tendril git branch --substrate myrepo --branch feat/new-leaf
+tendril git branch --substrate myrepo --branch feat/new-leaf --from-default
 tendril git commit --substrate myrepo --message "feat: grow a new leaf"
 tendril git push   --substrate myrepo
 tendril git pr     --substrate myrepo --title "feat: grow a new leaf"
 ```
+
+`--from-default` starts a new branch at the exact local `origin` default-branch
+commit, so it is useful when the workspace is still on a completed feature
+branch. The workspace must be clean and the target branch must not already
+exist. Call `tendril git fetch` first when the local remote-tracking ref needs
+refreshing; branch creation itself does not use the network.
 
 If a repository legitimately commits straight to its default branch (a docs
 site, a notes repository), opt out once, in the connection:
@@ -592,6 +599,22 @@ commits off the default branch:
 Both connection postures work. Opening a pull request needs a GitHub API
 credential, so a connection using an SSH key — or none — is refused with an
 error naming the two postures that do work.
+
+## Updating an existing pull request
+
+Use the separately grantable `git.pr.update` capability for an exact PR number
+in a configured named Substrate:
+
+```bash
+tendril git pr-update --substrate opentendril --number <n> \
+  --title "fix: repair governed workflow" --body "Updated description" --draft
+```
+
+Only supplied fields change. `--body ""` clears the description and `--ready`
+marks a Draft PR ready for review. The capability reads the current PR first,
+leaves already-matching values alone, and never changes its head or base,
+publishes commits, closes it, merges it, or enables auto-merge. A `git.pr` grant
+does not include `git.pr.update`.
 
 ---
 

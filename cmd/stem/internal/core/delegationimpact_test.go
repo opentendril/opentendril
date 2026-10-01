@@ -10,6 +10,7 @@ func TestCapabilityImpact(t *testing.T) {
 		{CapGitPrune, DelegationImpactHigh},
 		{CapGitPush, DelegationImpactHigh},
 		{CapGitPR, DelegationImpactHigh},
+		{CapGitPRUpdate, DelegationImpactHigh},
 		{CapSproutGrow, DelegationImpactHigh},
 		{CapSeedGrow, DelegationImpactHigh},
 		{CapContinuePhytomer, DelegationImpactHigh},

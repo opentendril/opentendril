@@ -16,13 +16,16 @@
 # one; git.apply uses its existing-only mode. git.fetch is intentionally
 # repository-scoped: it requires a named configured Substrate and resolves its
 # existing configured checkout without creating or rotating a Pollen workspace.
+# git.pr.update is also repository-scoped: it addresses one exact PR through
+# the named Substrate URL and credential and has no local workspace effects.
 # These boundaries are easy to bypass accidentally, so this guard checks them
 # rather than relying on review memory.
 #
 # The rule: every per-Pollen conductor execution uses the resolved workspace
-# path; git.apply must use ExistingDelegatedWorkspaceOnly; and git.fetch must
-# pass the existing configured Substrate checkout as Repository without using
-# a delegated-workspace resolver.
+# path; git.apply must use ExistingDelegatedWorkspaceOnly; git.fetch must pass
+# the existing configured Substrate checkout as Repository without a delegated
+# resolver; and git.pr.update must use only its configured Substrate URL and
+# credential.
 #
 # Usage: scripts/check-delegated-workspace-isolation.sh
 set -euo pipefail
@@ -125,6 +128,39 @@ done
 
 operations=$((operations + 1))
 
+update_block="$(awk '
+  /^[[:space:]]*UpdatePullRequest: func\(/ { in_operation = 1 }
+  in_operation && /^[[:space:]]*[A-Z][A-Za-z]+: func\(/ && $0 !~ /^[[:space:]]*UpdatePullRequest: func\(/ { exit }
+  in_operation { print }
+' "${adapter}")"
+if [ -z "${update_block}" ]; then
+  echo "::error::Delegated Git operation UpdatePullRequest is missing from ${adapter}."
+  exit 1
+fi
+update_executions="$(grep -cE 'conductor\.RunGitPRUpdate\(' <<<"${update_block}" || true)"
+if [ "${update_executions}" -ne 1 ]; then
+  echo "::error::git.pr.update must contain exactly one conductor.RunGitPRUpdate(...) execution."
+  exit 1
+fi
+for required in \
+  'conductor.ResolveSubstrate(spec.Substrate, substratesConfig)' \
+  'conductor.ResolveSubstrateCredential(*substrateSpec, substratesConfig)'; do
+  if ! grep -Fq "${required}" <<<"${update_block}"; then
+    echo "::error::git.pr.update is missing configured Substrate authority: ${required}"
+    exit 1
+  fi
+done
+if ! grep -Eq 'RepositoryURL:[[:space:]]+substrateSpec\.URL,' <<<"${update_block}" \
+    || ! grep -Eq 'Credential:[[:space:]]+credential,' <<<"${update_block}"; then
+  echo "::error::git.pr.update must pass the configured Substrate URL and resolved credential to the conductor."
+  exit 1
+fi
+if grep -Eq 'resolveGitWorkspace\(|ResolveSubstrateWorkspace\(|ResolveDelegatedWorkspace|CreateDelegatedWorkspace|RotateDelegatedWorkspace|workspace\.Path|^[[:space:]]*Workspace:' <<<"${update_block}"; then
+  echo "::error::git.pr.update must not use a workspace or caller-selected repository path."
+  exit 1
+fi
+operations=$((operations + 1))
+
 execution_count="$(grep -cE 'conductor\.RunGit[A-Za-z]+\(' "${adapter}" || true)"
 if [ "${execution_count}" -ne "${operations}" ]; then
   echo "::error::Found ${execution_count} conductor Git execution(s) but checked ${operations} delegated operation closure(s)."
@@ -142,6 +178,7 @@ if ! grep -Fq 'conductor.ResolveDelegatedWorkspaceWithMode(' <<<"${apply_resolve
   exit 1
 fi
 
-echo "✅ All ${operations} delegated Git execution closures are checked: per-Pollinator workspaces for ordinary operations and the configured repository for git.fetch."
+echo "✅ All ${operations} delegated Git execution closures are checked: per-Pollinator workspaces for ordinary operations and configured Substrate scope for git.fetch and git.pr.update."
 echo "✅ git.apply is verified to use ExistingDelegatedWorkspaceOnly."
 echo "✅ git.fetch is verified to use the existing configured Substrate checkout without a Pollen workspace."
+echo "✅ git.pr.update is verified to use only its configured Substrate URL and credential."

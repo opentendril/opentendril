@@ -240,6 +240,36 @@ type GitPRResult struct {
 	Base string `json:"base,omitempty"`
 }
 
+// GitPRUpdateInput requests explicit metadata changes on one pull request.
+// Pointers distinguish omitted fields from explicit empty body and false draft.
+type GitPRUpdateInput struct {
+	Substrate string  `json:"substrate"`
+	Number    int     `json:"number"`
+	Title     *string `json:"title,omitempty"`
+	Body      *string `json:"body,omitempty"`
+	Draft     *bool   `json:"draft,omitempty"`
+	Origin    string  `json:"origin,omitempty"`
+}
+
+// GitPRUpdateSpec is the validated, transport-free pull-request update sent
+// through the GitOperations port.
+type GitPRUpdateSpec struct {
+	Substrate string
+	Number    int
+	Title     *string
+	Body      *string
+	Draft     *bool
+	Origin    string
+}
+
+// GitPRUpdateResult is a safe summary of a completed pull-request update.
+type GitPRUpdateResult struct {
+	Status string `json:"status"`
+	Number int    `json:"number"`
+	URL    string `json:"url,omitempty"`
+	Draft  bool   `json:"draft"`
+}
+
 // GitBranchInput asks the Stem to create (or switch to) a feature branch in a
 // substrate's workspace. It exists so that default-branch protection has a
 // correct next move: a Pollinator told "commit on a feature branch" must be able
@@ -251,6 +281,9 @@ type GitBranchInput struct {
 	Substrate string `json:"substrate"`
 	// Branch is the branch to create and switch to.
 	Branch string `json:"branch"`
+	// FromDefault creates a new branch from the resolved origin default-branch
+	// tip. Existing target branches are refused when this is true.
+	FromDefault bool `json:"fromDefault,omitempty"`
 	// Origin records which surface invoked the operation (cli, mcp, rest).
 	Origin string `json:"origin,omitempty"`
 }
@@ -258,9 +291,10 @@ type GitBranchInput struct {
 // GitBranchSpec is the fully resolved, transport-free branch request handed to
 // the GitOperations port.
 type GitBranchSpec struct {
-	Substrate string
-	Branch    string
-	Origin    string
+	Substrate   string
+	Branch      string
+	FromDefault bool
+	Origin      string
 }
 
 // GitBranchResult is the outcome of a finished branch operation.
@@ -471,9 +505,12 @@ type GitOperations struct {
 	// own substrate resolution, credential resolution, base-branch resolution,
 	// and the duplicate/default-branch guards.
 	PullRequest func(ctx context.Context, spec GitPRSpec) (GitPRResult, error)
+	// UpdatePullRequest updates only explicitly supplied title, body, or draft
+	// state on an exact pull request in the resolved configured Substrate.
+	UpdatePullRequest func(ctx context.Context, spec GitPRUpdateSpec) (GitPRUpdateResult, error)
 	// Branch creates or switches to a branch in the resolved workspace.
-	// Implementations own substrate resolution and the protected-name and
-	// dirty-workspace guards.
+	// Implementations own substrate resolution, the protected-name guard, and
+	// the optional fromDefault cleanliness and base-ref checks.
 	Branch func(ctx context.Context, spec GitBranchSpec) (GitBranchResult, error)
 	// Status reports the resolved workspace's git state. Implementations own
 	// substrate resolution and must compute the predictive fields from the
@@ -628,6 +665,34 @@ func (s *Service) GitPR(ctx context.Context, in GitPRInput) (GitPRResult, error)
 	return s.git.PullRequest(ctx, spec)
 }
 
+// GitPRUpdate validates and updates only the explicitly requested fields.
+func (s *Service) GitPRUpdate(ctx context.Context, in GitPRUpdateInput) (GitPRUpdateResult, error) {
+	if s.git.UpdatePullRequest == nil {
+		return GitPRUpdateResult{}, fmt.Errorf("git.pr.update is not wired: construct the Core with WithGit(GitOperations{UpdatePullRequest: …})")
+	}
+	if strings.TrimSpace(in.Substrate) == "" {
+		return GitPRUpdateResult{}, fmt.Errorf("substrate is required")
+	}
+	if in.Number <= 0 {
+		return GitPRUpdateResult{}, fmt.Errorf("a positive pull request number is required")
+	}
+	if in.Title == nil && in.Body == nil && in.Draft == nil {
+		return GitPRUpdateResult{}, fmt.Errorf("at least one of title, body, or draft must be supplied")
+	}
+	if in.Title != nil && strings.TrimSpace(*in.Title) == "" {
+		return GitPRUpdateResult{}, fmt.Errorf("title cannot be empty")
+	}
+	spec := GitPRUpdateSpec{
+		Substrate: strings.TrimSpace(in.Substrate),
+		Number:    in.Number,
+		Title:     in.Title,
+		Body:      in.Body,
+		Draft:     in.Draft,
+		Origin:    in.Origin,
+	}
+	return s.git.UpdatePullRequest(ctx, spec)
+}
+
 // GitBranch validates the request and runs the branch operation to completion
 // via the injected execution port.
 func (s *Service) GitBranch(ctx context.Context, in GitBranchInput) (GitBranchResult, error) {
@@ -641,9 +706,10 @@ func (s *Service) GitBranch(ctx context.Context, in GitBranchInput) (GitBranchRe
 		return GitBranchResult{}, fmt.Errorf("branch is required")
 	}
 	spec := GitBranchSpec{
-		Substrate: strings.TrimSpace(in.Substrate),
-		Branch:    strings.TrimSpace(in.Branch),
-		Origin:    in.Origin,
+		Substrate:   strings.TrimSpace(in.Substrate),
+		Branch:      strings.TrimSpace(in.Branch),
+		FromDefault: in.FromDefault,
+		Origin:      in.Origin,
 	}
 	return s.git.Branch(ctx, spec)
 }
@@ -794,12 +860,32 @@ func (s *Service) gitCapabilities() []Capability {
 			},
 		},
 		{
-			Name:        CapGitBranch,
-			Description: "Create (or switch to) a feature branch in a substrate's workspace. This is the governed way to get off the default branch before committing. An existing branch is switched to, never reset; a branch named as the repository's default branch is refused.",
+			Name:        CapGitPRUpdate,
+			Description: "Update explicitly supplied title, body, or Draft/Ready state on an exact pull request in the configured substrate. Reads current state first, is idempotent when requested values already match, and never changes its head or base, pushes, closes, or merges.",
 			InputSchema: schemaObject(map[string]any{
-				"substrate": stringProp("The absolute path or named substrate key for the target repository workspace."),
-				"branch":    stringProp("The feature branch to create and switch to."),
+				"substrate": stringProp("The configured named key for the target repository."),
+				"number":    map[string]any{"type": "integer", "minimum": 1, "description": "The exact positive pull request number in this repository."},
+				"title":     stringProp("Replacement title; omit to leave the title unchanged."),
+				"body":      stringProp("Replacement body; an explicit empty string clears the body."),
+				"draft":     map[string]any{"type": "boolean", "description": "True converts a Ready pull request to Draft; false marks a Draft pull request Ready."},
 				"origin":    stringProp("Interaction origin recorded on the operation (cli, mcp, rest)."),
+			}, []string{"substrate", "number"}),
+			Invoke: func(ctx context.Context, input map[string]any) (any, error) {
+				var in GitPRUpdateInput
+				if err := decodeInput(input, &in); err != nil {
+					return nil, err
+				}
+				return s.GitPRUpdate(ctx, in)
+			},
+		},
+		{
+			Name:        CapGitBranch,
+			Description: "Create (or switch to) a feature branch in a substrate's workspace. This is the governed way to get off the default branch before committing. An existing branch is switched to, never reset, unless fromDefault is true, in which case an existing target is refused and a new branch starts at the exact local origin default-branch commit. A branch named as the repository's default branch is refused.",
+			InputSchema: schemaObject(map[string]any{
+				"substrate":   stringProp("The absolute path or named substrate key for the target repository workspace."),
+				"branch":      stringProp("The feature branch to create and switch to."),
+				"fromDefault": map[string]any{"type": "boolean", "description": "Create a new branch from the exact local origin default-branch commit; requires a clean workspace and refuses an existing target branch. Fetch first when fresh remote state is required."},
+				"origin":      stringProp("Interaction origin recorded on the operation (cli, mcp, rest)."),
 			}, []string{"substrate", "branch"}),
 			Invoke: func(ctx context.Context, input map[string]any) (any, error) {
 				var in GitBranchInput

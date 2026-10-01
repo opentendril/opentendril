@@ -517,6 +517,58 @@ func TestGitPRRequiresTitle(t *testing.T) {
 	}
 }
 
+func newGitPRUpdateTestHandler(t *testing.T, grants []core.DelegationGrant) (*http.ServeMux, *eventbus.Bus, *atomic.Int64, *core.GitPRUpdateInput) {
+	t.Helper()
+	executed := &atomic.Int64{}
+	lastInput := &core.GitPRUpdateInput{}
+	coreSvc := core.NewService(nil).WithGit(core.GitOperations{
+		UpdatePullRequest: func(_ context.Context, spec core.GitPRUpdateSpec) (core.GitPRUpdateResult, error) {
+			executed.Add(1)
+			*lastInput = core.GitPRUpdateInput{Substrate: spec.Substrate, Number: spec.Number, Title: spec.Title, Body: spec.Body, Draft: spec.Draft, Origin: spec.Origin}
+			return core.GitPRUpdateResult{Status: "updated", Number: spec.Number, URL: "https://example.invalid/pull/42", Draft: spec.Draft != nil && *spec.Draft}, nil
+		},
+	})
+	bus := eventbus.New()
+	gate := &DelegationGate{Authorizer: core.NewDelegationAuthorizer(grants), Bus: bus}
+	mux := http.NewServeMux()
+	NewGitHandler(coreSvc).WithDelegation(gate).Register(mux, nil)
+	return mux, bus, executed, lastInput
+}
+
+func TestGitPRUpdateUsesSeparateDelegationAndPreservesFalseAndEmpty(t *testing.T) {
+	body := `{"substrate":"core","number":42,"body":"","draft":false}`
+	t.Run("git.pr grant does not imply update", func(t *testing.T) {
+		grants := []core.DelegationGrant{{Pollen: "local-pollinator", OperationClasses: []string{core.CapGitPR}, Substrates: []string{"core"}}}
+		mux, bus, executed, _ := newGitPRUpdateTestHandler(t, grants)
+		request := httptest.NewRequest(http.MethodPost, "/v1/git/pr-update", strings.NewReader(body))
+		request.Header.Set(PollenHeader, "local-pollinator")
+		recorder := httptest.NewRecorder()
+		mux.ServeHTTP(recorder, request)
+		if recorder.Code != http.StatusForbidden || executed.Load() != 0 {
+			t.Fatalf("status=%d executions=%d, want 403 and no update: %s", recorder.Code, executed.Load(), recorder.Body.String())
+		}
+		event, found := lastDelegationEvent(bus)
+		if !found || event.Data["operationClass"] != core.CapGitPRUpdate {
+			t.Fatalf("denial event = %+v found=%v, want separate git.pr.update operation-class", event, found)
+		}
+	})
+
+	t.Run("git.pr.update grant passes explicit fields", func(t *testing.T) {
+		grants := []core.DelegationGrant{{Pollen: "local-pollinator", OperationClasses: []string{core.CapGitPRUpdate}, Substrates: []string{"core"}}}
+		mux, _, executed, lastInput := newGitPRUpdateTestHandler(t, grants)
+		request := httptest.NewRequest(http.MethodPost, "/v1/git/pr-update", strings.NewReader(body))
+		request.Header.Set(PollenHeader, "local-pollinator")
+		recorder := httptest.NewRecorder()
+		mux.ServeHTTP(recorder, request)
+		if recorder.Code != http.StatusOK || executed.Load() != 1 {
+			t.Fatalf("status=%d executions=%d, want 200 and one update: %s", recorder.Code, executed.Load(), recorder.Body.String())
+		}
+		if lastInput.Number != 42 || lastInput.Body == nil || *lastInput.Body != "" || lastInput.Draft == nil || *lastInput.Draft {
+			t.Fatalf("input = %+v, want exact number plus present empty body and false draft", lastInput)
+		}
+	})
+}
+
 // newGitBranchTestHandler builds a GitHandler over a real Core with a stubbed
 // branch port.
 func newGitBranchTestHandler(t *testing.T, grants []core.DelegationGrant) (*http.ServeMux, *eventbus.Bus, *atomic.Int64) {

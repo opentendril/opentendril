@@ -40,6 +40,7 @@ const (
 	CapGitCommit       = "git.commit"
 	CapGitPush         = "git.push"
 	CapGitPR           = "git.pr"
+	CapGitPRUpdate     = "git.pr.update"
 	CapGitBranch       = "git.branch"
 	CapGitStatus       = "git.status"
 	CapGitBranchList   = "git.branch.list"
@@ -108,6 +109,7 @@ func CapabilityNames() []string {
 		CapGitCommit,
 		CapGitPush,
 		CapGitPR,
+		CapGitPRUpdate,
 		CapGitBranch,
 		CapGitStatus,
 		CapGitBranchList,
@@ -135,6 +137,7 @@ func DelegatedCapabilityNames() []string {
 		CapGitCommit,
 		CapGitPush,
 		CapGitPR,
+		CapGitPRUpdate,
 		CapGitBranch,
 		CapGitStatus,
 		CapGitBranchList,

@@ -764,6 +764,25 @@ type GitPRExecution struct {
 	Credential ResolvedCredential
 }
 
+// GitPRUpdateExecution targets one exact pull request through a configured
+// Substrate's repository URL and credential. Only non-nil fields are mutable.
+type GitPRUpdateExecution struct {
+	RepositoryURL string
+	Number        int
+	Title         *string
+	Body          *string
+	Draft         *bool
+	Credential    ResolvedCredential
+}
+
+// GitPRUpdateResult reports the safe outcome of a metadata update.
+type GitPRUpdateResult struct {
+	Status string
+	Number int
+	URL    string
+	Draft  bool
+}
+
 // GitPRResult reports a finished delegated pull-request operation.
 type GitPRResult struct {
 	// Status is "created" for a newly opened pull request, or "exists" when an
@@ -784,12 +803,136 @@ type GitPRResult struct {
 type githubPullRequest struct {
 	Number  int    `json:"number"`
 	HTMLURL string `json:"html_url"`
+	NodeID  string `json:"node_id"`
+	Title   string `json:"title"`
+	Body    string `json:"body"`
+	Draft   bool   `json:"draft"`
+	State   string `json:"state"`
 	Base    struct {
 		Ref string `json:"ref"`
 	} `json:"base"`
 	Head struct {
 		Ref string `json:"ref"`
 	} `json:"head"`
+}
+
+type updatePullRequestBody struct {
+	Title *string `json:"title,omitempty"`
+	Body  *string `json:"body,omitempty"`
+}
+
+const (
+	convertPullRequestToDraftMutation = `mutation($pullRequestId: ID!) {
+  convertPullRequestToDraft(input: {pullRequestId: $pullRequestId}) {
+    pullRequest { isDraft }
+  }
+}`
+	markPullRequestReadyMutation = `mutation($pullRequestId: ID!) {
+  markPullRequestReadyForReview(input: {pullRequestId: $pullRequestId}) {
+    pullRequest { isDraft }
+  }
+}`
+)
+
+// RunGitPRUpdate reads an exact pull request in the configured repository,
+// then applies only explicitly supplied title, body, or Draft/Ready changes.
+// It never changes refs, base/head, open/closed state, or merge disposition.
+func RunGitPRUpdate(ctx context.Context, execution GitPRUpdateExecution) (GitPRUpdateResult, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if strings.TrimSpace(execution.RepositoryURL) == "" {
+		return GitPRUpdateResult{}, fmt.Errorf("pull request update requires a configured repository URL")
+	}
+	if execution.Number <= 0 {
+		return GitPRUpdateResult{}, fmt.Errorf("a positive pull request number is required")
+	}
+	if execution.Title == nil && execution.Body == nil && execution.Draft == nil {
+		return GitPRUpdateResult{}, fmt.Errorf("at least one of title, body, or draft must be supplied")
+	}
+	if execution.Title != nil && strings.TrimSpace(*execution.Title) == "" {
+		return GitPRUpdateResult{}, fmt.Errorf("title cannot be empty")
+	}
+
+	repositoryURL := strings.TrimSpace(execution.RepositoryURL)
+	owner, repo, err := parseOwnerRepo(repositoryURL)
+	if err != nil {
+		return GitPRUpdateResult{}, fmt.Errorf("pull request update: %w", err)
+	}
+	token, err := pullRequestAPIToken(ctx, execution.Credential, repositoryURL)
+	if err != nil {
+		return GitPRUpdateResult{}, err
+	}
+
+	path := fmt.Sprintf("/repos/%s/%s/pulls/%d", owner, repo, execution.Number)
+	var current githubPullRequest
+	found, err := githubReadREST(ctx, path, token, &current)
+	if err != nil {
+		return GitPRUpdateResult{}, fmt.Errorf("pull request update: read current pull request: %w", err)
+	}
+	if !found || current.Number != execution.Number {
+		return GitPRUpdateResult{}, fmt.Errorf("pull request update refused: pull request #%d was not found in the configured repository", execution.Number)
+	}
+	if execution.Draft != nil && current.Draft != *execution.Draft {
+		if !strings.EqualFold(strings.TrimSpace(current.State), "open") {
+			return GitPRUpdateResult{}, fmt.Errorf("pull request update refused: Draft/Ready state can only be changed on an open pull request")
+		}
+		if strings.TrimSpace(current.NodeID) == "" {
+			return GitPRUpdateResult{}, fmt.Errorf("pull request update refused: GitHub returned no pull request identifier for Draft/Ready conversion")
+		}
+	}
+
+	patch := updatePullRequestBody{}
+	if execution.Title != nil && *execution.Title != current.Title {
+		patch.Title = execution.Title
+	}
+	if execution.Body != nil && *execution.Body != current.Body {
+		patch.Body = execution.Body
+	}
+	changed := patch.Title != nil || patch.Body != nil
+	if changed {
+		if err := githubRESTRequest(ctx, http.MethodPatch, path, token, patch, nil); err != nil {
+			return GitPRUpdateResult{}, fmt.Errorf("pull request update: update title/body: %w", err)
+		}
+	}
+
+	draft := current.Draft
+	if execution.Draft != nil && draft != *execution.Draft {
+		mutation := convertPullRequestToDraftMutation
+		if !*execution.Draft {
+			mutation = markPullRequestReadyMutation
+		}
+		var response struct {
+			Convert struct {
+				PullRequest struct {
+					IsDraft bool `json:"isDraft"`
+				} `json:"pullRequest"`
+			} `json:"convertPullRequestToDraft"`
+			Ready struct {
+				PullRequest struct {
+					IsDraft bool `json:"isDraft"`
+				} `json:"pullRequest"`
+			} `json:"markPullRequestReadyForReview"`
+		}
+		if _, err := githubGraphQLPost(ctx, token, mutation, map[string]any{"pullRequestId": current.NodeID}, &response); err != nil {
+			return GitPRUpdateResult{}, fmt.Errorf("pull request update: change Draft/Ready state: %w", err)
+		}
+		if *execution.Draft {
+			draft = response.Convert.PullRequest.IsDraft
+		} else {
+			draft = response.Ready.PullRequest.IsDraft
+		}
+		if draft != *execution.Draft {
+			return GitPRUpdateResult{}, fmt.Errorf("pull request update: GitHub did not confirm the requested Draft/Ready state")
+		}
+		changed = true
+	}
+
+	status := "unchanged"
+	if changed {
+		status = "updated"
+	}
+	return GitPRUpdateResult{Status: status, Number: current.Number, URL: current.HTMLURL, Draft: draft}, nil
 }
 
 // createPullRequestBody is GitHub's REST create-a-pull-request payload.
@@ -952,6 +1095,9 @@ type GitBranchExecution struct {
 	Workspace string
 	// Branch is the branch to create and switch to.
 	Branch string
+	// FromDefault requests a new branch from the exact local origin default
+	// branch commit. The target must not already exist.
+	FromDefault bool
 	// ConfiguredBranch is the substrate's explicitly configured branch, fed to
 	// the default-branch resolver.
 	ConfiguredBranch string
@@ -1027,6 +1173,33 @@ func RunGitBranch(ctx context.Context, execution GitBranchExecution) (GitBranchR
 	if current, err := runGitCommitCommandFn(ctx, execution.Workspace, "branch", "--show-current"); err == nil {
 		previous = strings.TrimSpace(current)
 	}
+
+	if execution.FromDefault {
+		status, err := runGitCommandRawOutput(ctx, execution.Workspace, "status", "--porcelain", "-uall", "-z")
+		if err != nil {
+			return GitBranchResult{}, err
+		}
+		if strings.TrimSpace(strings.ReplaceAll(status, "\x00", "")) != "" {
+			return GitBranchResult{}, fmt.Errorf("delegated branch refused: fromDefault requires a clean workspace; commit or set aside uncommitted changes before creating a branch from the default tip")
+		}
+		if !resolution.Known() {
+			return GitBranchResult{}, fmt.Errorf("delegated branch refused: fromDefault requires a resolved repository default branch; configure the Substrate branch or refs/remotes/origin/HEAD")
+		}
+		if _, err := runGitCommitCommandFn(ctx, execution.Workspace, "rev-parse", "--verify", "--quiet", "refs/heads/"+branch); err == nil {
+			return GitBranchResult{}, fmt.Errorf("delegated branch refused: %q already exists; choose a new branch name when fromDefault is true", branch)
+		}
+
+		defaultRef := "refs/remotes/origin/" + resolution.Branch
+		baseOID, err := runGitCommitCommandFn(ctx, execution.Workspace, "rev-parse", "--verify", "--quiet", defaultRef+"^{commit}")
+		if err != nil || strings.TrimSpace(baseOID) == "" {
+			return GitBranchResult{}, fmt.Errorf("delegated branch refused: local %s does not resolve to a commit; run git.fetch before requesting fromDefault", defaultRef)
+		}
+		if _, err := runGitCommitCommandFn(ctx, execution.Workspace, "checkout", "-b", branch, strings.TrimSpace(baseOID)); err != nil {
+			return GitBranchResult{}, err
+		}
+		return GitBranchResult{Status: "created", Branch: branch, PreviousBranch: previous}, nil
+	}
+
 	if previous == branch {
 		return GitBranchResult{Status: "switched", Branch: branch, PreviousBranch: previous}, nil
 	}

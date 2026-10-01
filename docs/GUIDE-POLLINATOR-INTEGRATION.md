@@ -10,6 +10,21 @@ repository and the environment variable holding a Git credential. The Stem
 clones, runs, and publishes from its side while the Sprout stays sealed inside
 its Terrarium.
 
+## Persistent external-builder instructions
+
+When configuring Codex, Claude Code, Antigravity, or another external builder
+as a Pollinator, obtain the canonical authority block with:
+
+```bash
+tendril pollinator instructions
+```
+
+Copy the output into the builder's persistent project instructions, such as
+`AGENTS.md`, `CLAUDE.md`, or its equivalent. This command only prints the
+block; it does not inspect or modify any Substrate repository. The block
+directs target-repository Git mutation and publication through OpenTendril's
+governed Git capabilities and keeps merge authority with the Botanist.
+
 ## Architecture
 
 A governed installation and a single-user installation use different MCP

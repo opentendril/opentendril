@@ -161,7 +161,7 @@ func printUsage() {
 	fmt.Printf("  %-11s  %s\n", "chat", "Start the interactive chat interface")
 	fmt.Printf("  %-11s  %s\n", "phytomer", "Manage Phytomers (create/list/get/update/delete/history); alias: session")
 	fmt.Printf("  %-11s  %s\n", "setup", "Bootstrap Substrate workspace configuration")
-	fmt.Printf("  %-11s  %s\n", "pollinator", "Issue, list and revoke Pollinator credentials")
+	fmt.Printf("  %-11s  %s\n", "pollinator", "Manage Pollinator credentials and print integration instructions")
 	fmt.Printf("  %-11s  %s\n", "hardiness", "Report what this Terroir can withstand (boundary strength)")
 	fmt.Printf("  %-11s  %s\n", "adapt", "Mine recent git history into .tendril/genome/epigenetics.md")
 	fmt.Printf("  %-11s  %s\n", "genome", "Inspect, reduce, or evolve the active genome seeds")

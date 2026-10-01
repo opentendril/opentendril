@@ -15,9 +15,22 @@ import (
 // `tendril pollinator` — the Botanist's control over who may ask.
 //
 // Issuing a credential is what turns a Pollen from something a caller declares
-// into something it must prove. The commands are deliberately few: issue, list,
-// revoke, token. There is no "edit", because changing which identity a live
-// credential authenticates as is exactly the confusion this removes.
+// into something it must prove. There is no "edit", because changing which
+// identity a live credential authenticates as is exactly the confusion this
+// removes.
+
+const pollinatorInstructionBlock = `# OpenTendril Pollinator Instructions
+
+You are operating as an OpenTendril Pollinator. OpenTendril owns target-Substrate Git mutation and publication authority.
+
+- Use OpenTendril's governed Git capabilities for target-repository mutation and publication.
+- Do not bypass that boundary with host Git network or mutation commands.
+- Do not use gh, direct GitHub API calls, GitHub MCP write tools, SSH repository credentials, personal access tokens (PATs), or equivalent target-repository credentials as a bypass.
+- Local read-only source inspection is allowed.
+- Treat Substrate identifiers returned by OpenTendril as authoritative. Do not substitute host filesystem paths or guessed repository aliases for a governed Substrate identifier.
+- If a required governed capability is unavailable or denied, stop and report it rather than bypassing OpenTendril.
+- The Botanist retains merge authority. Never merge or enable auto-merge.
+`
 
 func runPollinatorCmd(ctx context.Context, args []string) {
 	if len(args) == 0 {
@@ -35,6 +48,12 @@ func runPollinatorCmd(ctx context.Context, args []string) {
 		runPollinatorRevoke(tendrilDir, args[1:])
 	case "token":
 		runPollinatorToken(tendrilDir, args[1:])
+	case "instructions":
+		if len(args) != 1 {
+			fmt.Fprintln(os.Stderr, "Usage: tendril pollinator instructions")
+			os.Exit(1)
+		}
+		fmt.Print(pollinatorInstructionBlock)
 	case "-h", "--help", "help":
 		printPollinatorUsage()
 	default:
@@ -254,7 +273,7 @@ func mintPollinatorAccessToken(tendrilDir, pollen string, ttl time.Duration) (to
 }
 
 func printPollinatorUsage() {
-	fmt.Println("Usage: tendril pollinator <issue|list|revoke|token> [flags]")
+	fmt.Println("Usage: tendril pollinator <issue|list|revoke|token|instructions> [flags]")
 	fmt.Println()
 	fmt.Println("issue --pollen <name> [--note <memo>] [--out <path>] [--force]")
 	fmt.Println("  Mints a durable credential (refresh root) that authenticates AS that Pollen.")
@@ -281,4 +300,8 @@ func printPollinatorUsage() {
 	fmt.Println("A credential carries the Pollen, so a Pollinator presenting one cannot claim")
 	fmt.Println("another identity. That is the difference between this and a declared Pollen,")
 	fmt.Println("which is an audit control rather than a boundary.")
+	fmt.Println()
+	fmt.Println("instructions")
+	fmt.Println("  Prints the canonical persistent-instructions block for an external Pollinator.")
+	fmt.Println("  Copy it into that builder's project instructions; no Substrate files are changed.")
 }

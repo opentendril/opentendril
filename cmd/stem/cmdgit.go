@@ -6,8 +6,10 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"os"
 	"sort"
+	"strconv"
 	"strings"
 
 	"github.com/opentendril/opentendril/cmd/stem/internal/conductor"
@@ -127,6 +129,8 @@ func runGitCmd(ctx context.Context, args []string) {
 			verb = "Already open"
 		}
 		fmt.Fprintf(os.Stderr, "🌱 %s pull request #%d (%s → %s) %s\n", verb, typed.Number, typed.Head, typed.Base, typed.URL)
+	case core.GitPRUpdateResult:
+		fmt.Fprintf(os.Stderr, "🌱 Pull request #%d %s (draft=%t) %s\n", typed.Number, typed.Status, typed.Draft, typed.URL)
 	case core.GitApplyResult:
 		if err := json.NewEncoder(os.Stdout).Encode(typed); err != nil {
 			fmt.Fprintln(os.Stderr, "❌ Failed to encode git.apply result")
@@ -306,6 +310,35 @@ func gitOperationsForConfig(substratesConfig *conductor.SubstratesConfig) core.G
 				Base:   result.Base,
 			}, nil
 		},
+		UpdatePullRequest: func(ctx context.Context, spec core.GitPRUpdateSpec) (core.GitPRUpdateResult, error) {
+			substrateSpec, configured := conductor.ResolveSubstrate(spec.Substrate, substratesConfig)
+			if !configured || substrateSpec == nil || strings.TrimSpace(substrateSpec.URL) == "" {
+				return core.GitPRUpdateResult{}, fmt.Errorf("git.pr.update requires a configured named substrate with a repository URL")
+			}
+			credential, err := conductor.ResolveSubstrateCredential(*substrateSpec, substratesConfig)
+			if err != nil {
+				return core.GitPRUpdateResult{}, err
+			}
+
+			result, err := conductor.RunGitPRUpdate(ctx, conductor.GitPRUpdateExecution{
+				RepositoryURL: substrateSpec.URL,
+				Number:        spec.Number,
+				Title:         spec.Title,
+				Body:          spec.Body,
+				Draft:         spec.Draft,
+				Credential:    credential,
+			})
+			if err != nil {
+				return core.GitPRUpdateResult{}, err
+			}
+
+			return core.GitPRUpdateResult{
+				Status: result.Status,
+				Number: result.Number,
+				URL:    result.URL,
+				Draft:  result.Draft,
+			}, nil
+		},
 		Status: func(ctx context.Context, spec core.GitStatusSpec) (core.GitStatusResult, error) {
 			workspace, substrateSpec, err := resolveGitWorkspace(ctx, spec.Substrate, substratesConfig)
 			if err != nil {
@@ -432,6 +465,7 @@ func gitOperationsForConfig(substratesConfig *conductor.SubstratesConfig) core.G
 			result, err := conductor.RunGitBranch(ctx, conductor.GitBranchExecution{
 				Workspace:        workspace.Path,
 				Branch:           spec.Branch,
+				FromDefault:      spec.FromDefault,
 				ConfiguredBranch: configuredBranch,
 				Credential:       credential,
 			})
@@ -549,6 +583,7 @@ var gitCommands = []gitCommand{
 	{"commit", core.CapGitCommit},
 	{"push", core.CapGitPush},
 	{"pr", core.CapGitPR},
+	{"pr-update", core.CapGitPRUpdate},
 	{"branch", core.CapGitBranch},
 	{"status", core.CapGitStatus},
 	{"branches", core.CapGitBranchList},
@@ -590,12 +625,27 @@ func parseGitArgs(capName string, args []string) (map[string]any, error) {
 		input[key] = args[*i]
 		return nil
 	}
+	intFlag := func(i *int, key string) error {
+		if *i+1 >= len(args) {
+			return fmt.Errorf("flag %s requires a value", args[*i])
+		}
+		*i++
+		value, err := strconv.Atoi(args[*i])
+		if err != nil {
+			return fmt.Errorf("flag %s requires a positive integer", args[*i-1])
+		}
+		input[key] = value
+		return nil
+	}
 	for i := 0; i < len(args); i++ {
 		if capName == core.CapGitApply && args[i] != "--substrate" && args[i] != "--expected-head" && args[i] != "--origin" {
 			return nil, fmt.Errorf("git.apply accepts only --substrate, --expected-head, and --origin; patch bytes are read from stdin")
 		}
 		if capName == core.CapGitFetch && args[i] != "--substrate" && args[i] != "--origin" && args[i] != "--json" {
 			return nil, fmt.Errorf("git.fetch accepts only --substrate and --origin")
+		}
+		if capName == core.CapGitPRUpdate && args[i] != "--substrate" && args[i] != "--number" && args[i] != "--title" && args[i] != "--body" && args[i] != "--draft" && args[i] != "--ready" && args[i] != "--origin" && args[i] != "--json" {
+			return nil, fmt.Errorf("git.pr.update accepts only --substrate, --number, --title, --body, --draft, --ready, and --origin")
 		}
 		var err error
 		switch args[i] {
@@ -623,8 +673,29 @@ func parseGitArgs(capName string, args []string) (map[string]any, error) {
 			err = stringFlag(&i, "head")
 		case "--base":
 			err = stringFlag(&i, "base")
+		case "--number":
+			if capName != core.CapGitPRUpdate {
+				return nil, fmt.Errorf("flag --number is only valid for git pr-update")
+			}
+			err = intFlag(&i, "number")
 		case "--draft":
+			if capName == core.CapGitPRUpdate && input["draft"] != nil {
+				return nil, fmt.Errorf("use only one of --draft or --ready")
+			}
 			input["draft"] = true
+		case "--ready":
+			if capName != core.CapGitPRUpdate {
+				return nil, fmt.Errorf("flag --ready is only valid for git pr-update")
+			}
+			if input["draft"] != nil {
+				return nil, fmt.Errorf("use only one of --draft or --ready")
+			}
+			input["draft"] = false
+		case "--from-default":
+			if capName != core.CapGitBranch {
+				return nil, fmt.Errorf("flag --from-default is only valid for git branch")
+			}
+			input["fromDefault"] = true
 		case "--confirm":
 			input["confirm"] = true
 		case "--path":
@@ -648,7 +719,7 @@ func parseGitArgs(capName string, args []string) (map[string]any, error) {
 	}
 	if substrate, _ := input["substrate"].(string); strings.TrimSpace(substrate) == "" {
 		substrateTarget := "<path|name>"
-		if capName == core.CapGitApply || capName == core.CapGitFetch {
+		if capName == core.CapGitApply || capName == core.CapGitFetch || capName == core.CapGitPRUpdate {
 			substrateTarget = "<name>"
 		}
 		return nil, fmt.Errorf("missing substrate. Usage: tendril git %s --substrate %s%s", strings.TrimPrefix(capName, "git."), substrateTarget, gitUsageSuffix(capName))
@@ -676,6 +747,25 @@ func parseGitArgs(capName string, args []string) (map[string]any, error) {
 			return nil, fmt.Errorf("missing title. Usage: tendril git pr --substrate <path|name> --title <title> [--body B] [--head H] [--base B] [--draft]")
 		}
 	}
+	if capName == core.CapGitPRUpdate {
+		validNumber := false
+		switch number := input["number"].(type) {
+		case int:
+			validNumber = number > 0
+		case float64:
+			validNumber = number > 0 && number <= math.MaxInt && number == math.Trunc(number)
+		}
+		if !validNumber {
+			return nil, fmt.Errorf("missing or invalid positive pull request number. Usage: tendril git pr-update --substrate <name> --number <n> [--title <title>] [--body <body>] [--draft|--ready]")
+		}
+		if _, titleSet := input["title"]; !titleSet {
+			if _, bodySet := input["body"]; !bodySet {
+				if _, draftSet := input["draft"]; !draftSet {
+					return nil, fmt.Errorf("provide at least one of --title, --body, --draft, or --ready")
+				}
+			}
+		}
+	}
 	return input, nil
 }
 
@@ -687,6 +777,8 @@ func gitUsageSuffix(capName string) string {
 		return " --message <message>"
 	case core.CapGitPR:
 		return " --title <title>"
+	case core.CapGitPRUpdate:
+		return " --number <n> [--title <title>] [--body <body>] [--draft|--ready]"
 	case core.CapGitBranch:
 		return " --branch <feature-branch>"
 	case core.CapGitApply:
@@ -767,6 +859,10 @@ func printGitUsage() {
 	fmt.Println("  --base is omitted, never assumed to be \"main\"; the head branch defaults to the")
 	fmt.Println("  workspace's current branch. Opening from the default branch is refused, and an")
 	fmt.Println("  existing open pull request for the same head is returned instead of duplicated.")
+	fmt.Println()
+	fmt.Println("pr-update --substrate <name> --number <n> [--title <title>] [--body <body>] [--draft|--ready]")
+	fmt.Println("  Updates only explicitly supplied pull-request metadata or Draft/Ready state.")
+	fmt.Println("  Reads the exact pull request first; it never changes head/base, pushes, closes, or merges.")
 	fmt.Println()
 	fmt.Println("  --json '{...}'      Full JSON input (the generic escape hatch)")
 	fmt.Println()

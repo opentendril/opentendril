@@ -277,6 +277,15 @@ jobs:
       - name: No underscored filenames
         run: bash scripts/check-filename-conventions.sh
 
+  pollinator-git-governance:
+    name: Pollinator Git instructions are scoped
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Governed Pollinators do not require host Git mutation
+        run: bash scripts/check-pollinator-git-governance.sh
+
   hygiene-gate:
     name: Source Hygiene Gate
     runs-on: ubuntu-latest
@@ -295,6 +304,7 @@ jobs:
       - cited-tests
       - test-runtime-floor
       - filename-conventions
+      - pollinator-git-governance
     # always() so a failed dependency still reports through this gate rather than
     # skipping it — a skipped required check is not a failed one.
     if: ${{ always() }}

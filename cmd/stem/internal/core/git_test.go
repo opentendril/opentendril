@@ -149,6 +149,55 @@ func TestGitPRNotWired(t *testing.T) {
 	}
 }
 
+func TestGitPRUpdateValidatesAndPreservesPresence(t *testing.T) {
+	title, body, draft := "Updated title", "", false
+	var captured GitPRUpdateSpec
+	called := 0
+	svc := NewService(nil).WithGit(GitOperations{
+		UpdatePullRequest: func(_ context.Context, spec GitPRUpdateSpec) (GitPRUpdateResult, error) {
+			called++
+			captured = spec
+			return GitPRUpdateResult{Status: "updated", Number: spec.Number, Draft: *spec.Draft}, nil
+		},
+	})
+
+	for _, input := range []GitPRUpdateInput{
+		{Number: 42, Title: &title},
+		{Substrate: " ", Number: 42, Title: &title},
+		{Substrate: "core", Number: 0, Title: &title},
+		{Substrate: "core", Number: -2, Title: &title},
+		{Substrate: "core", Number: 42},
+		{Substrate: "core", Number: 42, Title: new(string)},
+	} {
+		if _, err := svc.GitPRUpdate(context.Background(), input); err == nil {
+			t.Fatalf("invalid update input %+v accepted", input)
+		}
+	}
+	if called != 0 {
+		t.Fatalf("invalid inputs invoked update port %d times", called)
+	}
+
+	result, err := svc.GitPRUpdate(context.Background(), GitPRUpdateInput{
+		Substrate: " core ", Number: 42, Title: &title, Body: &body, Draft: &draft,
+	})
+	if err != nil {
+		t.Fatalf("GitPRUpdate: %v", err)
+	}
+	if result.Number != 42 || result.Draft {
+		t.Fatalf("result = %+v, want number 42 and explicit ready state", result)
+	}
+	if called != 1 || captured.Substrate != "core" || captured.Number != 42 || captured.Title == nil || *captured.Title != title || captured.Body == nil || *captured.Body != "" || captured.Draft == nil || *captured.Draft {
+		t.Fatalf("port call count/spec = %d/%+v, want trimmed substrate and explicit title, empty body, and false draft", called, captured)
+	}
+}
+
+func TestGitPRUpdateNotWired(t *testing.T) {
+	_, err := NewService(nil).GitPRUpdate(context.Background(), GitPRUpdateInput{Substrate: "core", Number: 42, Body: new(string)})
+	if err == nil || !strings.Contains(err.Error(), "not wired") {
+		t.Fatalf("unwired git.pr.update error = %v, want a not-wired report", err)
+	}
+}
+
 func TestGitBranchValidatesInput(t *testing.T) {
 	captured := &GitBranchSpec{}
 	svc := NewService(nil).WithGit(GitOperations{
@@ -168,11 +217,11 @@ func TestGitBranchValidatesInput(t *testing.T) {
 	if _, err := svc.GitBranch(ctx, GitBranchInput{Substrate: "core", Branch: "  "}); err == nil {
 		t.Fatal("blank branch accepted")
 	}
-	if _, err := svc.GitBranch(ctx, GitBranchInput{Substrate: " core ", Branch: " feat/x "}); err != nil {
+	if _, err := svc.GitBranch(ctx, GitBranchInput{Substrate: " core ", Branch: " feat/x ", FromDefault: true}); err != nil {
 		t.Fatalf("branch: %v", err)
 	}
-	if captured.Substrate != "core" || captured.Branch != "feat/x" {
-		t.Fatalf("spec = %+v, want trimmed substrate/branch", captured)
+	if captured.Substrate != "core" || captured.Branch != "feat/x" || !captured.FromDefault {
+		t.Fatalf("spec = %+v, want trimmed substrate/branch and fromDefault preserved", captured)
 	}
 }
 

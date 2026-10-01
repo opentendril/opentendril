@@ -130,7 +130,7 @@ clone. It gets its own, and **the remote is the only thing the two share**.
 
 * **A managed Sprout makes a change** → it uses the Tendril-owned managed base as Git backing state, executes writable work in an independent `~/.tendril/run-workspaces/` worktree, and produces managed Fruit on a `sprout/task-<stepID>` branch.
 * **A managed Seed grows a goal** → each writing iteration runs in a Tendril-owned RunWorkspace, and successful iteration state is accumulated in a local `tendril/seed-*` checkpoint. The checkpoint is internal convergence state, not remote Fruit. Under the secure-default GitHub App/API posture, only the converged result is published once; the GitHub-created branch and commit OID are the Fruit identity. If publication fails, local Seed work is preserved and no Fruit branch or commit is reported.
-* **A Pollinator invokes delegated Git capabilities** → it works in a per-Pollen delegated workspace under `~/.tendril/workspaces/`. Operations like `git.commit`, `git.push`, and `git.pr` belong to this delegated Git ladder; they are NOT managed Sprout RunWorkspaces.
+* **A Pollinator invokes delegated Git capabilities** → workspace operations such as `git.commit`, `git.push`, and `git.pr` run in a per-Pollen delegated workspace under `~/.tendril/workspaces/`; they are NOT managed Sprout RunWorkspaces. `git.pr.update` is separately grantable and uses only its configured Substrate URL and credential to update an exact existing pull request, without a workspace or ref mutation.
 * **You make a change** → you work in your own clone and push to the remote. The Stem picks it up on its next run: the managed base is fetched and hard-reset to the target branch.
 
 > [!WARNING]

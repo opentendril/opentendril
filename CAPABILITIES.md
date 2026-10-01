@@ -349,7 +349,7 @@ Not every governed capability is delegated. The current delegated set is:
 | Sprout | `sprout.grow` |
 | Stoma | `stoma.pass` |
 | Seed | `seed.grow` |
-| Git | `git.fetch`, `git.commit`, `git.apply`, `git.push`, `git.pr`, `git.branch`, `git.status`, `git.branch.list`, `git.prune` |
+| Git | `git.fetch`, `git.commit`, `git.apply`, `git.push`, `git.pr`, `git.pr.update`, `git.branch`, `git.status`, `git.branch.list`, `git.prune` |
 
 `phytomer.continue` is delegated. Phytomer create/list/get/update/delete/history
 retain their current non-delegated command posture. Other families outside this
@@ -503,7 +503,8 @@ Stem-held credential.
 | `git.commit` | Commit the workspace state. Two modes are determined by the Substrate's connection configuration (see below). Both modes use the same default-branch commit guard: commits to the repository's default branch are refused unless the Substrate explicitly sets `protectDefaultBranch: false`. |
 | `git.push` | Push `HEAD` to a target branch on the remote (`HEAD:refs/heads/<branch>`). If no explicit branch is supplied, the workspace's current branch is used; if a branch is supplied, `HEAD` is pushed to that named remote branch. Uses the Substrate's credential. |
 | `git.pr` | Open a pull request. The base branch is resolved from the repository (never assumed). An existing open PR for the same head is returned rather than duplicated. A head branch that is the default branch is refused. PR creation does not merge. |
-| `git.branch` | Create or switch to a feature branch in the delegated local workspace only. An existing branch is switched to, never reset. It does not create or move remote refs. A branch named as the repository's default branch is refused. |
+| `git.pr.update` | Update only explicitly supplied title, body, or Draft/Ready state for an exact positive PR number in a configured named Substrate. Current state is read first; already-satisfied values are a no-op. An explicit empty body clears it. Head/base, refs, open/closed state, and merge disposition are never changed. It never pushes, closes, merges, or enables auto-merge. This is a separately grantable operation-class and is not implied by `git.pr`. CLI: `tendril git pr-update --substrate <name> --number <n> [--title <title>] [--body <body>] [--draft|--ready]`; MCP uses `gitPrUpdate`, REST uses `POST /v1/git/pr-update`. |
+| `git.branch` | Create or switch to a feature branch in the delegated local workspace only. With `fromDefault: true`, requires a clean workspace, resolves the default branch and its direct local `refs/remotes/origin/<default-branch>` ref, then creates a new branch from that exact commit OID; an existing target is refused. It makes no network call, so call `git.fetch` first when fresh remote state is required. Omitted or false preserves the current-branch behavior: an existing branch is switched to, never reset. Neither mode creates or moves remote refs, and a branch named as the repository's default branch is refused. CLI: `tendril git branch --substrate <name> --branch <feature> --from-default`; MCP/REST use the `fromDefault` JSON boolean. |
 | `git.status` | Read-only report of workspace state: current branch, resolved default branch, uncommitted changes, ahead/behind, and whether a commit would be allowed. |
 | `git.branch.list` | Classify local branches against forge evidence (merged, open PR, closed-unmerged, unpushed, etc.). Read-only. |
 | `git.prune` | Delete local branches whose PR merged. Reports what would be deleted unless `confirm` is true. Never deletes the current or default branch, a branch with an open or unmerged PR, one the remote has never seen, or one held by another subject's workspace. |
@@ -540,8 +541,9 @@ which mode is used:
   This additional readiness probe does not apply to path or ephemeral checkouts;
   their setup-verification contract remains credential-only.
 
-`git.push` and `git.pr` are separate operation-classes by design: a Pollen
-granted only `git.pr` must never be able to publish a branch as a side effect.
+`git.push`, `git.pr`, and `git.pr.update` are separate operation-classes by
+design: a Pollen granted only `git.pr` must never be able to publish a branch
+or update an existing pull request as a side effect.
 There is no governed `git.merge` capability - merging is a Botanist decision.
 
 > **Implementation note on `git.push`:** `RunGitPush` in the conductor does

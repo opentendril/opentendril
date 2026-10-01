@@ -97,6 +97,7 @@ hygiene: ## Run the source-hygiene guards locally, mirroring what CI enforces on
 	@git fetch --no-tags origin main
 	bash scripts/check-no-em-dash-test.sh
 	bash scripts/check-taxonomy.sh
+	bash scripts/check-pollinator-git-governance.sh
 	bash scripts/check-no-issue-refs.sh origin/main
 	bash scripts/check-no-em-dash.sh origin/main
 

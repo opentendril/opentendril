@@ -1,7 +1,9 @@
 package core
 
 import (
+	"encoding/json"
 	"fmt"
+	"sort"
 	"strings"
 	"time"
 )
@@ -220,9 +222,45 @@ func (a *DelegationAuthorizer) Authorize(request DelegationRequest) DelegationDe
 		return DelegationDecision{Authorized: true, Grant: &matched}
 	}
 
-	return delegationDenied(fmt.Sprintf(
+	reason := fmt.Sprintf(
 		"no active grant covers Pollen %q, operation-class %q, substrate %q",
-		pollen, operationClass, substrate))
+		pollen, operationClass, substrate)
+	if grantedSubstrates := a.grantedSubstrates(pollen, operationClass, substrate, now); len(grantedSubstrates) > 0 {
+		encoded, _ := json.Marshal(grantedSubstrates)
+		reason += "; granted substrates for this operation-class: " + string(encoded)
+	}
+	return delegationDenied(reason)
+}
+
+// grantedSubstrates returns only active Substrate names from grants matching
+// the denied request's Pollen and operation-class. It is a safe correction
+// hint, not an authorization decision: the caller still has to request an
+// exact name and pass the ordinary grant check.
+func (a *DelegationAuthorizer) grantedSubstrates(pollen, operationClass, requestedSubstrate string, now time.Time) []string {
+	unique := make(map[string]struct{})
+	for i := range a.grants {
+		grant := &a.grants[i]
+		if grant.Pollen != pollen || !containsExact(grant.OperationClasses, operationClass) {
+			continue
+		}
+		if !grant.Expires.IsZero() && !now.Before(grant.Expires) {
+			continue
+		}
+		for _, candidate := range grant.Substrates {
+			substrate := strings.TrimSpace(candidate)
+			if substrate == "" || substrate == requestedSubstrate {
+				continue
+			}
+			unique[substrate] = struct{}{}
+		}
+	}
+
+	substrates := make([]string, 0, len(unique))
+	for substrate := range unique {
+		substrates = append(substrates, substrate)
+	}
+	sort.Strings(substrates)
+	return substrates
 }
 
 func delegationDenied(reason string) DelegationDecision {
