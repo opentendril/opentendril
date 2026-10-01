@@ -76,9 +76,15 @@ The full 3-gate lifecycle is strictly enforced:
 
 ---
 
-## 4. Git Preflight Checklist (Conflict Avoidance)
+## 4. Git Workflow Boundaries
 
-Before starting work on ANY task, the builder MUST run this sequence to guarantee a clean workspace:
+### OpenTendril Pollinator posture
+
+A builder configured as an OpenTendril Pollinator with a governed Git surface MUST use OpenTendril for target-Substrate Git mutation and publication. In this posture, do not use host Git for target-Substrate network or mutation commands, and do not use direct GitHub credentials. Do not use host `gh` for target-repository mutation or publication. Local read-only source inspection remains allowed. If a required governed capability is unavailable, stop and report it rather than bypassing OpenTendril. The Botanist retains merge authority.
+
+### Conventional host-Git preflight (only outside Pollinator posture)
+
+When the builder is not operating as an OpenTendril Pollinator, run this sequence before repository work to guarantee a clean workspace:
 
 1. Run `git status -sb`. If the worktree is not clean: **STOP** and report the dirty files. Do not stash.
 2. Run `git fetch origin --prune` to sync remote references.
@@ -91,9 +97,9 @@ Before starting work on ANY task, the builder MUST run this sequence to guarante
 
 Only after the preflight check returns exactly `0 0` on a clean `main` branch may you create a new feature/staging branch.
 
-### gofmt pre-commit hook (enable once per clone)
+### gofmt pre-commit hook (conventional host-Git workflows only)
 
-CI's `Stem Tests (Go)` job runs a `gofmt` check **before** the test suite, so a single unformatted Go file fails the entire run. To make that impossible, enable the tracked pre-commit hook once per clone:
+Outside OpenTendril Pollinator posture, CI's `Stem Tests (Go)` job runs a `gofmt` check **before** the test suite, so a single unformatted Go file fails the entire run. To make that impossible, enable the tracked pre-commit hook once per clone:
 
 ```
 git config core.hooksPath .githooks
@@ -101,7 +107,9 @@ git config core.hooksPath .githooks
 
 `.githooks/pre-commit` auto-runs `gofmt -w` on staged `.go` files and re-stages them, so commits are always formatted. Builders MUST enable this (or run `gofmt -l` on changed Go files) before committing.
 
-### GitHub Auth: `GITHUB_TOKEN` via direnv
+### GitHub Auth for conventional host-Git workflows only
+
+This local host setup applies only outside OpenTendril Pollinator posture. It must not be used to bypass governed Git capabilities.
 
 * `.envrc.example` is the tracked direnv template.
 * Copy it to `.envrc` and run `direnv allow`:

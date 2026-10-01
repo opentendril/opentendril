@@ -251,6 +251,9 @@ type GitBranchInput struct {
 	Substrate string `json:"substrate"`
 	// Branch is the branch to create and switch to.
 	Branch string `json:"branch"`
+	// FromDefault creates a new branch from the resolved origin default-branch
+	// tip. Existing target branches are refused when this is true.
+	FromDefault bool `json:"fromDefault,omitempty"`
 	// Origin records which surface invoked the operation (cli, mcp, rest).
 	Origin string `json:"origin,omitempty"`
 }
@@ -258,9 +261,10 @@ type GitBranchInput struct {
 // GitBranchSpec is the fully resolved, transport-free branch request handed to
 // the GitOperations port.
 type GitBranchSpec struct {
-	Substrate string
-	Branch    string
-	Origin    string
+	Substrate   string
+	Branch      string
+	FromDefault bool
+	Origin      string
 }
 
 // GitBranchResult is the outcome of a finished branch operation.
@@ -472,8 +476,8 @@ type GitOperations struct {
 	// and the duplicate/default-branch guards.
 	PullRequest func(ctx context.Context, spec GitPRSpec) (GitPRResult, error)
 	// Branch creates or switches to a branch in the resolved workspace.
-	// Implementations own substrate resolution and the protected-name and
-	// dirty-workspace guards.
+	// Implementations own substrate resolution, the protected-name guard, and
+	// the optional fromDefault cleanliness and base-ref checks.
 	Branch func(ctx context.Context, spec GitBranchSpec) (GitBranchResult, error)
 	// Status reports the resolved workspace's git state. Implementations own
 	// substrate resolution and must compute the predictive fields from the
@@ -641,9 +645,10 @@ func (s *Service) GitBranch(ctx context.Context, in GitBranchInput) (GitBranchRe
 		return GitBranchResult{}, fmt.Errorf("branch is required")
 	}
 	spec := GitBranchSpec{
-		Substrate: strings.TrimSpace(in.Substrate),
-		Branch:    strings.TrimSpace(in.Branch),
-		Origin:    in.Origin,
+		Substrate:   strings.TrimSpace(in.Substrate),
+		Branch:      strings.TrimSpace(in.Branch),
+		FromDefault: in.FromDefault,
+		Origin:      in.Origin,
 	}
 	return s.git.Branch(ctx, spec)
 }
@@ -795,11 +800,12 @@ func (s *Service) gitCapabilities() []Capability {
 		},
 		{
 			Name:        CapGitBranch,
-			Description: "Create (or switch to) a feature branch in a substrate's workspace. This is the governed way to get off the default branch before committing. An existing branch is switched to, never reset; a branch named as the repository's default branch is refused.",
+			Description: "Create (or switch to) a feature branch in a substrate's workspace. This is the governed way to get off the default branch before committing. An existing branch is switched to, never reset, unless fromDefault is true, in which case an existing target is refused and a new branch starts at the exact local origin default-branch commit. A branch named as the repository's default branch is refused.",
 			InputSchema: schemaObject(map[string]any{
-				"substrate": stringProp("The absolute path or named substrate key for the target repository workspace."),
-				"branch":    stringProp("The feature branch to create and switch to."),
-				"origin":    stringProp("Interaction origin recorded on the operation (cli, mcp, rest)."),
+				"substrate":   stringProp("The absolute path or named substrate key for the target repository workspace."),
+				"branch":      stringProp("The feature branch to create and switch to."),
+				"fromDefault": map[string]any{"type": "boolean", "description": "Create a new branch from the exact local origin default-branch commit; requires a clean workspace and refuses an existing target branch. Fetch first when fresh remote state is required."},
+				"origin":      stringProp("Interaction origin recorded on the operation (cli, mcp, rest)."),
 			}, []string{"substrate", "branch"}),
 			Invoke: func(ctx context.Context, input map[string]any) (any, error) {
 				var in GitBranchInput

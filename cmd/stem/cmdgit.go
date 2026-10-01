@@ -432,6 +432,7 @@ func gitOperationsForConfig(substratesConfig *conductor.SubstratesConfig) core.G
 			result, err := conductor.RunGitBranch(ctx, conductor.GitBranchExecution{
 				Workspace:        workspace.Path,
 				Branch:           spec.Branch,
+				FromDefault:      spec.FromDefault,
 				ConfiguredBranch: configuredBranch,
 				Credential:       credential,
 			})
@@ -625,6 +626,11 @@ func parseGitArgs(capName string, args []string) (map[string]any, error) {
 			err = stringFlag(&i, "base")
 		case "--draft":
 			input["draft"] = true
+		case "--from-default":
+			if capName != core.CapGitBranch {
+				return nil, fmt.Errorf("flag --from-default is only valid for git branch")
+			}
+			input["fromDefault"] = true
 		case "--confirm":
 			input["confirm"] = true
 		case "--path":

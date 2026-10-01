@@ -533,11 +533,17 @@ What that means in practice:
 ```bash
 # The loop, in the order the guardrails expect:
 tendril git status --substrate myrepo                      # look before acting
-tendril git branch --substrate myrepo --branch feat/new-leaf
+tendril git branch --substrate myrepo --branch feat/new-leaf --from-default
 tendril git commit --substrate myrepo --message "feat: grow a new leaf"
 tendril git push   --substrate myrepo
 tendril git pr     --substrate myrepo --title "feat: grow a new leaf"
 ```
+
+`--from-default` starts a new branch at the exact local `origin` default-branch
+commit, so it is useful when the workspace is still on a completed feature
+branch. The workspace must be clean and the target branch must not already
+exist. Call `tendril git fetch` first when the local remote-tracking ref needs
+refreshing; branch creation itself does not use the network.
 
 If a repository legitimately commits straight to its default branch (a docs
 site, a notes repository), opt out once, in the connection:

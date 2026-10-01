@@ -51,6 +51,25 @@ func TestEveryCapabilityIsInvokable(t *testing.T) {
 	}
 }
 
+func TestGitBranchSchemaProjectsFromDefault(t *testing.T) {
+	svc := newTestCore(t)
+	for _, capability := range svc.Capabilities() {
+		if capability.Name != core.CapGitBranch {
+			continue
+		}
+		properties, ok := capability.InputSchema["properties"].(map[string]any)
+		if !ok {
+			t.Fatalf("git.branch schema properties = %T, want object", capability.InputSchema["properties"])
+		}
+		fromDefault, ok := properties["fromDefault"].(map[string]any)
+		if !ok || fromDefault["type"] != "boolean" {
+			t.Fatalf("git.branch fromDefault schema = %#v, want optional boolean", properties["fromDefault"])
+		}
+		return
+	}
+	t.Fatal("git.branch capability not found")
+}
+
 func TestSessionLifecycleThroughCore(t *testing.T) {
 	ctx := context.Background()
 	svc := newTestCore(t)

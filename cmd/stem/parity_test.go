@@ -2741,12 +2741,12 @@ func TestBehavioralParity_Git(t *testing.T) {
 		{
 			name:          core.CapGitBranch,
 			method:        "GitBranch",
-			want:          core.GitBranchInput{Substrate: "core", Branch: "feat", Origin: "parity-origin"},
+			want:          core.GitBranchInput{Substrate: "core", Branch: "feat", FromDefault: true, Origin: "parity-origin"},
 			restPath:      "/v1/git/branch",
-			restBody:      `{"substrate":"core","branch":"feat","origin":"parity-origin"}`,
-			mcpArgs:       `{"substrate":"core","branch":"feat","origin":"parity-origin"}`,
+			restBody:      `{"substrate":"core","branch":"feat","fromDefault":true,"origin":"parity-origin"}`,
+			mcpArgs:       `{"substrate":"core","branch":"feat","fromDefault":true,"origin":"parity-origin"}`,
 			cliSubcommand: "branch",
-			cliArgs:       []string{"--substrate", "core", "--branch", "feat", "--origin", "parity-origin"},
+			cliArgs:       []string{"--substrate", "core", "--branch", "feat", "--from-default", "--origin", "parity-origin"},
 		},
 		{
 			name:          core.CapGitStatus,

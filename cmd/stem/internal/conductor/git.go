@@ -952,6 +952,9 @@ type GitBranchExecution struct {
 	Workspace string
 	// Branch is the branch to create and switch to.
 	Branch string
+	// FromDefault requests a new branch from the exact local origin default
+	// branch commit. The target must not already exist.
+	FromDefault bool
 	// ConfiguredBranch is the substrate's explicitly configured branch, fed to
 	// the default-branch resolver.
 	ConfiguredBranch string
@@ -1027,6 +1030,33 @@ func RunGitBranch(ctx context.Context, execution GitBranchExecution) (GitBranchR
 	if current, err := runGitCommitCommandFn(ctx, execution.Workspace, "branch", "--show-current"); err == nil {
 		previous = strings.TrimSpace(current)
 	}
+
+	if execution.FromDefault {
+		status, err := runGitCommandRawOutput(ctx, execution.Workspace, "status", "--porcelain", "-uall", "-z")
+		if err != nil {
+			return GitBranchResult{}, err
+		}
+		if strings.TrimSpace(strings.ReplaceAll(status, "\x00", "")) != "" {
+			return GitBranchResult{}, fmt.Errorf("delegated branch refused: fromDefault requires a clean workspace; commit or set aside uncommitted changes before creating a branch from the default tip")
+		}
+		if !resolution.Known() {
+			return GitBranchResult{}, fmt.Errorf("delegated branch refused: fromDefault requires a resolved repository default branch; configure the Substrate branch or refs/remotes/origin/HEAD")
+		}
+		if _, err := runGitCommitCommandFn(ctx, execution.Workspace, "rev-parse", "--verify", "--quiet", "refs/heads/"+branch); err == nil {
+			return GitBranchResult{}, fmt.Errorf("delegated branch refused: %q already exists; choose a new branch name when fromDefault is true", branch)
+		}
+
+		defaultRef := "refs/remotes/origin/" + resolution.Branch
+		baseOID, err := runGitCommitCommandFn(ctx, execution.Workspace, "rev-parse", "--verify", "--quiet", defaultRef+"^{commit}")
+		if err != nil || strings.TrimSpace(baseOID) == "" {
+			return GitBranchResult{}, fmt.Errorf("delegated branch refused: local %s does not resolve to a commit; run git.fetch before requesting fromDefault", defaultRef)
+		}
+		if _, err := runGitCommitCommandFn(ctx, execution.Workspace, "checkout", "-b", branch, strings.TrimSpace(baseOID)); err != nil {
+			return GitBranchResult{}, err
+		}
+		return GitBranchResult{Status: "created", Branch: branch, PreviousBranch: previous}, nil
+	}
+
 	if previous == branch {
 		return GitBranchResult{Status: "switched", Branch: branch, PreviousBranch: previous}, nil
 	}

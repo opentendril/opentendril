@@ -76,6 +76,56 @@ func TestDelegationAuthorizerDeniesNonMatchingRequests(t *testing.T) {
 	}
 }
 
+func TestDelegationAuthorizerWrongSubstrateReportsOnlySafeActiveHints(t *testing.T) {
+	now := time.Now()
+	grants := []core.DelegationGrant{
+		{Pollen: "local-pollinator", OperationClasses: []string{core.CapSproutGrow}, Substrates: []string{" zeta ", "alpha", "zeta", " ", "alpha"}},
+		{Pollen: "local-pollinator", OperationClasses: []string{core.CapSproutGrow}, Substrates: []string{"expired-only"}, Expires: now.Add(-time.Second)},
+		{Pollen: "other-pollinator", OperationClasses: []string{core.CapSproutGrow}, Substrates: []string{"other-pollen-only"}},
+		{Pollen: "local-pollinator", OperationClasses: []string{core.CapSequenceGrow}, Substrates: []string{"other-operation-only"}},
+	}
+	authorizer := core.NewDelegationAuthorizer(grants)
+	request := core.DelegationRequest{Pollen: "local-pollinator", OperationClass: core.CapSproutGrow, Substrate: "wrong-repo"}
+
+	decision := authorizer.Authorize(request)
+	if decision.Authorized {
+		t.Fatal("wrong Substrate was authorized from the hint grants")
+	}
+	want := `no active grant covers Pollen "local-pollinator", operation-class "sprout.grow", substrate "wrong-repo"; granted substrates for this operation-class: ["alpha","zeta"]`
+	if decision.Reason != want {
+		t.Fatalf("denial = %q, want only the sorted active same-Pollen/same-operation hint %q", decision.Reason, want)
+	}
+}
+
+func TestDelegationAuthorizerNoSafeSubstrateHintPreservesExactDenial(t *testing.T) {
+	now := time.Now()
+	grants := []core.DelegationGrant{
+		{Pollen: "other-pollinator", OperationClasses: []string{core.CapSproutGrow}, Substrates: []string{"other-pollen-only"}},
+		{Pollen: "local-pollinator", OperationClasses: []string{core.CapSequenceGrow}, Substrates: []string{"other-operation-only"}},
+		{Pollen: "local-pollinator", OperationClasses: []string{core.CapSproutGrow}, Substrates: []string{"expired-only"}, Expires: now.Add(-time.Second)},
+	}
+	authorizer := core.NewDelegationAuthorizer(grants)
+	request := core.DelegationRequest{Pollen: "local-pollinator", OperationClass: core.CapSproutGrow, Substrate: "wrong-repo"}
+
+	decision := authorizer.Authorize(request)
+	want := `no active grant covers Pollen "local-pollinator", operation-class "sprout.grow", substrate "wrong-repo"`
+	if decision.Authorized || decision.Reason != want {
+		t.Fatalf("decision = %+v, want denial with the exact prior wording %q", decision, want)
+	}
+}
+
+func TestDelegationAuthorizerMatchingGrantStillAuthorizesAlongsideHints(t *testing.T) {
+	grants := []core.DelegationGrant{
+		activeGrant(),
+		{Pollen: "local-pollinator", OperationClasses: []string{core.CapSproutGrow}, Substrates: []string{"another-substrate"}},
+	}
+	authorizer := core.NewDelegationAuthorizer(grants)
+	decision := authorizer.Authorize(sproutDelegationRequest())
+	if !decision.Authorized || decision.Reason != "" || decision.Grant == nil {
+		t.Fatalf("matching grant decision = %+v, want unchanged successful authorization", decision)
+	}
+}
+
 func TestDelegationAuthorizerDeniesExpiredGrant(t *testing.T) {
 	expired := activeGrant()
 	expired.Expires = time.Now().Add(-time.Hour)
@@ -97,7 +147,9 @@ func TestDelegationAuthorizerDeniesExpiredGrant(t *testing.T) {
 func TestDelegationAuthorizerConfirmAboveImpact(t *testing.T) {
 	bounded := activeGrant()
 	bounded.ConfirmAboveImpact = core.DelegationImpactHigh
-	authorizer := core.NewDelegationAuthorizer([]core.DelegationGrant{bounded})
+	otherSubstrate := activeGrant()
+	otherSubstrate.Substrates = []string{"another-repo"}
+	authorizer := core.NewDelegationAuthorizer([]core.DelegationGrant{bounded, otherSubstrate})
 
 	below := sproutDelegationRequest()
 	below.Impact = core.DelegationImpactLow
@@ -113,6 +165,9 @@ func TestDelegationAuthorizerConfirmAboveImpact(t *testing.T) {
 	}
 	if !strings.Contains(decision.Reason, "confirmation") {
 		t.Fatalf("denial reason %q does not mention confirmation", decision.Reason)
+	}
+	if strings.Contains(decision.Reason, "granted substrates") {
+		t.Fatalf("confirm-above denial gained a Substrate hint: %q", decision.Reason)
 	}
 	// Without a pending store, it does not set PendingConfirmation
 	if decision.PendingConfirmation {

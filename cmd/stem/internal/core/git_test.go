@@ -168,11 +168,11 @@ func TestGitBranchValidatesInput(t *testing.T) {
 	if _, err := svc.GitBranch(ctx, GitBranchInput{Substrate: "core", Branch: "  "}); err == nil {
 		t.Fatal("blank branch accepted")
 	}
-	if _, err := svc.GitBranch(ctx, GitBranchInput{Substrate: " core ", Branch: " feat/x "}); err != nil {
+	if _, err := svc.GitBranch(ctx, GitBranchInput{Substrate: " core ", Branch: " feat/x ", FromDefault: true}); err != nil {
 		t.Fatalf("branch: %v", err)
 	}
-	if captured.Substrate != "core" || captured.Branch != "feat/x" {
-		t.Fatalf("spec = %+v, want trimmed substrate/branch", captured)
+	if captured.Substrate != "core" || captured.Branch != "feat/x" || !captured.FromDefault {
+		t.Fatalf("spec = %+v, want trimmed substrate/branch and fromDefault preserved", captured)
 	}
 }
 
