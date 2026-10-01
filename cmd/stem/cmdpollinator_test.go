@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"os"
 	"path/filepath"
 	"strings"
@@ -92,4 +93,75 @@ func TestRunPollinatorIssueOutputsCorrectly(t *testing.T) {
 	if !strings.Contains(output2, outPath) {
 		t.Errorf("expected outPath to be printed to stdout on --force, got %q", output2)
 	}
+}
+
+func TestPollinatorInstructionsCommandIsDeterministicAndPortable(t *testing.T) {
+	run := func() string {
+		return capturePollinatorStdout(t, func() {
+			runPollinatorCmd(context.Background(), []string{"instructions"})
+		})
+	}
+
+	first := run()
+	if second := run(); first != second {
+		t.Fatalf("instructions output is not deterministic:\nfirst:\n%s\nsecond:\n%s", first, second)
+	}
+	if first != pollinatorInstructionBlock {
+		t.Fatalf("instructions command output differs from the canonical block:\n%s", first)
+	}
+	for _, want := range []string{
+		"You are operating as an OpenTendril Pollinator",
+		"target-Substrate Git mutation and publication authority",
+		"governed Git capabilities",
+		"host Git network or mutation commands",
+		"direct GitHub API calls",
+		"GitHub MCP write tools",
+		"SSH repository credentials",
+		"personal access tokens (PATs)",
+		"Local read-only source inspection is allowed",
+		"Substrate identifiers returned by OpenTendril as authoritative",
+		"host filesystem paths or guessed repository aliases",
+		"stop and report it",
+		"Botanist retains merge authority",
+		"Never merge or enable auto-merge",
+	} {
+		if !strings.Contains(first, want) {
+			t.Errorf("instructions output missing %q", want)
+		}
+	}
+	for _, localValue := range []string{"/home/", "/Users/", "/root/", "localhost", "127.0.0.1"} {
+		if strings.Contains(first, localValue) {
+			t.Errorf("instructions output contains local-machine value %q", localValue)
+		}
+	}
+}
+
+func TestPollinatorHelpListsInstructionsCommand(t *testing.T) {
+	output := capturePollinatorStdout(t, printPollinatorUsage)
+	if !strings.Contains(output, "instructions") || !strings.Contains(output, "tendril pollinator <issue|list|revoke|token|instructions>") {
+		t.Fatalf("pollinator help does not document instructions:\n%s", output)
+	}
+}
+
+func capturePollinatorStdout(t *testing.T, run func()) string {
+	t.Helper()
+	oldStdout := os.Stdout
+	reader, writer, err := os.Pipe()
+	if err != nil {
+		t.Fatalf("create stdout pipe: %v", err)
+	}
+	os.Stdout = writer
+	run()
+	if err := writer.Close(); err != nil {
+		t.Fatalf("close stdout writer: %v", err)
+	}
+	os.Stdout = oldStdout
+	var output bytes.Buffer
+	if _, err := output.ReadFrom(reader); err != nil {
+		t.Fatalf("read stdout: %v", err)
+	}
+	if err := reader.Close(); err != nil {
+		t.Fatalf("close stdout reader: %v", err)
+	}
+	return output.String()
 }

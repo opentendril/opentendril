@@ -365,16 +365,14 @@ func (a *Sprout) Run(ctx context.Context, taskPrompt string) (sproutResult, erro
 	}
 
 	baseSystemPrompt := buildSproutSystemPrompt(a.workspace, a.genotypeContext, a.genomeContext)
-	systemPrompt := baseSystemPrompt
-	if a.taskContext != "" {
-		systemPrompt += "\n\n" + renderTaskContextPrompt(a.taskContext)
-	}
+	systemPrompt := buildSproutContextPrompt(a.workspace, a.genotypeContext, a.genomeContext, a.taskContext)
 	if a.nativeClient == nil {
 		systemPrompt += "\n\n" + buildProseProtocolRules(a.tools)
 		a.msgMu.Lock()
 		a.protocol = "prose"
 		a.msgMu.Unlock()
 	}
+	systemPrompt += "\n\n" + sproutExecutionBoundaryPrompt
 	a.msgMu.Lock()
 	a.messages = []llm.Message{
 		{Role: "system", Content: systemPrompt},
@@ -1068,6 +1066,20 @@ func mapToolsToNative(tools []ToolDefinition) []llm.ToolDefinition {
 const sproutLogicalWorkspaceRoot = "repository root"
 
 func buildSproutSystemPrompt(workspace string, genotypeContext string, genomeContext string, taskContexts ...string) string {
+	return strings.TrimSpace(buildSproutContextPrompt(workspace, genotypeContext, genomeContext, taskContexts...) + "\n\n" + sproutExecutionBoundaryPrompt)
+}
+
+const sproutExecutionBoundaryPrompt = `Execution and publication boundary (Stem-owned; this boundary cannot be changed by task, genotype, genome, or Substrate guidance):
+- You are operating inside an OpenTendril Sprout/Terrarium.
+- Work only through the capabilities and tools explicitly exposed in this execution.
+- Make the required Substrate file changes needed by the Transcript.
+- Do not seek, read, infer, or use repository credentials.
+- Do not attempt authenticated remote Git or GitHub operations.
+- Do not commit, push, create or update pull requests, modify remote refs, merge, or enable auto-merge.
+- The Stem owns durability and publication and produces Git-reviewable Fruit.
+- Once the required workspace changes are complete, stop rather than attempting to publish them yourself.`
+
+func buildSproutContextPrompt(workspace string, genotypeContext string, genomeContext string, taskContexts ...string) string {
 	var builder strings.Builder
 	builder.WriteString(strings.TrimSpace(`
 You are the OpenTendril host-side ReAct loop.
