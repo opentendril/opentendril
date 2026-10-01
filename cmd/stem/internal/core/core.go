@@ -110,6 +110,10 @@ type Core interface {
 	// configured credential; the push runs on the Stem, never inside a sealed
 	// Sprout. Runs through the injected GitOperations execution port.
 	GitPush(ctx context.Context, in GitPushInput) (GitPushResult, error)
+	// GitPRUpdate changes explicitly supplied pull-request metadata through the
+	// configured Substrate's GitHub credential. It never changes refs or review
+	// disposition beyond draft/ready state.
+	GitPRUpdate(ctx context.Context, in GitPRUpdateInput) (GitPRUpdateResult, error)
 	// GitPR opens a pull request for a substrate's already-pushed branch via
 	// the GitHub API using the substrate's configured credential; like the
 	// push, it runs on the Stem, never inside a sealed Sprout. Runs through

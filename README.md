@@ -152,7 +152,7 @@ or MCP. See the ordered
                               Git-Reviewable Fruit
 ```
 
-Successful reviewable Sprout work becomes Git-reviewable Fruit. A local RunSprout can internally merge a Terrarium commit back into its source branch, and remote execution may publish its commit, but this internal merge-back or publication is NOT Botanist acceptance. `git.commit`, `git.push`, and `git.pr` are distinct governed capabilities. `git.pr` opens a pull request and does not merge; there is no governed `git.merge`. Final review acceptance and merge remain the Botanist's decision.
+Successful reviewable Sprout work becomes Git-reviewable Fruit. A local RunSprout can internally merge a Terrarium commit back into its source branch, and remote execution may publish its commit, but this internal merge-back or publication is NOT Botanist acceptance. `git.commit`, `git.push`, `git.pr`, and `git.pr.update` are distinct governed capabilities. `git.pr` opens a pull request; `git.pr.update` separately edits explicitly supplied metadata or Draft/Ready state on an existing pull request. Neither merges; there is no governed `git.merge`. Final review acceptance and merge remain the Botanist's decision.
 
 The Botanist's current Fruit review inventory is available locally with:
 

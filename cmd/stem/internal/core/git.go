@@ -240,6 +240,36 @@ type GitPRResult struct {
 	Base string `json:"base,omitempty"`
 }
 
+// GitPRUpdateInput requests explicit metadata changes on one pull request.
+// Pointers distinguish omitted fields from explicit empty body and false draft.
+type GitPRUpdateInput struct {
+	Substrate string  `json:"substrate"`
+	Number    int     `json:"number"`
+	Title     *string `json:"title,omitempty"`
+	Body      *string `json:"body,omitempty"`
+	Draft     *bool   `json:"draft,omitempty"`
+	Origin    string  `json:"origin,omitempty"`
+}
+
+// GitPRUpdateSpec is the validated, transport-free pull-request update sent
+// through the GitOperations port.
+type GitPRUpdateSpec struct {
+	Substrate string
+	Number    int
+	Title     *string
+	Body      *string
+	Draft     *bool
+	Origin    string
+}
+
+// GitPRUpdateResult is a safe summary of a completed pull-request update.
+type GitPRUpdateResult struct {
+	Status string `json:"status"`
+	Number int    `json:"number"`
+	URL    string `json:"url,omitempty"`
+	Draft  bool   `json:"draft"`
+}
+
 // GitBranchInput asks the Stem to create (or switch to) a feature branch in a
 // substrate's workspace. It exists so that default-branch protection has a
 // correct next move: a Pollinator told "commit on a feature branch" must be able
@@ -475,6 +505,9 @@ type GitOperations struct {
 	// own substrate resolution, credential resolution, base-branch resolution,
 	// and the duplicate/default-branch guards.
 	PullRequest func(ctx context.Context, spec GitPRSpec) (GitPRResult, error)
+	// UpdatePullRequest updates only explicitly supplied title, body, or draft
+	// state on an exact pull request in the resolved configured Substrate.
+	UpdatePullRequest func(ctx context.Context, spec GitPRUpdateSpec) (GitPRUpdateResult, error)
 	// Branch creates or switches to a branch in the resolved workspace.
 	// Implementations own substrate resolution, the protected-name guard, and
 	// the optional fromDefault cleanliness and base-ref checks.
@@ -630,6 +663,34 @@ func (s *Service) GitPR(ctx context.Context, in GitPRInput) (GitPRResult, error)
 		Origin:    in.Origin,
 	}
 	return s.git.PullRequest(ctx, spec)
+}
+
+// GitPRUpdate validates and updates only the explicitly requested fields.
+func (s *Service) GitPRUpdate(ctx context.Context, in GitPRUpdateInput) (GitPRUpdateResult, error) {
+	if s.git.UpdatePullRequest == nil {
+		return GitPRUpdateResult{}, fmt.Errorf("git.pr.update is not wired: construct the Core with WithGit(GitOperations{UpdatePullRequest: …})")
+	}
+	if strings.TrimSpace(in.Substrate) == "" {
+		return GitPRUpdateResult{}, fmt.Errorf("substrate is required")
+	}
+	if in.Number <= 0 {
+		return GitPRUpdateResult{}, fmt.Errorf("a positive pull request number is required")
+	}
+	if in.Title == nil && in.Body == nil && in.Draft == nil {
+		return GitPRUpdateResult{}, fmt.Errorf("at least one of title, body, or draft must be supplied")
+	}
+	if in.Title != nil && strings.TrimSpace(*in.Title) == "" {
+		return GitPRUpdateResult{}, fmt.Errorf("title cannot be empty")
+	}
+	spec := GitPRUpdateSpec{
+		Substrate: strings.TrimSpace(in.Substrate),
+		Number:    in.Number,
+		Title:     in.Title,
+		Body:      in.Body,
+		Draft:     in.Draft,
+		Origin:    in.Origin,
+	}
+	return s.git.UpdatePullRequest(ctx, spec)
 }
 
 // GitBranch validates the request and runs the branch operation to completion
@@ -796,6 +857,25 @@ func (s *Service) gitCapabilities() []Capability {
 					return nil, err
 				}
 				return s.GitPR(ctx, in)
+			},
+		},
+		{
+			Name:        CapGitPRUpdate,
+			Description: "Update explicitly supplied title, body, or Draft/Ready state on an exact pull request in the configured substrate. Reads current state first, is idempotent when requested values already match, and never changes its head or base, pushes, closes, or merges.",
+			InputSchema: schemaObject(map[string]any{
+				"substrate": stringProp("The configured named key for the target repository."),
+				"number":    map[string]any{"type": "integer", "minimum": 1, "description": "The exact positive pull request number in this repository."},
+				"title":     stringProp("Replacement title; omit to leave the title unchanged."),
+				"body":      stringProp("Replacement body; an explicit empty string clears the body."),
+				"draft":     map[string]any{"type": "boolean", "description": "True converts a Ready pull request to Draft; false marks a Draft pull request Ready."},
+				"origin":    stringProp("Interaction origin recorded on the operation (cli, mcp, rest)."),
+			}, []string{"substrate", "number"}),
+			Invoke: func(ctx context.Context, input map[string]any) (any, error) {
+				var in GitPRUpdateInput
+				if err := decodeInput(input, &in); err != nil {
+					return nil, err
+				}
+				return s.GitPRUpdate(ctx, in)
 			},
 		},
 		{

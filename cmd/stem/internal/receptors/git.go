@@ -56,6 +56,7 @@ func (h *GitHandler) governedRoutes() []governedRoute {
 		{"POST /v1/git/commit", core.CapGitCommit, h.commit},
 		{"POST /v1/git/push", core.CapGitPush, h.push},
 		{"POST /v1/git/pr", core.CapGitPR, h.pullRequest},
+		{"POST /v1/git/pr-update", core.CapGitPRUpdate, h.updatePullRequest},
 		{"POST /v1/git/branch", core.CapGitBranch, h.branch},
 		{"POST /v1/git/status", core.CapGitStatus, h.status},
 		{"POST /v1/git/branches", core.CapGitBranchList, h.branchList},
@@ -362,6 +363,58 @@ func (h *GitHandler) pullRequest(w http.ResponseWriter, r *http.Request) {
 	}
 
 	result, err := h.core.GitPR(r.Context(), req)
+	if err != nil {
+		writeCoreErr(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, result)
+}
+
+func (h *GitHandler) updatePullRequest(w http.ResponseWriter, r *http.Request) {
+	var req core.GitPRUpdateInput
+	if r.Body != nil && r.ContentLength != 0 {
+		decoder := json.NewDecoder(r.Body)
+		decoder.DisallowUnknownFields()
+		if err := decoder.Decode(&req); err != nil {
+			http.Error(w, "invalid request body: "+err.Error(), http.StatusBadRequest)
+			return
+		}
+		var trailing any
+		if err := decoder.Decode(&trailing); !errors.Is(err, io.EOF) {
+			http.Error(w, "invalid request body", http.StatusBadRequest)
+			return
+		}
+	}
+	if strings.TrimSpace(req.Substrate) == "" {
+		http.Error(w, "substrate is required", http.StatusBadRequest)
+		return
+	}
+	if h.delegation == nil {
+		http.Error(w, "git.pr.update requires an authorized Pollinator", http.StatusForbidden)
+		return
+	}
+	pollen, credentialOK := h.delegation.PollenFor(r)
+	if !credentialOK {
+		http.Error(w, "delegation denied: unknown or revoked Pollinator credential", http.StatusForbidden)
+		return
+	}
+	if pollen != "" {
+		decision := h.delegation.Authorize(core.DelegationRequest{
+			Pollen:         pollen,
+			OperationClass: core.CapGitPRUpdate,
+			Substrate:      strings.TrimSpace(req.Substrate),
+			Impact:         core.DelegationImpactHigh,
+		})
+		if !decision.Authorized {
+			http.Error(w, "delegation denied: "+decision.Reason, http.StatusForbidden)
+			return
+		}
+		r = r.WithContext(core.WithPollen(r.Context(), pollen))
+	}
+	if strings.TrimSpace(req.Origin) == "" {
+		req.Origin = session.OriginREST
+	}
+	result, err := h.core.GitPRUpdate(r.Context(), req)
 	if err != nil {
 		writeCoreErr(w, err)
 		return

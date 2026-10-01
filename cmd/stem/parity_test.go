@@ -446,6 +446,10 @@ type mockCore struct {
 	getSessionResult    session.Phytomer
 }
 
+func parityStringPtr(value string) *string { return &value }
+
+func parityBoolPtr(value bool) *bool { return &value }
+
 func (m *mockCore) record(method string, input any) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -722,6 +726,11 @@ func (m *mockCore) GitPR(_ context.Context, in core.GitPRInput) (core.GitPRResul
 		Head:   "feat/mock",
 		Base:   "main",
 	}, nil
+}
+
+func (m *mockCore) GitPRUpdate(_ context.Context, in core.GitPRUpdateInput) (core.GitPRUpdateResult, error) {
+	m.record("GitPRUpdate", in)
+	return core.GitPRUpdateResult{Status: "updated", Number: in.Number, URL: "https://example.invalid/requests/42", Draft: in.Draft != nil && *in.Draft}, nil
 }
 
 func (m *mockCore) GitBranch(_ context.Context, in core.GitBranchInput) (core.GitBranchResult, error) {
@@ -1058,6 +1067,17 @@ func (m *mockCore) Capabilities() []core.Capability {
 			},
 		},
 		{
+			Name:        core.CapGitPRUpdate,
+			InputSchema: map[string]any{},
+			Invoke: func(ctx context.Context, input map[string]any) (any, error) {
+				var in core.GitPRUpdateInput
+				if err := decodeMockInput(input, &in); err != nil {
+					return nil, err
+				}
+				return m.GitPRUpdate(ctx, in)
+			},
+		},
+		{
 			Name:        core.CapGitBranch,
 			InputSchema: map[string]any{},
 			Invoke: func(ctx context.Context, input map[string]any) (any, error) {
@@ -1164,6 +1184,7 @@ func newMockParityFixture(t *testing.T) (*mockCore, *http.ServeMux, *receptors.M
 				core.CapGitFetch,
 				core.CapGitPush,
 				core.CapGitPR,
+				core.CapGitPRUpdate,
 				core.CapGitBranch,
 				core.CapGitStatus,
 				core.CapGitBranchList,
@@ -2737,6 +2758,16 @@ func TestBehavioralParity_Git(t *testing.T) {
 			mcpArgs:       `{"substrate":"core","title":"hello","head":"feat","origin":"parity-origin"}`,
 			cliSubcommand: "pr",
 			cliArgs:       []string{"--substrate", "core", "--title", "hello", "--head", "feat", "--origin", "parity-origin"},
+		},
+		{
+			name:          core.CapGitPRUpdate,
+			method:        "GitPRUpdate",
+			want:          core.GitPRUpdateInput{Substrate: "core", Number: 42, Title: parityStringPtr("updated title"), Body: parityStringPtr(""), Draft: parityBoolPtr(false), Origin: "parity-origin"},
+			restPath:      "/v1/git/pr-update",
+			restBody:      `{"substrate":"core","number":42,"title":"updated title","body":"","draft":false,"origin":"parity-origin"}`,
+			mcpArgs:       `{"substrate":"core","number":42,"title":"updated title","body":"","draft":false,"origin":"parity-origin"}`,
+			cliSubcommand: "pr-update",
+			cliArgs:       []string{"--substrate", "core", "--number", "42", "--title", "updated title", "--body", "", "--ready", "--origin", "parity-origin"},
 		},
 		{
 			name:          core.CapGitBranch,

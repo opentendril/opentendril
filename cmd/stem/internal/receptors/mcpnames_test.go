@@ -36,6 +36,7 @@ var lockedPrimaryMCPNames = map[string]string{
 	"git.commit":        "gitCommit",
 	"git.push":          "gitPush",
 	"git.pr":            "gitPr",
+	"git.pr.update":     "gitPrUpdate",
 	"git.branch":        "gitBranch",
 	"git.status":        "gitStatus",
 	"git.branch.list":   "gitBranchList",

@@ -22,8 +22,10 @@ grants:
     substrates: [opentendril]
 ```
 
-No grant, no access. `git.prune` is deliberately absent from the default set —
-it deletes branches, and every other operation is recoverable.
+No grant, no access. `git.prune` is deliberately absent from the default set
+because it deletes local branches. `git.pr.update` is also not included by
+default: add it as a separate operation-class only when the Pollinator may edit
+existing pull-request metadata or Draft/Ready state.
 
 ## `github` — a third-party Symbiotic Nodule
 

@@ -9,6 +9,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -683,6 +684,283 @@ func newFakePullRequestAPI(t *testing.T, defaultBranch string, existing []map[st
 	appTokenMu.Unlock()
 
 	return fake
+}
+
+type fakePullRequestUpdateAPI struct {
+	number       int
+	nodeID       string
+	title        string
+	body         string
+	draft        bool
+	state        string
+	missing      bool
+	getCalls     int
+	patchCalls   int
+	graphqlCalls int
+	patchBody    map[string]json.RawMessage
+	graphqlBody  map[string]any
+	methods      []string
+	paths        []string
+	authHeaders  []string
+}
+
+func newFakePullRequestUpdateAPI(t *testing.T, number int, title, body string, draft bool) *fakePullRequestUpdateAPI {
+	t.Helper()
+	fake := &fakePullRequestUpdateAPI{number: number, nodeID: "PR_node_123", title: title, body: body, draft: draft, state: "open"}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		fake.methods = append(fake.methods, r.Method)
+		fake.paths = append(fake.paths, r.URL.Path)
+		fake.authHeaders = append(fake.authHeaders, r.Header.Get("Authorization"))
+		switch {
+		case r.URL.Path == "/repos/opentendril/opentendril/pulls/42" && r.Method == http.MethodGet:
+			fake.getCalls++
+			if fake.missing || fake.number != 42 {
+				w.WriteHeader(http.StatusNotFound)
+				_, _ = w.Write([]byte(`{"message":"Not Found"}`))
+				return
+			}
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"number": fake.number, "node_id": fake.nodeID, "title": fake.title,
+				"body": fake.body, "draft": fake.draft, "state": fake.state, "html_url": "https://example.invalid/requests/42",
+				"base": map[string]any{"ref": "main"}, "head": map[string]any{"ref": "feat/example"},
+			})
+		case r.URL.Path == "/repos/opentendril/opentendril/pulls/42" && r.Method == http.MethodPatch:
+			fake.patchCalls++
+			bodyBytes, _ := io.ReadAll(r.Body)
+			if err := json.Unmarshal(bodyBytes, &fake.patchBody); err != nil {
+				t.Errorf("decode update patch: %v", err)
+			}
+			if raw, ok := fake.patchBody["title"]; ok {
+				_ = json.Unmarshal(raw, &fake.title)
+			}
+			if raw, ok := fake.patchBody["body"]; ok {
+				_ = json.Unmarshal(raw, &fake.body)
+			}
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(`{}`))
+		case r.URL.Path == "/graphql" && r.Method == http.MethodPost:
+			fake.graphqlCalls++
+			bodyBytes, _ := io.ReadAll(r.Body)
+			if err := json.Unmarshal(bodyBytes, &fake.graphqlBody); err != nil {
+				t.Errorf("decode pull request GraphQL mutation: %v", err)
+				w.WriteHeader(http.StatusBadRequest)
+				return
+			}
+			query, _ := fake.graphqlBody["query"].(string)
+			if strings.Contains(query, "convertPullRequestToDraft") {
+				fake.draft = true
+				_, _ = w.Write([]byte(`{"data":{"convertPullRequestToDraft":{"pullRequest":{"isDraft":true}}}}`))
+				return
+			}
+			if strings.Contains(query, "markPullRequestReadyForReview") {
+				fake.draft = false
+				_, _ = w.Write([]byte(`{"data":{"markPullRequestReadyForReview":{"pullRequest":{"isDraft":false}}}}`))
+				return
+			}
+			w.WriteHeader(http.StatusBadRequest)
+		default:
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	t.Cleanup(server.Close)
+	t.Cleanup(RedirectGitHubAPIBaseURL(server.URL))
+	t.Cleanup(redirectGitHubGraphQLURL(server.URL + "/graphql"))
+	return fake
+}
+
+func TestRunGitPRUpdateExplicitFieldsAndDraftTransitions(t *testing.T) {
+	tests := []struct {
+		name       string
+		title      *string
+		body       *string
+		draft      *bool
+		wantPatch  map[string]string
+		wantDraft  bool
+		wantStatus string
+		wantGQL    int
+	}{
+		{name: "title only", title: prUpdateStringPointer("new title"), wantPatch: map[string]string{"title": "new title"}, wantStatus: "updated"},
+		{name: "body only", body: prUpdateStringPointer("new body"), wantPatch: map[string]string{"body": "new body"}, wantStatus: "updated"},
+		{name: "clear body", body: prUpdateStringPointer(""), wantPatch: map[string]string{"body": ""}, wantStatus: "updated"},
+		{name: "ready to draft", draft: prUpdateBoolPointer(true), wantDraft: true, wantStatus: "updated", wantGQL: 1},
+		{name: "draft to ready", draft: prUpdateBoolPointer(false), wantDraft: false, wantStatus: "updated", wantGQL: 1},
+		{name: "multiple fields", title: prUpdateStringPointer("new title"), body: prUpdateStringPointer("new body"), draft: prUpdateBoolPointer(true), wantPatch: map[string]string{"title": "new title", "body": "new body"}, wantDraft: true, wantStatus: "updated", wantGQL: 1},
+		{name: "idempotent", title: prUpdateStringPointer("current title"), body: prUpdateStringPointer("current body"), draft: prUpdateBoolPointer(false), wantDraft: false, wantStatus: "unchanged"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			initialDraft := false
+			if test.name == "draft to ready" {
+				initialDraft = true
+			}
+			initialTitle, initialBody := "current title", "current body"
+			if test.name == "clear body" {
+				initialBody = "old body"
+			}
+			if test.name == "title only" || test.name == "multiple fields" {
+				initialTitle = "old title"
+			}
+			fake := newFakePullRequestUpdateAPI(t, 42, initialTitle, initialBody, initialDraft)
+			result, err := RunGitPRUpdate(context.Background(), GitPRUpdateExecution{
+				RepositoryURL: "https://github.com/opentendril/opentendril.git",
+				Number:        42,
+				Title:         test.title,
+				Body:          test.body,
+				Draft:         test.draft,
+				Credential:    ResolvedCredential{Method: CredentialPAT, TokenValue: "test-secret"},
+			})
+			if err != nil {
+				t.Fatalf("RunGitPRUpdate: %v", err)
+			}
+			if result.Status != test.wantStatus || result.Number != 42 || result.Draft != test.wantDraft {
+				t.Fatalf("result = %+v, want status=%s number=42 draft=%t", result, test.wantStatus, test.wantDraft)
+			}
+			wantPatchCalls := 0
+			if len(test.wantPatch) > 0 {
+				wantPatchCalls = 1
+			}
+			if fake.getCalls != 1 || fake.patchCalls != wantPatchCalls || fake.graphqlCalls != test.wantGQL {
+				t.Fatalf("calls = GET:%d PATCH:%d GraphQL:%d", fake.getCalls, fake.patchCalls, fake.graphqlCalls)
+			}
+			gotPatch := decodePRUpdatePatch(t, fake.patchBody)
+			if !reflect.DeepEqual(gotPatch, test.wantPatch) {
+				t.Fatalf("PATCH fields = %v, want only %v", gotPatch, test.wantPatch)
+			}
+			for _, auth := range fake.authHeaders {
+				if auth != "Bearer test-secret" {
+					t.Fatalf("authorization header = %q, want substrate-resolved bearer", auth)
+				}
+			}
+			if strings.Contains(result.URL, "test-secret") {
+				t.Fatal("result exposed the configured GitHub credential")
+			}
+			for _, method := range fake.methods {
+				if method != http.MethodGet && method != http.MethodPatch && method != http.MethodPost {
+					t.Fatalf("unexpected GitHub mutation method %s", method)
+				}
+			}
+			for _, path := range fake.paths {
+				if path != "/repos/opentendril/opentendril/pulls/42" && path != "/graphql" {
+					t.Fatalf("unexpected GitHub mutation path %s", path)
+				}
+			}
+			if test.wantGQL > 0 {
+				query, _ := fake.graphqlBody["query"].(string)
+				wantMutation := "convertPullRequestToDraft"
+				if !test.wantDraft {
+					wantMutation = "markPullRequestReadyForReview"
+				}
+				if !strings.Contains(query, wantMutation) || strings.Contains(query, "mergePullRequest") || strings.Contains(query, "closePullRequest") {
+					t.Fatalf("GraphQL mutation = %q, want only %s", query, wantMutation)
+				}
+				variables, _ := fake.graphqlBody["variables"].(map[string]any)
+				if variables["pullRequestId"] != "PR_node_123" {
+					t.Fatalf("GraphQL variables = %v, want exact pull request identifier", variables)
+				}
+			}
+			if fake.patchCalls > 0 {
+				for key := range fake.patchBody {
+					if key != "title" && key != "body" {
+						t.Fatalf("PATCH attempted unrelated field %q", key)
+					}
+				}
+			}
+		})
+	}
+}
+
+func prUpdateStringPointer(value string) *string { return &value }
+
+func prUpdateBoolPointer(value bool) *bool { return &value }
+
+func decodePRUpdatePatch(t *testing.T, raw map[string]json.RawMessage) map[string]string {
+	t.Helper()
+	if len(raw) == 0 {
+		return nil
+	}
+	decoded := make(map[string]string, len(raw))
+	for key, value := range raw {
+		var text string
+		if err := json.Unmarshal(value, &text); err != nil {
+			t.Fatalf("PATCH field %q was not a string: %v", key, err)
+		}
+		decoded[key] = text
+	}
+	return decoded
+}
+
+func TestRunGitPRUpdateRefusesInvalidOrMissingPullRequest(t *testing.T) {
+	title := "updated title"
+	fake := newFakePullRequestUpdateAPI(t, 42, "current title", "current body", false)
+	_, err := RunGitPRUpdate(context.Background(), GitPRUpdateExecution{
+		RepositoryURL: "https://github.com/opentendril/opentendril.git",
+		Number:        0,
+		Title:         &title,
+		Credential:    ResolvedCredential{Method: CredentialPAT, TokenValue: "test-secret"},
+	})
+	if err == nil || fake.getCalls != 0 || fake.patchCalls != 0 || fake.graphqlCalls != 0 {
+		t.Fatalf("invalid number result err=%v calls=GET:%d PATCH:%d GraphQL:%d", err, fake.getCalls, fake.patchCalls, fake.graphqlCalls)
+	}
+
+	fake.missing = true
+	_, err = RunGitPRUpdate(context.Background(), GitPRUpdateExecution{
+		RepositoryURL: "https://github.com/opentendril/opentendril.git",
+		Number:        42,
+		Title:         &title,
+		Credential:    ResolvedCredential{Method: CredentialPAT, TokenValue: "test-secret"},
+	})
+	if err == nil || !strings.Contains(err.Error(), "was not found") {
+		t.Fatalf("missing pull request error = %v, want not-found refusal", err)
+	}
+	if fake.getCalls != 1 || fake.patchCalls != 0 || fake.graphqlCalls != 0 {
+		t.Fatalf("missing PR calls = GET:%d PATCH:%d GraphQL:%d, want read only", fake.getCalls, fake.patchCalls, fake.graphqlCalls)
+	}
+	if strings.Contains(err.Error(), "test-secret") {
+		t.Fatal("error exposed the configured GitHub credential")
+	}
+}
+
+func TestRunGitPRUpdateRefusesNoMutationFieldsBeforeNetwork(t *testing.T) {
+	fake := newFakePullRequestUpdateAPI(t, 42, "current title", "current body", false)
+	_, err := RunGitPRUpdate(context.Background(), GitPRUpdateExecution{
+		RepositoryURL: "https://github.com/opentendril/opentendril.git",
+		Number:        42,
+		Credential:    ResolvedCredential{Method: CredentialPAT, TokenValue: "test-secret"},
+	})
+	if err == nil || !strings.Contains(err.Error(), "at least one") {
+		t.Fatalf("empty update error = %v, want explicit-field refusal", err)
+	}
+	if fake.getCalls != 0 || fake.patchCalls != 0 || fake.graphqlCalls != 0 {
+		t.Fatalf("empty update reached GitHub: GET:%d PATCH:%d GraphQL:%d", fake.getCalls, fake.patchCalls, fake.graphqlCalls)
+	}
+}
+
+func TestRunGitPRUpdateDoesNotChangeDraftStateOfClosedPullRequest(t *testing.T) {
+	fake := newFakePullRequestUpdateAPI(t, 42, "current title", "current body", false)
+	fake.state = "closed"
+	draft := true
+	_, err := RunGitPRUpdate(context.Background(), GitPRUpdateExecution{
+		RepositoryURL: "https://github.com/opentendril/opentendril.git",
+		Number:        42,
+		Draft:         &draft,
+		Credential:    ResolvedCredential{Method: CredentialPAT, TokenValue: "test-secret"},
+	})
+	if err == nil || !strings.Contains(err.Error(), "open pull request") {
+		t.Fatalf("closed PR error = %v, want Draft/Ready refusal", err)
+	}
+	if fake.getCalls != 1 || fake.patchCalls != 0 || fake.graphqlCalls != 0 {
+		t.Fatalf("closed PR calls = GET:%d PATCH:%d GraphQL:%d, want read only", fake.getCalls, fake.patchCalls, fake.graphqlCalls)
+	}
+	ready := false
+	result, err := RunGitPRUpdate(context.Background(), GitPRUpdateExecution{
+		RepositoryURL: "https://github.com/opentendril/opentendril.git",
+		Number:        42,
+		Draft:         &ready,
+		Credential:    ResolvedCredential{Method: CredentialPAT, TokenValue: "test-secret"},
+	})
+	if err != nil || result.Status != "unchanged" {
+		t.Fatalf("already-satisfied closed PR state result=%+v err=%v, want idempotent success", result, err)
+	}
 }
 
 func TestRunGitPullRequestValidatesExecution(t *testing.T) {
