@@ -92,7 +92,7 @@ func newLifecycleRepo(t *testing.T) (repo string, forge *fakeForge) {
 	forge = &fakeForge{byCommit: map[string][]map[string]any{}, byHead: map[string][]map[string]any{}}
 
 	mergedSHA := branchAt(t, repo, "feat/merged", "merged work")
-	forge.byCommit[mergedSHA] = []map[string]any{{"number": 101, "state": "closed", "merged_at": "2026-07-20T10:00:00Z"}}
+	forge.byCommit[mergedSHA] = []map[string]any{{"number": 101, "state": "closed", "merged_at": "2026-07-20T10:00:00Z", "head": map[string]any{"sha": mergedSHA}}}
 
 	openSHA := branchAt(t, repo, "feat/open", "open work")
 	forge.byCommit[openSHA] = []map[string]any{{"number": 102, "state": "open", "merged_at": nil}}
@@ -195,8 +195,31 @@ func TestBranchListDetectsSquashMergeThatGitCannot(t *testing.T) {
 	if err != nil {
 		t.Fatalf("branch list: %v", err)
 	}
-	if got := classificationOf(result, "feat/merged"); !got.Deletable {
+	if got := classificationOf(result, "feat/merged"); got.Classification != BranchMerged || got.FruitState != FruitStateMerged || !got.Deletable {
 		t.Fatalf("the squash-merged branch was not detected as merged (%q) — this is exactly what git branch --merged gets wrong", got.Classification)
+	}
+}
+
+func TestBranchListDoesNotInheritMergedPRFromDifferentHeadTip(t *testing.T) {
+	repo, forge := newLifecycleRepo(t)
+	defaultTip := strings.TrimSpace(gitIn(t, repo, "rev-parse", "trunk"))
+	if _, err := runGitCommand(context.Background(), repo, "branch", "feat/default-tip", defaultTip); err != nil {
+		t.Fatalf("create alias at default tip: %v", err)
+	}
+	forge.byCommit[defaultTip] = []map[string]any{{
+		"number": 104, "state": "closed", "merged_at": "2026-07-20T10:00:00Z",
+		"head": map[string]any{"sha": "different-feature-tip"},
+	}}
+
+	result, err := RunGitBranchList(context.Background(), GitBranchListExecution{
+		Workspace: repo, ConfiguredBranch: "trunk", Credential: lifecycleCredential(t),
+	})
+	if err != nil {
+		t.Fatalf("branch list: %v", err)
+	}
+	branch := classificationOf(result, "feat/default-tip")
+	if branch.Head != defaultTip || branch.PullRequest != 104 || branch.FruitState == FruitStateMerged || branch.Classification == BranchMerged || branch.Deletable {
+		t.Fatalf("branch = %+v, want the associated merged PR to remain unverified because its head differs from the local tip", branch)
 	}
 }
 

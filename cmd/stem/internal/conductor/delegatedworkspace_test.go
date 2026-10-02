@@ -102,6 +102,62 @@ func TestOpenFruitPreventsAutomaticReclamationEvenForEmptyOwnedBranch(t *testing
 	}
 }
 
+func TestStatusBranchFromDefaultRetainsWorkspaceWhenBaseHasDifferentMergedPRHead(t *testing.T) {
+	repository, path, initial := newDelegatedWorkspaceLifecycleFixture(t)
+	gitIn(t, repository, "remote", "add", "origin", "https://github.com/owner/repo.git")
+	base := gitIn(t, repository, "rev-parse", "refs/remotes/origin/main")
+	newFakeForge(t, &fakeForge{
+		byCommit: map[string][]map[string]any{
+			base: {{
+				"number": 298, "state": "closed", "merged_at": "2026-10-01T00:00:00Z",
+				"head": map[string]any{"sha": "merged-feature-head"},
+			}},
+		},
+		byHead: map[string][]map[string]any{},
+	})
+	credential := lifecycleCredential(t)
+
+	firstStatus, err := RunGitStatus(context.Background(), GitStatusExecution{Workspace: initial.Path, ConfiguredBranch: "main"})
+	if err != nil {
+		t.Fatalf("initial git.status: %v", err)
+	}
+	if firstStatus.Head != base || firstStatus.Branch != initial.Branch || !firstStatus.Clean {
+		t.Fatalf("initial status = %+v, want clean delegated workspace based on current main %s", firstStatus, base)
+	}
+
+	const branchName = "staging/qualification-default-tip"
+	created, err := RunGitBranch(context.Background(), GitBranchExecution{
+		Workspace: initial.Path, Repository: repository, Pollen: initial.Pollen,
+		Branch: branchName, FromDefault: true, ConfiguredBranch: "main", Credential: credential,
+	})
+	if err != nil {
+		t.Fatalf("git.branch from default: %v", err)
+	}
+	if created.Status != "created" || created.Branch != branchName {
+		t.Fatalf("git.branch result = %+v, want newly created %s", created, branchName)
+	}
+
+	continued, err := ResolveDelegatedWorkspaceWithDefaultBranch(context.Background(), "demo", repository, initial.Pollen, credential, "main")
+	if err != nil {
+		t.Fatalf("resolve workspace for second git.status: %v", err)
+	}
+	if continued.Path != path || continued.Path != initial.Path || continued.Branch != branchName {
+		t.Fatalf("resolved workspace = %+v, want same path %s and newly created branch %s", continued, path, branchName)
+	}
+
+	secondStatus, err := RunGitStatus(context.Background(), GitStatusExecution{Workspace: continued.Path, ConfiguredBranch: "main"})
+	if err != nil {
+		t.Fatalf("second git.status: %v", err)
+	}
+	if secondStatus.Branch != branchName || secondStatus.Head != base || !secondStatus.Clean {
+		t.Fatalf("second status = %+v, want clean %s at the current main tip %s", secondStatus, branchName, base)
+	}
+	owned, ok := delegatedOwnedRef(repository, branchName, initial.Pollen)
+	if !ok || owned.Pending || owned.Base != base || !owned.RetainEmpty {
+		t.Fatalf("new branch ownership = %+v, want finalized exact ownership at %s", owned, base)
+	}
+}
+
 func TestResolveDelegatedWorkspaceReclaimsOnlyCleanEmptyWorkAndUsesFreshDefault(t *testing.T) {
 	repository, path, first := newDelegatedWorkspaceLifecycleFixture(t)
 	if err := os.WriteFile(filepath.Join(repository, "base.txt"), []byte("new default\n"), 0o644); err != nil {
@@ -183,7 +239,7 @@ func TestTerminalMergedWorkspaceIsReclaimedOnlyWhenClean(t *testing.T) {
 		gitIn(t, path, "commit", "-q", "-m", "merged work")
 		mergedHead := gitIn(t, path, "rev-parse", "HEAD")
 		newFakeForge(t, &fakeForge{byCommit: map[string][]map[string]any{
-			mergedHead: {{"number": 301, "state": "closed", "merged_at": "2026-10-01T00:00:00Z"}},
+			mergedHead: {{"number": 301, "state": "closed", "merged_at": "2026-10-01T00:00:00Z", "head": map[string]any{"sha": mergedHead}}},
 		}, byHead: map[string][]map[string]any{}})
 		originalFetch := runGitFetchCommandFn
 		runGitFetchCommandFn = func(context.Context, string, []string, ...string) (string, error) {
@@ -218,7 +274,7 @@ func TestTerminalMergedWorkspaceIsReclaimedOnlyWhenClean(t *testing.T) {
 		gitIn(t, path, "commit", "-q", "-m", "merged work")
 		mergedHead := gitIn(t, path, "rev-parse", "HEAD")
 		newFakeForge(t, &fakeForge{byCommit: map[string][]map[string]any{
-			mergedHead: {{"number": 302, "state": "closed", "merged_at": "2026-10-01T00:00:00Z"}},
+			mergedHead: {{"number": 302, "state": "closed", "merged_at": "2026-10-01T00:00:00Z", "head": map[string]any{"sha": mergedHead}}},
 		}, byHead: map[string][]map[string]any{}})
 		if err := os.WriteFile(filepath.Join(path, "uncommitted.txt"), []byte("preserve until recovery\n"), 0o644); err != nil {
 			t.Fatal(err)
