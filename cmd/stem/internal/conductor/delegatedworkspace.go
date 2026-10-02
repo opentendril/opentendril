@@ -167,7 +167,8 @@ func inspectDelegatedWorkspaceUnlocked(ctx context.Context, target DelegatedWork
 
 	noUniqueWork := report.UniqueWorkKnown && !report.UniqueWork
 	reviewableFruit := report.FruitState == FruitStateOpen || report.FruitState == FruitStateClosedUnmerged
-	report.AutoReclaimable = report.CleanKnown && report.Clean && !reviewableFruit && (noUniqueWork || report.FruitState == FruitStateMerged)
+	noWorkReclaimable := noUniqueWork && !(ownedFound && owned.RetainEmpty)
+	report.AutoReclaimable = report.CleanKnown && report.Clean && !reviewableFruit && (noWorkReclaimable || report.FruitState == FruitStateMerged)
 	switch {
 	case !report.CleanKnown:
 		report.Reason = "workspace cleanliness could not be established; it is retained"
@@ -185,6 +186,8 @@ func inspectDelegatedWorkspaceUnlocked(ctx context.Context, target DelegatedWork
 		report.Reason = "branch Fruit or PR state is unverified; " + report.FruitEvidence + "; it is retained"
 	case !report.UniqueWorkKnown:
 		report.Reason = "no exact delegated OwnedRef base proves the branch has no unique commits; it is retained"
+	case noUniqueWork && ownedFound && owned.RetainEmpty:
+		report.Reason = "branch was explicitly created for this Pollen and is retained for continued work"
 	default:
 		report.Reason = "branch contains unique committed Fruit; it is retained"
 	}
