@@ -1205,6 +1205,9 @@ func RunGitBranch(ctx context.Context, execution GitBranchExecution) (GitBranchR
 	}
 
 	if previous == branch {
+		if err := requireExistingDelegatedBranchOwnership(execution, branch); err != nil {
+			return GitBranchResult{}, err
+		}
 		return GitBranchResult{Status: "switched", Branch: branch, PreviousBranch: previous}, nil
 	}
 
@@ -1218,6 +1221,9 @@ func RunGitBranch(ctx context.Context, execution GitBranchExecution) (GitBranchR
 	// would either fail on conflicting files or silently carry the changes
 	// somewhere the caller did not intend.
 	if exists {
+		if err := requireExistingDelegatedBranchOwnership(execution, branch); err != nil {
+			return GitBranchResult{}, err
+		}
 		status, err := runGitCommandRawOutput(ctx, execution.Workspace, "status", "--porcelain", "-uall", "-z")
 		if err != nil {
 			return GitBranchResult{}, err
@@ -1236,6 +1242,26 @@ func RunGitBranch(ctx context.Context, execution GitBranchExecution) (GitBranchR
 		return GitBranchResult{}, fmt.Errorf("delegated branch refused: current workspace HEAD does not resolve to a commit")
 	}
 	return createGitBranch(ctx, execution, branch, previous, strings.TrimSpace(baseOID))
+}
+
+func requireExistingDelegatedBranchOwnership(execution GitBranchExecution, branch string) error {
+	if execution.Pollen == "" {
+		return nil
+	}
+	pollen := strings.TrimSpace(execution.Pollen)
+	if pollen == "" || pollen != execution.Pollen {
+		return fmt.Errorf("delegated branch ownership requires the exact Pollen identity")
+	}
+	repository := strings.TrimSpace(execution.Repository)
+	if repository == "" || repository != execution.Repository {
+		return fmt.Errorf("delegated branch ownership requires the exact Substrate repository")
+	}
+	owned, ok := delegatedOwnedRef(repository, branch, pollen)
+	if !ok || owned.Repository != filepath.Clean(repository) || owned.Branch != branch || owned.Pollen != pollen ||
+		owned.Purpose != PurposeDelegatedWorkspace || owned.Pending || strings.TrimSpace(owned.Base) == "" {
+		return fmt.Errorf("delegated branch refused: existing branch %q is not finalized delegated ownership for this exact Pollen", branch)
+	}
+	return nil
 }
 
 func createGitBranch(ctx context.Context, execution GitBranchExecution, branch, previous, baseOID string) (GitBranchResult, error) {

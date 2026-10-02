@@ -262,3 +262,14 @@ func OwnedRefsFor(repository string) []OwnedRef {
 	}
 	return out
 }
+
+func pendingDelegatedOwnedRefsFor(repository, pollen string) []OwnedRef {
+	repository = filepath.Clean(repository)
+	var out []OwnedRef
+	for _, ref := range OwnedRefsFor(repository) {
+		if ref.Pending && ref.Purpose == PurposeDelegatedWorkspace && ref.Pollen == pollen {
+			out = append(out, ref)
+		}
+	}
+	return out
+}

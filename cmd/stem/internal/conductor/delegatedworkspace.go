@@ -85,12 +85,71 @@ func AbandonDelegatedWorkspace(ctx context.Context, target DelegatedWorkspaceTar
 	// before removal. Any failed identity or worktree check refuses destruction.
 	report, err := inspectDelegatedWorkspaceUnlocked(ctx, target, path)
 	if err != nil {
+		if _, recoveryErr := reconcilePendingDelegatedWorkspaceOwnership(ctx, target, path, DelegatedWorkspaceReport{}); recoveryErr != nil {
+			return DelegatedWorkspaceAbandonment{}, fmt.Errorf("inspect delegated workspace: %v; retire unproven pending ownership: %w", err, recoveryErr)
+		}
 		return DelegatedWorkspaceAbandonment{}, err
 	}
 	if !report.WorkspaceVerified {
+		if _, recoveryErr := reconcilePendingDelegatedWorkspaceOwnership(ctx, target, path, report); recoveryErr != nil {
+			return DelegatedWorkspaceAbandonment{}, fmt.Errorf("delegated workspace ownership could not be verified; retire unproven pending ownership: %w", recoveryErr)
+		}
 		return DelegatedWorkspaceAbandonment{}, fmt.Errorf("delegated workspace ownership could not be verified; nothing was removed")
 	}
+	reconciled, err := reconcilePendingDelegatedWorkspaceOwnership(ctx, target, path, report)
+	if err != nil {
+		return DelegatedWorkspaceAbandonment{}, err
+	}
+	if reconciled {
+		// Report the exact post-recovery ownership state, then make the
+		// separately confirmed worktree-removal decision from that snapshot.
+		report, err = inspectDelegatedWorkspaceUnlocked(ctx, target, path)
+		if err != nil {
+			return DelegatedWorkspaceAbandonment{}, err
+		}
+		if !report.WorkspaceVerified {
+			return DelegatedWorkspaceAbandonment{}, fmt.Errorf("delegated workspace ownership could not be reverified after pending ownership recovery; nothing was removed")
+		}
+	}
 	return removeDelegatedWorkspace(ctx, target, report, true)
+}
+
+// reconcilePendingDelegatedWorkspaceOwnership is deliberately part of the
+// confirmed Botanist abandonment lifecycle, not read-only inspection. It can
+// finalize only a pending tuple whose exact repository, branch, Pollen, base,
+// branch tip, and verified workspace all still agree. Any other exact pending
+// reservation for this repository/Pollen is retired without touching its ref.
+func reconcilePendingDelegatedWorkspaceOwnership(
+	ctx context.Context,
+	target DelegatedWorkspaceTarget,
+	path string,
+	report DelegatedWorkspaceReport,
+) (bool, error) {
+	pendingRefs := pendingDelegatedOwnedRefsFor(target.Repository, target.Pollen)
+	reconciled := false
+	for _, pending := range pendingRefs {
+		proven := pending.Repository == filepath.Clean(target.Repository) &&
+			pending.Branch == report.CurrentBranch && pending.Pollen == target.Pollen &&
+			pending.Purpose == PurposeDelegatedWorkspace && pending.Pending &&
+			strings.TrimSpace(pending.Base) != "" && report.WorkspaceVerified &&
+			filepath.Clean(report.Repository) == filepath.Clean(target.Repository) &&
+			filepath.Clean(report.Path) == filepath.Clean(path)
+		if proven {
+			tip, tipErr := runGitCommitCommandFn(ctx, target.Repository, "rev-parse", "--verify", "--end-of-options", "refs/heads/"+pending.Branch+"^{commit}")
+			proven = tipErr == nil && strings.TrimSpace(tip) == pending.Base && report.Head == pending.Base
+		}
+		if proven {
+			finalized := pending
+			finalized.Pending = false
+			if err := finalizeDelegatedOwnedRef(finalized); err != nil {
+				return reconciled, fmt.Errorf("recover exact pending ownership for branch %q: %w", pending.Branch, err)
+			}
+		} else if err := forgetPendingDelegatedOwnedRef(pending); err != nil {
+			return reconciled, fmt.Errorf("retire unproven pending ownership for branch %q without changing the branch: %w", pending.Branch, err)
+		}
+		reconciled = true
+	}
+	return reconciled, nil
 }
 
 func delegatedWorkspacePath(target DelegatedWorkspaceTarget) (string, error) {
@@ -283,6 +342,11 @@ func removeDelegatedWorkspace(ctx context.Context, target DelegatedWorkspaceTarg
 	if !ownedFound {
 		result.BranchPreserved = true
 		result.BranchReason = "Stem ownership of this exact repository/branch/delegated-purpose/Pollen tuple is not proven"
+		return result, nil
+	}
+	if owned.RetainEmpty {
+		result.BranchPreserved = true
+		result.BranchReason = "explicitly selected delegated branch is retained after workspace abandonment"
 		return result, nil
 	}
 	deletion := ReclaimDelegatedWorkspaceOwnedRef(
