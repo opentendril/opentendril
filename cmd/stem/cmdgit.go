@@ -197,7 +197,11 @@ func gitOperationsForConfig(substratesConfig *conductor.SubstratesConfig) core.G
 			if err != nil {
 				return core.GitApplyResult{}, err
 			}
-			defer conductor.LockWorkspace(workspace.Path)()
+			unlock, err := conductor.LockWorkspacePortable(ctx, workspace.Path)
+			if err != nil {
+				return core.GitApplyResult{}, err
+			}
+			defer unlock()
 
 			if substrateSpec == nil {
 				return core.GitApplyResult{}, fmt.Errorf("git.apply requires a configured named Substrate")
@@ -224,7 +228,11 @@ func gitOperationsForConfig(substratesConfig *conductor.SubstratesConfig) core.G
 			if err != nil {
 				return core.GitCommitResult{}, err
 			}
-			defer conductor.LockWorkspace(workspace.Path)()
+			unlock, err := conductor.LockWorkspacePortable(ctx, workspace.Path)
+			if err != nil {
+				return core.GitCommitResult{}, err
+			}
+			defer unlock()
 
 			// The credential carries the commit identity and signing config; a
 			// bare path input resolves to an empty credential, which the
@@ -259,7 +267,11 @@ func gitOperationsForConfig(substratesConfig *conductor.SubstratesConfig) core.G
 			if err != nil {
 				return core.GitPushResult{}, err
 			}
-			defer conductor.LockWorkspace(workspace.Path)()
+			unlock, err := conductor.LockWorkspacePortable(ctx, workspace.Path)
+			if err != nil {
+				return core.GitPushResult{}, err
+			}
+			defer unlock()
 
 			credential, _, _, err := gitSubstrateSettings(substrateSpec, substratesConfig)
 			if err != nil {
@@ -282,7 +294,11 @@ func gitOperationsForConfig(substratesConfig *conductor.SubstratesConfig) core.G
 			if err != nil {
 				return core.GitPRResult{}, err
 			}
-			defer conductor.LockWorkspace(workspace.Path)()
+			unlock, err := conductor.LockWorkspacePortable(ctx, workspace.Path)
+			if err != nil {
+				return core.GitPRResult{}, err
+			}
+			defer unlock()
 
 			credential, _, _, err := gitSubstrateSettings(substrateSpec, substratesConfig)
 			if err != nil {
@@ -344,7 +360,11 @@ func gitOperationsForConfig(substratesConfig *conductor.SubstratesConfig) core.G
 			if err != nil {
 				return core.GitStatusResult{}, err
 			}
-			defer conductor.LockWorkspace(workspace.Path)()
+			unlock, err := conductor.LockWorkspacePortable(ctx, workspace.Path)
+			if err != nil {
+				return core.GitStatusResult{}, err
+			}
+			defer unlock()
 
 			_, configuredBranch, allowDefaultBranchCommit, err := gitSubstrateSettings(substrateSpec, substratesConfig)
 			if err != nil {
@@ -397,7 +417,11 @@ func gitOperationsForConfig(substratesConfig *conductor.SubstratesConfig) core.G
 			if err != nil {
 				return core.GitBranchListResult{}, err
 			}
-			defer conductor.LockWorkspace(workspace.Path)()
+			unlock, err := conductor.LockWorkspacePortable(ctx, workspace.Path)
+			if err != nil {
+				return core.GitBranchListResult{}, err
+			}
+			defer unlock()
 
 			credential, configuredBranch, _, err := gitSubstrateSettings(substrateSpec, substratesConfig)
 			if err != nil {
@@ -423,7 +447,11 @@ func gitOperationsForConfig(substratesConfig *conductor.SubstratesConfig) core.G
 			if err != nil {
 				return core.GitPruneResult{}, err
 			}
-			defer conductor.LockWorkspace(workspace.Path)()
+			unlock, err := conductor.LockWorkspacePortable(ctx, workspace.Path)
+			if err != nil {
+				return core.GitPruneResult{}, err
+			}
+			defer unlock()
 
 			credential, configuredBranch, _, err := gitSubstrateSettings(substrateSpec, substratesConfig)
 			if err != nil {
@@ -455,7 +483,11 @@ func gitOperationsForConfig(substratesConfig *conductor.SubstratesConfig) core.G
 			if err != nil {
 				return core.GitBranchResult{}, err
 			}
-			defer conductor.LockWorkspace(workspace.Path)()
+			unlock, err := conductor.LockWorkspacePortable(ctx, workspace.Path)
+			if err != nil {
+				return core.GitBranchResult{}, err
+			}
+			defer unlock()
 
 			credential, configuredBranch, _, err := gitSubstrateSettings(substrateSpec, substratesConfig)
 			if err != nil {
@@ -545,7 +577,11 @@ func resolveGitWorkspace(ctx context.Context, substrate string, substratesConfig
 		}
 	}
 
-	resolved, err := conductor.ResolveDelegatedWorkspace(ctx, substrate, workspace, core.PollenFromContext(ctx), credential)
+	configuredBranch := ""
+	if substrateSpec != nil {
+		configuredBranch = substrateSpec.Branch
+	}
+	resolved, err := conductor.ResolveDelegatedWorkspaceWithDefaultBranch(ctx, substrate, workspace, core.PollenFromContext(ctx), credential, configuredBranch)
 	if err != nil {
 		return conductor.DelegatedWorkspace{}, nil, err
 	}
@@ -928,6 +964,8 @@ func toCoreBranchInfos(branches []conductor.GitBranchInfo) []core.GitBranchInfo 
 			Head:           branch.Head,
 			Upstream:       branch.Upstream,
 			Classification: branch.Classification,
+			Current:        branch.Current,
+			FruitState:     branch.FruitState,
 			PullRequest:    branch.PullRequest,
 			Deletable:      branch.Deletable,
 			Reason:         branch.Reason,
@@ -955,7 +993,11 @@ func printGitBranchList(result core.GitBranchListResult) {
 		if branch.Deletable {
 			marker = "✓"
 		}
-		fmt.Fprintf(os.Stderr, " %s %-40s %-22s %s\n", marker, branch.Name, branch.Classification, branch.Reason)
+		classification := branch.Classification
+		if branch.Current || branch.Classification == conductor.BranchCheckedOutElsewhere {
+			classification += " (fruit: " + branch.FruitState + ")"
+		}
+		fmt.Fprintf(os.Stderr, " %s %-40s %-36s %s\n", marker, branch.Name, classification, branch.Reason)
 	}
 }
 

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -220,6 +221,41 @@ func TestBranchListWithoutCredentialVerifiesNothing(t *testing.T) {
 	}
 }
 
+func TestBranchListReportsFruitIndependentlyFromCheckoutOccupancy(t *testing.T) {
+	repo, _ := newLifecycleRepo(t)
+	if _, err := runGitCommand(context.Background(), repo, "checkout", "feat/merged"); err != nil {
+		t.Fatal(err)
+	}
+	result, err := RunGitBranchList(context.Background(), GitBranchListExecution{
+		Workspace: repo, ConfiguredBranch: "trunk", Credential: lifecycleCredential(t),
+	})
+	if err != nil {
+		t.Fatalf("branch list for current branch: %v", err)
+	}
+	current := classificationOf(result, "feat/merged")
+	if current.Classification != BranchCurrent || !current.Current || current.FruitState != FruitStateMerged || current.PullRequest != 101 || current.Deletable {
+		t.Fatalf("current branch state = %+v, want current occupancy plus independently visible merged Fruit and no prune authority", current)
+	}
+	if _, err := runGitCommand(context.Background(), repo, "checkout", "trunk"); err != nil {
+		t.Fatal(err)
+	}
+
+	otherWorkspace := filepath.Join(t.TempDir(), "delegated")
+	if _, err := runGitCommand(context.Background(), repo, "worktree", "add", "--quiet", otherWorkspace, "feat/merged"); err != nil {
+		t.Fatal(err)
+	}
+	result, err = RunGitBranchList(context.Background(), GitBranchListExecution{
+		Workspace: repo, ConfiguredBranch: "trunk", Credential: lifecycleCredential(t),
+	})
+	if err != nil {
+		t.Fatalf("branch list for other-worktree branch: %v", err)
+	}
+	checkedOutElsewhere := classificationOf(result, "feat/merged")
+	if checkedOutElsewhere.Classification != BranchCheckedOutElsewhere || checkedOutElsewhere.FruitState != FruitStateMerged || checkedOutElsewhere.PullRequest != 101 || checkedOutElsewhere.Deletable {
+		t.Fatalf("checked-out-elsewhere state = %+v, want occupancy and merged Fruit reported independently", checkedOutElsewhere)
+	}
+}
+
 // TestPruneReportsByDefaultAndDeletesNothing: the safe path must be the one
 // taken by accident.
 func TestPruneReportsByDefaultAndDeletesNothing(t *testing.T) {
@@ -326,10 +362,10 @@ func TestBranchListCachesLookupsPerCommit(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("branch list: %v", err)
 	}
-	// Five distinct tips exist; the alias shares one, so it must not add a
-	// sixth lookup.
-	if got := forge.lookups - before; got > 5 {
-		t.Fatalf("%d interface lookups for 5 distinct tips — the per-commit cache is not working", got)
+	// Six distinct tips exist, including the current trunk tip; the alias shares
+	// one, so it must not add a seventh lookup.
+	if got := forge.lookups - before; got > 6 {
+		t.Fatalf("%d interface lookups for 6 distinct tips; the per-commit cache is not working", got)
 	}
 }
 

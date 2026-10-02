@@ -54,6 +54,14 @@ const (
 	BranchCheckedOutElsewhere = "checked-out-elsewhere"
 )
 
+// Fruit state is independent from branch occupancy/classification.
+const (
+	FruitStateMerged         = "merged"
+	FruitStateOpen           = "open"
+	FruitStateClosedUnmerged = "closed-unmerged"
+	FruitStateUnverified     = "unverified"
+)
+
 // GitBranchInfo is one local branch and the evidence for its state.
 type GitBranchInfo struct {
 	// Name is the branch name.
@@ -64,6 +72,14 @@ type GitBranchInfo struct {
 	Upstream string
 	// Classification is one of the Branch* constants above.
 	Classification string
+	// Current reports checkout occupancy independently from Fruit state. A
+	// branch can be checked out and still have independently verified merge
+	// evidence; occupancy must not hide that evidence.
+	Current bool
+	// FruitState is the forge state of this exact tip, independent of checkout
+	// occupancy. Values are merged, open, closed-unmerged, or unverified. A
+	// known absence of a pull request is distinguished in Reason.
+	FruitState string
 	// PullRequest is the pull request number the tip belongs to (0 when none
 	// or unknown).
 	PullRequest int
@@ -224,6 +240,7 @@ func RunGitBranchList(ctx context.Context, execution GitBranchListExecution) (Gi
 	// One lookup per distinct tip: several branches often point at the same
 	// commit, and the interface should not be asked twice for one answer.
 	stateBySHA := map[string]forgePullRequestState{}
+	lookupFailedBySHA := map[string]bool{}
 
 	for _, line := range strings.Split(raw, "\n") {
 		fields := strings.Split(strings.TrimRight(line, "\r"), "\t")
@@ -239,25 +256,19 @@ func RunGitBranchList(ctx context.Context, execution GitBranchListExecution) (Gi
 			worktreePath = strings.TrimSpace(fields[3])
 		}
 
-		switch {
-		case info.Name == current:
-			info.Classification = BranchCurrent
-			info.Reason = "checked out here"
-		case resolution.IsProtected(info.Name):
-			info.Classification = BranchDefault
-			info.Reason = fmt.Sprintf("the repository's default branch (%s)", resolution.Describe())
-		case worktreePath != "":
-			info.Classification = BranchCheckedOutElsewhere
-			info.Reason = fmt.Sprintf("checked out in another workspace (%s) — another Pollinator may be working on it", worktreePath)
-		case !result.Verified:
-			info.Classification = BranchUnverified
-			info.Reason = "merge state could not be established (the connection has no GitHub API credential) — nothing is deletable without evidence"
-		default:
+		info.Current = info.Name == current
+		var fruitReason string
+		fruitClassification := BranchUnverified
+		if !result.Verified {
+			info.FruitState = FruitStateUnverified
+			fruitReason = "merge state could not be established (the connection has no GitHub API credential)"
+		} else {
 			state, ok := stateBySHA[info.Head]
 			if !ok {
 				fetched, lookupErr := lookupPullRequestForCommit(ctx, owner, repo, info.Head, token)
 				if lookupErr != nil {
 					state = forgePullRequestState{}
+					lookupFailedBySHA[info.Head] = true
 				} else {
 					state = fetched
 				}
@@ -267,7 +278,10 @@ func RunGitBranchList(ctx context.Context, execution GitBranchListExecution) (Gi
 			// was closed without merging, which the commit lookup misses.
 			// This can only make the answer more cautious, never less.
 			if state.Known && state.Number == 0 {
-				if byHead, headErr := lookupPullRequestsForHead(ctx, owner, repo, info.Name, token); headErr == nil && byHead.Number > 0 {
+				byHead, headErr := lookupPullRequestsForHead(ctx, owner, repo, info.Name, token)
+				if headErr != nil {
+					lookupFailedBySHA[info.Head] = true
+				} else if byHead.Number > 0 {
 					state.Number = byHead.Number
 					state.State = byHead.State
 				}
@@ -275,23 +289,50 @@ func RunGitBranchList(ctx context.Context, execution GitBranchListExecution) (Gi
 
 			info.PullRequest = state.Number
 			switch {
+			case lookupFailedBySHA[info.Head]:
+				info.FruitState = FruitStateUnverified
+				fruitClassification = BranchUnverified
+				fruitReason = "forge lookup failed; merge and PR state remain unverified"
 			case !state.Known:
-				info.Classification = BranchUnpushed
-				info.Reason = "its tip commit is unknown to the remote — this is local-only work that no remote check can vouch for"
+				info.FruitState = FruitStateUnverified
+				fruitClassification = BranchUnpushed
+				fruitReason = "its tip commit is unknown to the remote; no remote check can vouch for this local-only work"
 			case state.Merged:
-				info.Classification = BranchMerged
-				info.Deletable = true
-				info.Reason = fmt.Sprintf("pull request %d merged", state.Number)
+				info.FruitState = FruitStateMerged
+				fruitClassification = BranchMerged
+				fruitReason = fmt.Sprintf("pull request %d merged", state.Number)
 			case state.Number > 0 && strings.EqualFold(state.State, "closed"):
-				info.Classification = BranchPullRequestClosed
-				info.Reason = fmt.Sprintf("pull request %d was closed WITHOUT merging — this is rejected work, and its commits may exist nowhere else", state.Number)
+				info.FruitState = FruitStateClosedUnmerged
+				fruitClassification = BranchPullRequestClosed
+				fruitReason = fmt.Sprintf("pull request %d was closed WITHOUT merging; this is rejected work and its commits may exist nowhere else", state.Number)
 			case state.Number > 0:
-				info.Classification = BranchPullRequestOpen
-				info.Reason = fmt.Sprintf("pull request %d is still open", state.Number)
+				info.FruitState = FruitStateOpen
+				fruitClassification = BranchPullRequestOpen
+				fruitReason = fmt.Sprintf("pull request %d is still open", state.Number)
 			default:
-				info.Classification = BranchNoPullRequest
-				info.Reason = "its tip is known to the remote but belongs to no pull request"
+				info.FruitState = FruitStateUnverified
+				fruitClassification = BranchNoPullRequest
+				fruitReason = "the forge confirms this tip has no pull request; merged state is unverified"
 			}
+		}
+
+		// Occupancy affects whether a branch can be pruned, but it is not Fruit
+		// evidence. Keep the historical occupancy classifications while
+		// exposing the independently established FruitState and PullRequest.
+		switch {
+		case info.Current:
+			info.Classification = BranchCurrent
+			info.Reason = "checked out here; " + fruitReason
+		case resolution.IsProtected(info.Name):
+			info.Classification = BranchDefault
+			info.Reason = fmt.Sprintf("the repository's default branch (%s); %s", resolution.Describe(), fruitReason)
+		case worktreePath != "":
+			info.Classification = BranchCheckedOutElsewhere
+			info.Reason = fmt.Sprintf("checked out in another workspace (%s); another Pollinator may be working on it; %s", worktreePath, fruitReason)
+		default:
+			info.Classification = fruitClassification
+			info.Reason = fruitReason
+			info.Deletable = fruitClassification == BranchMerged
 		}
 
 		result.Branches = append(result.Branches, info)

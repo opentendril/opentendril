@@ -3,6 +3,7 @@ package conductor
 import (
 	"context"
 	"fmt"
+	"path/filepath"
 	"strings"
 )
 
@@ -257,6 +258,165 @@ func ReclaimOwnedRef(ctx context.Context, repository string, ref OwnedRef, crede
 	outcome.Reclaimed = true
 	_ = ForgetOwnedRef(repository, ref.Branch)
 	return outcome
+}
+
+// ReclaimDelegatedWorkspaceOwnedRef is the lifecycle authority for deleting
+// the exact branch attached to an explicitly abandoned delegated workspace.
+// The caller supplies the inspected branch tip and Fruit state; this function
+// rechecks ownership, no-unique-work or merged evidence, default-branch
+// protection, and checkout occupancy before deletion.
+func ReclaimDelegatedWorkspaceOwnedRef(
+	ctx context.Context,
+	repository string,
+	ref OwnedRef,
+	expectedHead string,
+	fruitState string,
+	configuredBranch string,
+	credential ResolvedCredential,
+) ReclaimOutcome {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	outcome := ReclaimOutcome{Branch: ref.Branch}
+	repository = strings.TrimSpace(repository)
+	if repository == "" || strings.TrimSpace(ref.Branch) == "" || strings.TrimSpace(expectedHead) == "" || ref.Pending || ref.Purpose != PurposeDelegatedWorkspace || strings.TrimSpace(ref.Pollen) == "" || filepath.Clean(ref.Repository) != filepath.Clean(repository) {
+		outcome.Reason = "exact delegated-workspace ownership and branch-tip evidence are required"
+		return outcome
+	}
+	if fruitState == FruitStateOpen || fruitState == FruitStateClosedUnmerged {
+		outcome.Reason = "branch Fruit is open or closed-unmerged and remains available for review"
+		return outcome
+	}
+
+	ownedNow, ok := exactDelegatedOwnedRef(repository, ref)
+	if !ok {
+		outcome.Reason = "exact delegated-workspace ownership changed before reclamation"
+		return outcome
+	}
+	head, err := runGitCommitCommandFn(ctx, repository, "rev-parse", "--verify", "--end-of-options", "refs/heads/"+ref.Branch+"^{commit}")
+	if err != nil || strings.TrimSpace(head) != expectedHead {
+		outcome.Reason = "branch tip changed or could not be verified before reclamation"
+		return outcome
+	}
+
+	defaultBranch := ResolveDefaultBranch(ctx, repository, configuredBranch, credential)
+	if !defaultBranch.Known() {
+		outcome.Reason = "repository default branch is unknown; branch deletion is refused"
+		return outcome
+	}
+	if defaultBranch.IsProtected(ref.Branch) {
+		outcome.Reason = "branch is the resolved default branch"
+		return outcome
+	}
+
+	noUniqueWork := branchHasNoWork(ctx, repository, ref)
+	if !noUniqueWork {
+		if fruitState != FruitStateMerged {
+			outcome.Reason = "branch contains unique Fruit without verified merged evidence"
+			return outcome
+		}
+		merged, reason := ownedRefIsMerged(ctx, repository, ref, credential)
+		if !merged {
+			outcome.Reason = reason
+			return outcome
+		}
+		outcome.Reason = reason
+	} else {
+		outcome.Reason = "branch has no commits beyond its recorded base"
+	}
+
+	if current, currentErr := runGitCommitCommandFn(ctx, repository, "branch", "--show-current"); currentErr != nil {
+		outcome.Reason = "current branch occupancy could not be revalidated"
+		return outcome
+	} else if strings.TrimSpace(current) == ref.Branch {
+		outcome.Reason = "branch remains checked out in the Substrate"
+		return outcome
+	}
+	checkedOut, occupancyErr := runGitCommitCommandFn(ctx, repository, "for-each-ref", "--format=%(worktreepath)", "refs/heads/"+ref.Branch)
+	if occupancyErr != nil {
+		outcome.Reason = "branch checkout occupancy could not be revalidated"
+		return outcome
+	}
+	if strings.TrimSpace(checkedOut) != "" {
+		outcome.Reason = "branch remains checked out in another workspace"
+		return outcome
+	}
+
+	// Revalidate the tuple and tip immediately before the destructive ref
+	// update, after any forge lookup has completed.
+	ownedNow, ok = exactDelegatedOwnedRef(repository, ref)
+	if !ok || ownedNow.Base != ref.Base || ownedNow.Pollen != ref.Pollen {
+		outcome.Reason = "exact delegated-workspace ownership changed before branch deletion"
+		return outcome
+	}
+	latestHead, headErr := runGitCommitCommandFn(ctx, repository, "rev-parse", "--verify", "--end-of-options", "refs/heads/"+ref.Branch+"^{commit}")
+	if headErr != nil || strings.TrimSpace(latestHead) != expectedHead {
+		outcome.Reason = "branch tip changed before branch deletion"
+		return outcome
+	}
+	latestNoUniqueWork := branchHasNoWork(ctx, repository, ref)
+	if !latestNoUniqueWork {
+		if fruitState != FruitStateMerged {
+			outcome.Reason = "branch gained unique Fruit before branch deletion"
+			return outcome
+		}
+		merged, reason := ownedRefIsMerged(ctx, repository, ref, credential)
+		if !merged {
+			outcome.Reason = reason
+			return outcome
+		}
+		outcome.Reason = reason
+	}
+	latestDefault := ResolveDefaultBranch(ctx, repository, configuredBranch, credential)
+	if !latestDefault.Known() {
+		outcome.Reason = "repository default branch became unknown before branch deletion"
+		return outcome
+	}
+	if latestDefault.IsProtected(ref.Branch) {
+		outcome.Reason = "branch became protected as the resolved default before deletion"
+		return outcome
+	}
+	current, currentErr := runGitCommitCommandFn(ctx, repository, "branch", "--show-current")
+	if currentErr != nil {
+		outcome.Reason = "current branch occupancy could not be revalidated before deletion"
+		return outcome
+	}
+	if strings.TrimSpace(current) == ref.Branch {
+		outcome.Reason = "branch became checked out in the Substrate before deletion"
+		return outcome
+	}
+	checkedOut, occupancyErr = runGitCommitCommandFn(ctx, repository, "for-each-ref", "--format=%(worktreepath)", "refs/heads/"+ref.Branch)
+	if occupancyErr != nil {
+		outcome.Reason = "branch checkout occupancy could not be revalidated before deletion"
+		return outcome
+	}
+	if strings.TrimSpace(checkedOut) != "" {
+		outcome.Reason = "branch became checked out in another workspace before deletion"
+		return outcome
+	}
+	if _, err := runGitCommitCommandFn(ctx, repository, "branch", "-D", ref.Branch); err != nil {
+		outcome.Reason = fmt.Sprintf("reclamation failed: %v", err)
+		return outcome
+	}
+	outcome.Reclaimed = true
+	if err := ForgetOwnedRef(repository, ref.Branch); err != nil {
+		outcome.Reason = fmt.Sprintf("branch was deleted but ownership retirement failed: %v", err)
+		return outcome
+	}
+	if outcome.Reason == "" {
+		outcome.Reason = "verified merged branch reclaimed"
+	}
+	return outcome
+}
+
+func exactDelegatedOwnedRef(repository string, expected OwnedRef) (OwnedRef, bool) {
+	for _, ref := range OwnedRefsFor(repository) {
+		if ref.Branch == expected.Branch && ref.Purpose == PurposeDelegatedWorkspace &&
+			ref.Pollen == expected.Pollen && ref.Base == expected.Base && !ref.Pending {
+			return ref, true
+		}
+	}
+	return OwnedRef{}, false
 }
 
 // ownedRefIsMerged asks the forge whether the branch's tip belongs to a merged

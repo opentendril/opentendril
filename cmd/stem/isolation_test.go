@@ -50,6 +50,8 @@ func newIsolationSubstrate(t *testing.T) (name, path string) {
 	} {
 		gitRun(t, repo, args...)
 	}
+	gitRun(t, repo, "update-ref", "refs/remotes/origin/trunk", "HEAD")
+	gitRun(t, repo, "symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/trunk")
 	t.Setenv("HOME", t.TempDir())
 	return "shared", repo
 }
@@ -294,12 +296,10 @@ func TestOwnedWorkspaceBranchIsRegistered(t *testing.T) {
 	}
 }
 
-// TestWorkspaceBranchRotatesWhenFinished: a Pollinator returning to its workspace
-// after its work landed starts from the current default branch, rather than
-// piling the next task onto a branch that is already merged. A workspace whose
-// branch holds unmerged commits is left strictly alone — that is work in
-// progress, and resetting it would destroy exactly what this design protects.
-func TestWorkspaceBranchRotatesWhenFinished(t *testing.T) {
+// TestWorkspaceBranchRotatesWhenEmptyAndContinuesActiveWork: an empty workspace
+// starts from the current default branch, while active unmerged work continues
+// on the same delegated branch rather than being treated as a new task.
+func TestWorkspaceBranchRotatesWhenEmptyAndContinuesActiveWork(t *testing.T) {
 	name, path := newIsolationSubstrate(t)
 	ctx := pollenContext("claude")
 
@@ -329,7 +329,8 @@ func TestWorkspaceBranchRotatesWhenFinished(t *testing.T) {
 		t.Fatalf("workspace head = %s, want it rebuilt on the current default %s", head, movedHead)
 	}
 
-	// Now the Pollinator has unmerged work: the workspace must be left alone.
+	// Now the Pollinator has unmerged work. A later governed call for the same
+	// identity continues the existing workspace without rotating or discarding it.
 	if err := os.WriteFile(filepath.Join(again.Path, "wip.txt"), []byte("in progress\n"), 0o644); err != nil {
 		t.Fatalf("write: %v", err)
 	}
@@ -339,11 +340,14 @@ func TestWorkspaceBranchRotatesWhenFinished(t *testing.T) {
 
 	gitRun(t, path, "commit", "--allow-empty", "-m", "default moves again")
 
-	third, err := conductor.ResolveDelegatedWorkspace(ctx, name, path, "claude", conductor.ResolvedCredential{})
+	continued, err := conductor.ResolveDelegatedWorkspace(ctx, name, path, "claude", conductor.ResolvedCredential{})
 	if err != nil {
-		t.Fatalf("third resolve: %v", err)
+		t.Fatalf("continue delegated workspace with active unique work: %v", err)
 	}
-	if head := gitRun(t, third.Path, "rev-parse", "HEAD"); head != workHead {
-		t.Fatalf("workspace head = %s, want the subject's unmerged work %s left untouched", head, workHead)
+	if continued.Path != again.Path || continued.Branch != again.Branch {
+		t.Fatalf("active workspace continuation = %+v, want same path %s and branch %s", continued, again.Path, again.Branch)
+	}
+	if head := gitRun(t, continued.Path, "rev-parse", "HEAD"); head != workHead {
+		t.Fatalf("continued workspace head = %s, want the subject's unmerged work %s preserved", head, workHead)
 	}
 }

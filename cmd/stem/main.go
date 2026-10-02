@@ -112,6 +112,8 @@ func main() {
 		runFruitCmd(ctx, os.Args[2:])
 	case "git":
 		runGitCmd(ctx, os.Args[2:])
+	case "workspace":
+		runWorkspaceCmd(ctx, os.Args[2:])
 	case "substrate":
 		runSubstrateCmd(ctx, os.Args[2:])
 	case "pollinator":
@@ -176,6 +178,7 @@ func printUsage() {
 	fmt.Printf("  %-11s  %s\n", "seed", "Grow a Seed: build toward a goal until a verify command passes")
 	fmt.Printf("  %-11s  %s\n", "fruit", "Observe the Botanist's deterministic Fruit review inventory")
 	fmt.Printf("  %-11s  %s\n", "git", "Commit a substrate's workspace under its configured commit identity")
+	fmt.Printf("  %-11s  %s\n", "workspace", "Inspect or explicitly abandon a Botanist-owned delegated workspace")
 	fmt.Printf("  %-11s  %s\n", "substrate", "List, inspect, add, update, or verify Substrate configuration")
 	fmt.Printf("  %-11s  %s\n", "terrarium", "Manage execution terrarium environments")
 	fmt.Printf("  %-11s  %s\n", "health", "Run infrastructure health diagnostics")

@@ -72,7 +72,14 @@ func TestResolveExistingGitApplyWorkspaceRequiresNamedConfiguredSubstrateAndPoll
 	if err := os.MkdirAll(filepath.Dir(workspacePath), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	runGitApplyTestGit(t, repository, "worktree", "add", "-q", "-b", "feature/apply", workspacePath, head)
+	branch := "tendril/pollen-one/work"
+	runGitApplyTestGit(t, repository, "worktree", "add", "-q", "-b", branch, workspacePath, head)
+	if err := conductor.RegisterOwnedRef(conductor.OwnedRef{
+		Repository: repository, Branch: branch, Purpose: conductor.PurposeDelegatedWorkspace,
+		Pollen: "pollen-one", Base: head,
+	}); err != nil {
+		t.Fatal(err)
+	}
 	config := &conductor.SubstratesConfig{Substrates: map[string]conductor.SubstrateSpec{
 		"demo": {Checkout: conductor.CheckoutSpec{Mode: "path", Path: repository}},
 	}}
@@ -91,6 +98,85 @@ func TestResolveExistingGitApplyWorkspaceRequiresNamedConfiguredSubstrateAndPoll
 	}
 	if _, _, err := resolveExistingGitApplyWorkspace(context.Background(), "demo", config); err == nil {
 		t.Fatal("git.apply resolved without a trusted Pollen")
+	}
+}
+
+func TestDelegatedGitApplyStatusCommitContinuesSameWorkspace(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	repository := t.TempDir()
+	runGitApplyTestGit(t, repository, "init", "-q", "-b", "main")
+	if err := os.WriteFile(filepath.Join(repository, "base.txt"), []byte("before\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	runGitApplyTestGit(t, repository, "add", "base.txt")
+	runGitApplyTestGit(t, repository, "commit", "-q", "-m", "base")
+	baseHead := runGitApplyTestGit(t, repository, "rev-parse", "HEAD")
+	runGitApplyTestGit(t, repository, "update-ref", "refs/remotes/origin/main", baseHead)
+	runGitApplyTestGit(t, repository, "symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/main")
+
+	config := &conductor.SubstratesConfig{Substrates: map[string]conductor.SubstrateSpec{
+		"demo": {
+			Path: repository, Branch: "main",
+			Identity: conductor.IdentitySpec{Name: "Delegated Test", Email: "delegated@example.invalid"},
+		},
+	}}
+	service := core.NewService(nil).WithGit(gitOperationsForConfig(config))
+	ctx := core.WithPollen(context.Background(), "pollen-one")
+	initial, err := service.GitStatus(ctx, core.GitStatusInput{Substrate: "demo"})
+	if err != nil {
+		t.Fatalf("initial delegated git.status: %v", err)
+	}
+	if !initial.Isolated || initial.Pollen != "pollen-one" || initial.Workspace == repository || initial.Head != baseHead {
+		t.Fatalf("initial status = %+v, want the exact Pollen's isolated workspace at base HEAD", initial)
+	}
+
+	patchSource := filepath.Join(t.TempDir(), "source")
+	clone := exec.Command("git", "clone", "-q", repository, patchSource)
+	if output, err := clone.CombinedOutput(); err != nil {
+		t.Fatalf("clone apply patch source: %v (%s)", err, output)
+	}
+	if err := os.WriteFile(filepath.Join(patchSource, "base.txt"), []byte("after apply\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	patchCommand := exec.Command("git", "-C", patchSource, "diff", "--binary", "--")
+	patch, err := patchCommand.Output()
+	if err != nil {
+		t.Fatal(err)
+	}
+	applyCtx := core.WithAuthorizedDelegationRequest(ctx, core.DelegationRequest{
+		Pollen: "pollen-one", OperationClass: core.CapGitApply, Substrate: "demo", Impact: core.CapabilityImpact(core.CapGitApply),
+	})
+	applied, err := service.GitApply(applyCtx, core.GitApplyInput{
+		Substrate: "demo", ExpectedHead: baseHead, Patch: string(patch),
+	})
+	if err != nil {
+		t.Fatalf("delegated git.apply: %v", err)
+	}
+	if applied.Status != "applied" || applied.Branch != initial.Branch || applied.Head != baseHead {
+		t.Fatalf("apply result = %+v, want changes on the original workspace branch and HEAD", applied)
+	}
+
+	beforeCommit, err := service.GitStatus(ctx, core.GitStatusInput{Substrate: "demo"})
+	if err != nil {
+		t.Fatalf("git.status after apply: %v", err)
+	}
+	if beforeCommit.Workspace != initial.Workspace || beforeCommit.Pollen != initial.Pollen || beforeCommit.Branch != initial.Branch || beforeCommit.Clean || beforeCommit.ChangeCount != 1 {
+		t.Fatalf("status after apply = %+v, want the same dirty delegated workspace", beforeCommit)
+	}
+
+	committed, err := service.GitCommit(ctx, core.GitCommitInput{Substrate: "demo", Message: "apply and commit delegated change"})
+	if err != nil {
+		t.Fatalf("git.commit after apply/status: %v", err)
+	}
+	if committed.Status != "committed" || committed.CommitHash == "" {
+		t.Fatalf("commit result = %+v, want a new commit", committed)
+	}
+	afterCommit, err := service.GitStatus(ctx, core.GitStatusInput{Substrate: "demo"})
+	if err != nil {
+		t.Fatalf("git.status after commit: %v", err)
+	}
+	if afterCommit.Workspace != initial.Workspace || afterCommit.Pollen != initial.Pollen || afterCommit.Branch != initial.Branch || afterCommit.Head != committed.CommitHash || !afterCommit.Clean {
+		t.Fatalf("status after commit = %+v, want same Pollen workspace, branch, committed HEAD, and clean state", afterCommit)
 	}
 }
 

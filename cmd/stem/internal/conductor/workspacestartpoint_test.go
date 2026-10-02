@@ -87,10 +87,9 @@ func TestStartPointPrefersDefaultBranchOverASiblingCheckout(t *testing.T) {
 	}
 }
 
-// The gap this change closes. With no origin/HEAD record the default branch is
-// undetermined, and the floor is what stops the answer becoming HEAD — which
-// here is the sibling branch.
-func TestStartPointUsesTheFloorWhenTheDefaultBranchIsUndetermined(t *testing.T) {
+// When no configured/API/remote-head default can be resolved, a sibling HEAD
+// is not an acceptable substitute: fresh delegated work fails closed.
+func TestStartPointFailsWhenTheDefaultBranchIsUndetermined(t *testing.T) {
 	dir, defaultCommit, siblingCommit := repoWithSiblingBranch(t, "main")
 	stubFetch(t)
 
@@ -99,29 +98,19 @@ func TestStartPointUsesTheFloorWhenTheDefaultBranchIsUndetermined(t *testing.T) 
 		t.Fatalf("precondition failed: default branch resolved to %q, so this test is not exercising the undetermined path", resolution.Branch)
 	}
 
-	got, err := workspaceStartPoint(context.Background(), dir)
-	if err != nil {
-		t.Fatalf("workspaceStartPoint: %v", err)
-	}
-	if got == siblingCommit {
-		t.Fatalf("undetermined default branch fell through to HEAD on the sibling branch")
-	}
-	if got != defaultCommit {
-		t.Errorf("start point = %s, want the floor branch commit %s", got, defaultCommit)
+	if _, err := workspaceStartPoint(context.Background(), dir); err == nil {
+		t.Fatalf("undetermined default branch started from %s (default candidate %s, sibling %s)", gitIn(t, dir, "rev-parse", "HEAD"), defaultCommit, siblingCommit)
 	}
 }
 
-// A repository whose only branch is named outside the floor still works: HEAD is
-// genuinely the only commit available, and refusing would break a legitimate
-// single-branch substrate.
-func TestStartPointStillResolvesASingleBranchRepositoryOutsideTheFloor(t *testing.T) {
+func TestStartPointUsesAnExplicitlyConfiguredDefault(t *testing.T) {
 	stubFetch(t)
 	dir := t.TempDir()
 	gitIn(t, dir, "init", "-q", "-b", "trunk")
 	gitIn(t, dir, "commit", "-q", "--allow-empty", "-m", "only")
 	want := gitIn(t, dir, "rev-parse", "HEAD")
 
-	got, err := workspaceStartPoint(context.Background(), dir)
+	got, err := workspaceStartPointFor(context.Background(), dir, "trunk", ResolvedCredential{})
 	if err != nil {
 		t.Fatalf("workspaceStartPoint: %v", err)
 	}

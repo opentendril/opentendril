@@ -80,7 +80,7 @@ func newDelegatedAPIGitFixture(t *testing.T, remoteFeature string) *delegatedAPI
 	}
 	baseOID = strings.TrimSpace(baseOID)
 
-	workspace, err := ResolveDelegatedWorkspace(ctx, "demo", repository, "codex", ResolvedCredential{})
+	workspace, err := ResolveDelegatedWorkspaceWithDefaultBranch(ctx, "demo", repository, "codex", ResolvedCredential{}, "main")
 	if err != nil {
 		t.Fatalf("resolve delegated workspace: %v", err)
 	}
