@@ -1093,6 +1093,13 @@ func RunGitPullRequest(ctx context.Context, execution GitPRExecution) (GitPRResu
 type GitBranchExecution struct {
 	// Workspace is the resolved local workspace directory.
 	Workspace string
+	// Repository is the Substrate checkout that owns Workspace. It is required
+	// with Pollen so a newly created branch can be recorded against the exact
+	// repository identity.
+	Repository string
+	// Pollen is the authenticated Pollinator identity. Empty for non-delegated
+	// calls, which do not participate in delegated branch ownership.
+	Pollen string
 	// Branch is the branch to create and switch to.
 	Branch string
 	// FromDefault requests a new branch from the exact local origin default
@@ -1194,13 +1201,13 @@ func RunGitBranch(ctx context.Context, execution GitBranchExecution) (GitBranchR
 		if err != nil || strings.TrimSpace(baseOID) == "" {
 			return GitBranchResult{}, fmt.Errorf("delegated branch refused: local %s does not resolve to a commit; run git.fetch before requesting fromDefault", defaultRef)
 		}
-		if _, err := runGitCommitCommandFn(ctx, execution.Workspace, "checkout", "-b", branch, strings.TrimSpace(baseOID)); err != nil {
-			return GitBranchResult{}, err
-		}
-		return GitBranchResult{Status: "created", Branch: branch, PreviousBranch: previous}, nil
+		return createGitBranch(ctx, execution, branch, previous, strings.TrimSpace(baseOID))
 	}
 
 	if previous == branch {
+		if err := requireExistingDelegatedBranchOwnership(execution, branch); err != nil {
+			return GitBranchResult{}, err
+		}
 		return GitBranchResult{Status: "switched", Branch: branch, PreviousBranch: previous}, nil
 	}
 
@@ -1214,6 +1221,9 @@ func RunGitBranch(ctx context.Context, execution GitBranchExecution) (GitBranchR
 	// would either fail on conflicting files or silently carry the changes
 	// somewhere the caller did not intend.
 	if exists {
+		if err := requireExistingDelegatedBranchOwnership(execution, branch); err != nil {
+			return GitBranchResult{}, err
+		}
 		status, err := runGitCommandRawOutput(ctx, execution.Workspace, "status", "--porcelain", "-uall", "-z")
 		if err != nil {
 			return GitBranchResult{}, err
@@ -1227,10 +1237,112 @@ func RunGitBranch(ctx context.Context, execution GitBranchExecution) (GitBranchR
 		return GitBranchResult{Status: "switched", Branch: branch, PreviousBranch: previous}, nil
 	}
 
-	if _, err := runGitCommitCommandFn(ctx, execution.Workspace, "checkout", "-b", branch); err != nil {
+	baseOID, err := runGitCommitCommandFn(ctx, execution.Workspace, "rev-parse", "--verify", "HEAD^{commit}")
+	if err != nil || strings.TrimSpace(baseOID) == "" {
+		return GitBranchResult{}, fmt.Errorf("delegated branch refused: current workspace HEAD does not resolve to a commit")
+	}
+	return createGitBranch(ctx, execution, branch, previous, strings.TrimSpace(baseOID))
+}
+
+func requireExistingDelegatedBranchOwnership(execution GitBranchExecution, branch string) error {
+	if execution.Pollen == "" {
+		return nil
+	}
+	pollen := strings.TrimSpace(execution.Pollen)
+	if pollen == "" || pollen != execution.Pollen {
+		return fmt.Errorf("delegated branch ownership requires the exact Pollen identity")
+	}
+	repository := strings.TrimSpace(execution.Repository)
+	if repository == "" || repository != execution.Repository {
+		return fmt.Errorf("delegated branch ownership requires the exact Substrate repository")
+	}
+	owned, ok := delegatedOwnedRef(repository, branch, pollen)
+	if !ok || owned.Repository != filepath.Clean(repository) || owned.Branch != branch || owned.Pollen != pollen ||
+		owned.Purpose != PurposeDelegatedWorkspace || owned.Pending || strings.TrimSpace(owned.Base) == "" {
+		return fmt.Errorf("delegated branch refused: existing branch %q is not finalized delegated ownership for this exact Pollen", branch)
+	}
+	return nil
+}
+
+func createGitBranch(ctx context.Context, execution GitBranchExecution, branch, previous, baseOID string) (GitBranchResult, error) {
+	reservation, err := reserveDelegatedBranchOwnership(ctx, execution, branch, baseOID)
+	if err != nil {
 		return GitBranchResult{}, err
 	}
-	return GitBranchResult{Status: "created", Branch: branch, PreviousBranch: previous}, nil
+
+	if _, err := runGitCommitCommandFn(ctx, execution.Workspace, "checkout", "-b", branch, baseOID); err != nil {
+		if reservation == nil {
+			return GitBranchResult{}, err
+		}
+		ref, inspectErr := runGitCommitCommandFn(ctx, execution.Workspace, "for-each-ref", "--format=%(refname)", "refs/heads/"+branch)
+		if inspectErr != nil {
+			return GitBranchResult{}, fmt.Errorf("create delegated branch %q: %v; branch state could not be verified, so its pending ownership reservation was preserved: %w", branch, err, inspectErr)
+		}
+		if strings.TrimSpace(ref) != "" {
+			return GitBranchResult{}, fmt.Errorf("create delegated branch %q: %v; the ref exists but its ownership reservation remains pending and is not reclaimable", branch, err)
+		}
+		if forgetErr := forgetPendingDelegatedOwnedRef(*reservation); forgetErr != nil {
+			return GitBranchResult{}, fmt.Errorf("create delegated branch %q: %v; the ref is absent but its pending ownership reservation could not be cleared: %w", branch, err, forgetErr)
+		}
+		return GitBranchResult{}, err
+	}
+
+	result := GitBranchResult{Status: "created", Branch: branch, PreviousBranch: previous}
+	if reservation == nil {
+		return result, nil
+	}
+
+	owned := *reservation
+	owned.Pending = false
+	if err := finalizeDelegatedOwnedRef(owned); err != nil {
+		return GitBranchResult{}, fmt.Errorf("delegated branch %q was created and checked out, but exact Stem ownership could not be finalized; the branch remains on this workspace and its pending reservation is preserved: %w", branch, err)
+	}
+	if _, ok := delegatedOwnedRef(owned.Repository, owned.Branch, owned.Pollen); !ok {
+		return GitBranchResult{}, fmt.Errorf("delegated branch %q was created and checked out, but exact Stem ownership could not be verified; the branch remains on this workspace", branch)
+	}
+	return result, nil
+}
+
+func reserveDelegatedBranchOwnership(ctx context.Context, execution GitBranchExecution, branch, baseOID string) (*OwnedRef, error) {
+	pollen := strings.TrimSpace(execution.Pollen)
+	if pollen == "" {
+		return nil, nil
+	}
+	if pollen != execution.Pollen {
+		return nil, fmt.Errorf("delegated branch ownership requires the exact Pollen identity")
+	}
+	repository := strings.TrimSpace(execution.Repository)
+	if repository == "" || repository != execution.Repository {
+		return nil, fmt.Errorf("delegated branch ownership requires the exact Substrate repository")
+	}
+	if strings.TrimSpace(baseOID) == "" {
+		return nil, fmt.Errorf("delegated branch ownership requires the exact branch base commit")
+	}
+	repositoryCommonDir, err := resolveGitCommonDir(ctx, repository)
+	if err != nil {
+		return nil, fmt.Errorf("verify delegated branch repository: %w", err)
+	}
+	workspaceCommonDir, err := resolveGitCommonDir(ctx, execution.Workspace)
+	if err != nil {
+		return nil, fmt.Errorf("verify delegated branch workspace: %w", err)
+	}
+	if repositoryCommonDir != workspaceCommonDir {
+		return nil, fmt.Errorf("delegated branch workspace does not belong to the exact Substrate repository")
+	}
+
+	reservation := OwnedRef{
+		Repository:  filepath.Clean(repository),
+		Branch:      branch,
+		Purpose:     PurposeDelegatedWorkspace,
+		Pollen:      pollen,
+		Base:        strings.TrimSpace(baseOID),
+		Pending:     true,
+		RetainEmpty: true,
+	}
+	if err := reserveDelegatedOwnedRef(reservation); err != nil {
+		return nil, fmt.Errorf("reserve exact delegated ownership for branch %q: %w", branch, err)
+	}
+	return &reservation, nil
 }
 
 const (

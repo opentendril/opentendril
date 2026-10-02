@@ -63,6 +63,11 @@ type OwnedRef struct {
 	// Pending marks a reservation made before the linked worktree exists. The
 	// reaper leaves it alone during this short allocation window.
 	Pending bool `json:"pending,omitempty"`
+	// RetainEmpty keeps an explicitly selected delegated branch available for
+	// continuation while it is still at its recorded base. Automatically
+	// allocated workspace branches leave this false and retain their existing
+	// no-work reclamation lifecycle.
+	RetainEmpty bool `json:"retainEmpty,omitempty"`
 	// CreatedAt records when, so an operator can see the age of anything left
 	// behind.
 	CreatedAt time.Time `json:"createdAt"`
@@ -138,6 +143,93 @@ func RegisterOwnedRef(ref OwnedRef) error {
 	return saveOwnedRefs(append(refs, ref))
 }
 
+// reserveDelegatedOwnedRef records an exact delegated-branch allocation
+// before the Git mutation. Pending records are deliberately not ownership
+// proof and cannot be reclaimed; they preserve the lifecycle intent if the
+// branch is created but final registration cannot be completed.
+func reserveDelegatedOwnedRef(ref OwnedRef) error {
+	if strings.TrimSpace(ref.Repository) == "" || strings.TrimSpace(ref.Branch) == "" ||
+		strings.TrimSpace(ref.Pollen) == "" || strings.TrimSpace(ref.Base) == "" ||
+		ref.Purpose != PurposeDelegatedWorkspace || !ref.Pending {
+		return fmt.Errorf("a delegated ownership reservation needs an exact repository, branch, Pollen, base, purpose, and pending state")
+	}
+	if ref.Repository != strings.TrimSpace(ref.Repository) || ref.Branch != strings.TrimSpace(ref.Branch) || ref.Pollen != strings.TrimSpace(ref.Pollen) {
+		return fmt.Errorf("delegated ownership identifiers must be supplied exactly, without surrounding whitespace")
+	}
+	ref.Repository = filepath.Clean(ref.Repository)
+	if ref.CreatedAt.IsZero() {
+		ref.CreatedAt = time.Now().UTC()
+	}
+
+	ownedRefsMu.Lock()
+	defer ownedRefsMu.Unlock()
+
+	refs := loadOwnedRefs()
+	for _, existing := range refs {
+		if existing.Repository == ref.Repository && existing.Branch == ref.Branch {
+			return fmt.Errorf("branch %q already has recorded ownership; it will not be transferred", ref.Branch)
+		}
+	}
+	return saveOwnedRefs(append(refs, ref))
+}
+
+// finalizeDelegatedOwnedRef turns only the exact pending reservation into
+// ownership. A changed or missing reservation fails closed, and an atomic
+// save failure leaves the pending record available for recovery.
+func finalizeDelegatedOwnedRef(ref OwnedRef) error {
+	if strings.TrimSpace(ref.Repository) == "" || strings.TrimSpace(ref.Branch) == "" ||
+		strings.TrimSpace(ref.Pollen) == "" || strings.TrimSpace(ref.Base) == "" ||
+		ref.Purpose != PurposeDelegatedWorkspace || ref.Pending {
+		return fmt.Errorf("a delegated ownership finalization needs an exact non-pending repository, branch, Pollen, base, and purpose")
+	}
+	ref.Repository = filepath.Clean(ref.Repository)
+
+	ownedRefsMu.Lock()
+	defer ownedRefsMu.Unlock()
+
+	refs := loadOwnedRefs()
+	for i, existing := range refs {
+		if existing.Repository != ref.Repository || existing.Branch != ref.Branch {
+			continue
+		}
+		if !existing.Pending || existing.Purpose != ref.Purpose || existing.Pollen != ref.Pollen || existing.Base != ref.Base || existing.RetainEmpty != ref.RetainEmpty {
+			return fmt.Errorf("delegated ownership reservation for branch %q changed before finalization", ref.Branch)
+		}
+		ref.CreatedAt = existing.CreatedAt
+		refs[i] = ref
+		return saveOwnedRefs(refs)
+	}
+	return fmt.Errorf("delegated ownership reservation for branch %q is absent", ref.Branch)
+}
+
+// forgetPendingDelegatedOwnedRef removes only the exact reservation for a
+// branch that Git confirms was not created. It cannot erase finalized or
+// differently attributed ownership.
+func forgetPendingDelegatedOwnedRef(ref OwnedRef) error {
+	if strings.TrimSpace(ref.Repository) == "" || strings.TrimSpace(ref.Branch) == "" ||
+		strings.TrimSpace(ref.Pollen) == "" || strings.TrimSpace(ref.Base) == "" ||
+		ref.Purpose != PurposeDelegatedWorkspace || !ref.Pending {
+		return fmt.Errorf("an exact pending delegated ownership reservation is required")
+	}
+	ref.Repository = filepath.Clean(ref.Repository)
+
+	ownedRefsMu.Lock()
+	defer ownedRefsMu.Unlock()
+
+	refs := loadOwnedRefs()
+	for i, existing := range refs {
+		if existing.Repository != ref.Repository || existing.Branch != ref.Branch {
+			continue
+		}
+		if !existing.Pending || existing.Purpose != ref.Purpose || existing.Pollen != ref.Pollen || existing.Base != ref.Base || existing.RetainEmpty != ref.RetainEmpty {
+			return fmt.Errorf("delegated ownership reservation for branch %q changed before cleanup", ref.Branch)
+		}
+		refs = append(refs[:i], refs[i+1:]...)
+		return saveOwnedRefs(refs)
+	}
+	return fmt.Errorf("delegated ownership reservation for branch %q is absent", ref.Branch)
+}
+
 // ForgetOwnedRef drops a reference from the registry, after it has been
 // reclaimed or once it is no longer Tendril's responsibility.
 func ForgetOwnedRef(repository, branch string) error {
@@ -165,6 +257,17 @@ func OwnedRefsFor(repository string) []OwnedRef {
 	var out []OwnedRef
 	for _, ref := range loadOwnedRefs() {
 		if ref.Repository == repository {
+			out = append(out, ref)
+		}
+	}
+	return out
+}
+
+func pendingDelegatedOwnedRefsFor(repository, pollen string) []OwnedRef {
+	repository = filepath.Clean(repository)
+	var out []OwnedRef
+	for _, ref := range OwnedRefsFor(repository) {
+		if ref.Pending && ref.Purpose == PurposeDelegatedWorkspace && ref.Pollen == pollen {
 			out = append(out, ref)
 		}
 	}

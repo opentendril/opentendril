@@ -281,6 +281,79 @@ func TestAbandonPreservesUnownedBranchAndFreshResolutionAvoidsCollision(t *testi
 	}
 }
 
+func TestBotanistAbandonRetiresUnprovenPendingReservationAndPreservesBranch(t *testing.T) {
+	repository, path, workspace := newDelegatedWorkspaceLifecycleFixture(t)
+	pending, ok := delegatedOwnedRef(repository, workspace.Branch, "pollen")
+	if !ok {
+		t.Fatal("fixture workspace branch was not owned")
+	}
+	if err := ForgetOwnedRef(repository, workspace.Branch); err != nil {
+		t.Fatalf("replace fixture ownership with pending reservation: %v", err)
+	}
+	pending.Pending = true
+	if err := reserveDelegatedOwnedRef(pending); err != nil {
+		t.Fatalf("reserve exact pending ownership: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(path, "unproven.txt"), []byte("branch state to preserve\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	gitIn(t, path, "add", "unproven.txt")
+	gitIn(t, path, "commit", "-q", "-m", "advance pending branch")
+
+	result, err := AbandonDelegatedWorkspace(context.Background(), DelegatedWorkspaceTarget{
+		Pollen: "pollen", Substrate: "demo", Repository: repository, ConfiguredBranch: "main",
+	}, true)
+	if err != nil {
+		t.Fatalf("abandon workspace with unproven pending ownership: %v", err)
+	}
+	if result.Report.CurrentBranch != workspace.Branch || result.Report.BranchOwned ||
+		!result.WorktreeRemoved || !result.BranchPreserved || result.BranchDeleted {
+		t.Fatalf("recovery outcome = %+v, want exact pending retired and unproven branch preserved", result)
+	}
+	if _, err := os.Stat(path); !os.IsNotExist(err) {
+		t.Fatalf("workspace still exists after abandonment: %v", err)
+	}
+	if !branchExists(t, repository, workspace.Branch) {
+		t.Fatal("unproven branch was deleted while retiring its pending reservation")
+	}
+	for _, ref := range OwnedRefsFor(repository) {
+		if ref.Branch == workspace.Branch && ref.Pending {
+			t.Fatalf("unproven pending reservation survived Botanist recovery: %+v", ref)
+		}
+	}
+}
+
+func TestBotanistAbandonRetiresPendingWhenWorkspaceEvidenceIsUnavailable(t *testing.T) {
+	repository, path, workspace := newDelegatedWorkspaceLifecycleFixture(t)
+	pending, ok := delegatedOwnedRef(repository, workspace.Branch, "pollen")
+	if !ok {
+		t.Fatal("fixture workspace branch was not owned")
+	}
+	if err := ForgetOwnedRef(repository, workspace.Branch); err != nil {
+		t.Fatalf("replace fixture ownership with pending reservation: %v", err)
+	}
+	pending.Pending = true
+	if err := reserveDelegatedOwnedRef(pending); err != nil {
+		t.Fatalf("reserve exact pending ownership: %v", err)
+	}
+	gitIn(t, repository, "worktree", "remove", "--force", path)
+
+	_, err := AbandonDelegatedWorkspace(context.Background(), DelegatedWorkspaceTarget{
+		Pollen: "pollen", Substrate: "demo", Repository: repository, ConfiguredBranch: "main",
+	}, true)
+	if err == nil {
+		t.Fatal("abandonment succeeded without exact workspace evidence")
+	}
+	if branch := branchExists(t, repository, workspace.Branch); !branch {
+		t.Fatal("unproven branch was changed while retiring its pending reservation")
+	}
+	for _, ref := range OwnedRefsFor(repository) {
+		if ref.Branch == workspace.Branch && ref.Pending {
+			t.Fatalf("pending reservation survived recovery without workspace evidence: %+v", ref)
+		}
+	}
+}
+
 func TestAbandonRequiresExactTargetAndConfirmation(t *testing.T) {
 	repository, path, workspace := newDelegatedWorkspaceLifecycleFixture(t)
 	target := DelegatedWorkspaceTarget{Pollen: "pollen", Substrate: "demo", Repository: repository, ConfiguredBranch: "main"}

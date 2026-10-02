@@ -131,6 +131,180 @@ func TestRunGitBranchCreatesAndSwitches(t *testing.T) {
 	}
 }
 
+func TestRunGitBranchRecordsOwnershipOnlyForNewDelegatedBranch(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	ctx := context.Background()
+	repo := newBranchRepo(t, "feat/base", "trunk")
+	base := branchOID(t, repo, "HEAD")
+
+	result, err := RunGitBranch(ctx, GitBranchExecution{
+		Workspace: repo, Repository: repo, Pollen: "pollen-one", Branch: "feat/new-owned",
+	})
+	if err != nil {
+		t.Fatalf("create delegated branch: %v", err)
+	}
+	if result.Status != "created" {
+		t.Fatalf("result = %+v, want created", result)
+	}
+	owned, ok := delegatedOwnedRef(repo, "feat/new-owned", "pollen-one")
+	if !ok || owned.Repository != filepath.Clean(repo) || owned.Purpose != PurposeDelegatedWorkspace || owned.Base != base || owned.Pending || !owned.RetainEmpty {
+		t.Fatalf("new branch ownership = %+v, want exact finalized repository/Pollen/base ownership", owned)
+	}
+}
+
+func TestRunGitBranchSwitchesToSamePollenOwnedExistingBranch(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	ctx := context.Background()
+	repo := newBranchRepo(t, "feat/base", "trunk")
+	if _, err := runGitCommand(ctx, repo, "branch", "feat/pre-existing"); err != nil {
+		t.Fatalf("create pre-existing branch: %v", err)
+	}
+	base := branchOID(t, repo, "refs/heads/feat/pre-existing")
+	ownedBefore := OwnedRef{
+		Repository: repo, Branch: "feat/pre-existing", Purpose: PurposeDelegatedWorkspace,
+		Pollen: "pollen-one", Base: base,
+	}
+	if err := RegisterOwnedRef(ownedBefore); err != nil {
+		t.Fatalf("register same-Pollen ownership: %v", err)
+	}
+
+	result, err := RunGitBranch(ctx, GitBranchExecution{
+		Workspace: repo, Repository: repo, Pollen: "pollen-one", Branch: "feat/pre-existing",
+	})
+	if err != nil {
+		t.Fatalf("switch to same-Pollen-owned existing branch: %v", err)
+	}
+	if result.Status != "switched" {
+		t.Fatalf("result = %+v, want switched", result)
+	}
+	if currentBranch(t, repo) != "feat/pre-existing" {
+		t.Fatal("same-Pollen-owned existing branch was not checked out")
+	}
+	ownedAfter, ok := delegatedOwnedRef(repo, "feat/pre-existing", "pollen-one")
+	if !ok || ownedAfter.Repository != ownedBefore.Repository || ownedAfter.Branch != ownedBefore.Branch ||
+		ownedAfter.Pollen != ownedBefore.Pollen || ownedAfter.Base != ownedBefore.Base ||
+		ownedAfter.Purpose != ownedBefore.Purpose || ownedAfter.Pending {
+		t.Fatalf("existing ownership = %+v, want the original finalized tuple unchanged", ownedAfter)
+	}
+}
+
+func TestRunGitBranchRefusesUnownedExistingBranchBeforeCheckout(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	repo := newBranchRepo(t, "feat/base", "trunk")
+	if _, err := runGitCommand(context.Background(), repo, "branch", "feat/unowned"); err != nil {
+		t.Fatalf("create unowned branch: %v", err)
+	}
+
+	_, err := RunGitBranch(context.Background(), GitBranchExecution{
+		Workspace: repo, Repository: repo, Pollen: "pollen-one", Branch: "feat/unowned",
+	})
+	if err == nil || !strings.Contains(err.Error(), "not finalized delegated ownership") {
+		t.Fatalf("switch error = %v, want refusal of unowned existing branch", err)
+	}
+	if got := currentBranch(t, repo); got != "feat/base" {
+		t.Fatalf("workspace moved to %q before refusing unowned branch; want feat/base", got)
+	}
+	if _, ok := delegatedOwnedRef(repo, "feat/unowned", "pollen-one"); ok {
+		t.Fatal("refusal invented ownership for the current Pollen")
+	}
+}
+
+func TestRunGitBranchRefusesOtherPollenOwnedExistingBranchBeforeCheckout(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	repo := newBranchRepo(t, "feat/base", "trunk")
+	if _, err := runGitCommand(context.Background(), repo, "branch", "feat/pre-existing"); err != nil {
+		t.Fatalf("create pre-existing branch: %v", err)
+	}
+	base := branchOID(t, repo, "refs/heads/feat/pre-existing")
+	otherPollen := OwnedRef{
+		Repository: repo, Branch: "feat/pre-existing", Purpose: PurposeDelegatedWorkspace,
+		Pollen: "other-pollen", Base: base,
+	}
+	if err := RegisterOwnedRef(otherPollen); err != nil {
+		t.Fatalf("register other Pollen ownership: %v", err)
+	}
+
+	_, err := RunGitBranch(context.Background(), GitBranchExecution{
+		Workspace: repo, Repository: repo, Pollen: "pollen-one", Branch: "feat/pre-existing",
+	})
+	if err == nil || !strings.Contains(err.Error(), "not finalized delegated ownership") {
+		t.Fatalf("switch error = %v, want refusal of other-Pollen-owned existing branch", err)
+	}
+	if got := currentBranch(t, repo); got != "feat/base" {
+		t.Fatalf("workspace moved to %q before refusing other-Pollen branch; want feat/base", got)
+	}
+	if _, ok := delegatedOwnedRef(repo, "feat/pre-existing", "pollen-one"); ok {
+		t.Fatal("refusal invented ownership for the current Pollen")
+	}
+	owned, ok := delegatedOwnedRef(repo, "feat/pre-existing", "other-pollen")
+	if !ok || owned.Pollen != otherPollen.Pollen || owned.Base != otherPollen.Base {
+		t.Fatalf("existing ownership = %+v, want original other-Pollen ownership unchanged", owned)
+	}
+}
+
+func TestRunGitBranchFinalizationFailureRecoversThroughBotanistAbandonment(t *testing.T) {
+	repository, workspacePath, _ := newDelegatedWorkspaceLifecycleFixture(t)
+	branch := "feat/ownership-finalization-failure"
+	blockedTempPath := ownedRefsPath() + ".tmp"
+	originalRun := runGitCommitCommandFn
+	runGitCommitCommandFn = func(ctx context.Context, dir string, args ...string) (string, error) {
+		output, err := originalRun(ctx, dir, args...)
+		if err == nil && dir == workspacePath && len(args) >= 3 && args[0] == "checkout" && args[1] == "-b" && args[2] == branch {
+			if mkdirErr := os.Mkdir(blockedTempPath, 0o700); mkdirErr != nil {
+				return "", mkdirErr
+			}
+		}
+		return output, err
+	}
+	defer func() { runGitCommitCommandFn = originalRun }()
+
+	_, err := RunGitBranch(context.Background(), GitBranchExecution{
+		Workspace: workspacePath, Repository: repository, Pollen: "pollen", Branch: branch,
+	})
+	if err == nil || !strings.Contains(err.Error(), "pending reservation is preserved") {
+		t.Fatalf("branch creation error = %v, want fail-closed finalization error with preserved reservation", err)
+	}
+	if current := currentBranch(t, workspacePath); current != branch {
+		t.Fatalf("workspace branch = %q, want created branch retained for recovery", current)
+	}
+	owned, ok := ownedRefForBranch(repository, branch)
+	if !ok || !owned.Pending || !owned.RetainEmpty || owned.Purpose != PurposeDelegatedWorkspace || owned.Pollen != "pollen" || owned.Base == "" {
+		t.Fatalf("failed registration state = %+v, want exact pending, non-reclaimable ownership reservation", owned)
+	}
+	if _, err := ResolveDelegatedWorkspaceWithModeAndDefaultBranch(context.Background(), "demo", repository, "pollen", ResolvedCredential{}, ExistingDelegatedWorkspaceOnly, "main"); err == nil {
+		t.Fatal("workspace continued after ownership finalization failed")
+	}
+	if err := os.RemoveAll(blockedTempPath); err != nil {
+		t.Fatalf("remove injected finalization failure: %v", err)
+	}
+
+	recovery, err := AbandonDelegatedWorkspace(context.Background(), DelegatedWorkspaceTarget{
+		Pollen: "pollen", Substrate: "demo", Repository: repository, ConfiguredBranch: "main",
+	}, true)
+	if err != nil {
+		t.Fatalf("recover pending ownership through confirmed Botanist abandonment: %v", err)
+	}
+	if recovery.Report.CurrentBranch != branch || !recovery.Report.BranchOwned || !recovery.Report.WorkspaceVerified ||
+		!recovery.WorktreeRemoved || !recovery.BranchPreserved || recovery.BranchDeleted {
+		t.Fatalf("recovery outcome = %+v, want exact ownership finalized, worktree removed, and branch preserved", recovery)
+	}
+	if _, err := os.Stat(workspacePath); !os.IsNotExist(err) {
+		t.Fatalf("workspace still exists after recovery abandonment: %v", err)
+	}
+	if !branchExists(t, repository, branch) {
+		t.Fatal("Botanist recovery deleted the branch whose pending ownership it reconciled")
+	}
+	ownedAfterRecovery, ok := delegatedOwnedRef(repository, branch, "pollen")
+	if !ok || ownedAfterRecovery.Pending || ownedAfterRecovery.Base != owned.Base {
+		t.Fatalf("ownership after recovery = %+v, want exact finalized reservation with the recorded base", ownedAfterRecovery)
+	}
+	for _, ref := range OwnedRefsFor(repository) {
+		if ref.Branch == branch && ref.Pending {
+			t.Fatalf("pending reservation survived supported recovery: %+v", ref)
+		}
+	}
+}
+
 func TestRunGitBranchFromDefaultUsesExactOriginCommit(t *testing.T) {
 	ctx := context.Background()
 	repo := newBranchRepo(t, "feat/old", "main")

@@ -496,6 +496,8 @@ func gitOperationsForConfig(substratesConfig *conductor.SubstratesConfig) core.G
 
 			result, err := conductor.RunGitBranch(ctx, conductor.GitBranchExecution{
 				Workspace:        workspace.Path,
+				Repository:       workspace.Repository,
+				Pollen:           workspace.Pollen,
 				Branch:           spec.Branch,
 				FromDefault:      spec.FromDefault,
 				ConfiguredBranch: configuredBranch,
