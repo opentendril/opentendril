@@ -58,10 +58,7 @@ func InspectDelegatedWorkspace(ctx context.Context, target DelegatedWorkspaceTar
 	if err != nil {
 		return DelegatedWorkspaceReport{}, err
 	}
-	unlock, err := LockWorkspaceContext(ctx, path)
-	if err != nil {
-		return DelegatedWorkspaceReport{}, fmt.Errorf("lock delegated workspace: %w", err)
-	}
+	unlock := LockWorkspace(path)
 	defer unlock()
 	return inspectDelegatedWorkspaceUnlocked(ctx, target, path)
 }
@@ -285,46 +282,16 @@ func removeDelegatedWorkspace(ctx context.Context, target DelegatedWorkspaceTarg
 		result.BranchReason = "Stem ownership of this exact repository/branch/delegated-purpose/Pollen tuple is not proven"
 		return result, nil
 	}
-	if report.FruitState == FruitStateOpen || report.FruitState == FruitStateClosedUnmerged {
+	deletion := ReclaimDelegatedWorkspaceOwnedRef(
+		ctx, target.Repository, owned, report.Head, report.FruitState,
+		target.ConfiguredBranch, target.Credential,
+	)
+	if !deletion.Reclaimed {
 		result.BranchPreserved = true
-		result.BranchReason = "branch Fruit has an open or closed-unmerged pull request; its reviewable reference remains available"
-		return result, nil
-	}
-	if report.UniqueWorkKnown && report.UniqueWork && report.FruitState != FruitStateMerged {
-		result.BranchPreserved = true
-		result.BranchReason = "branch contains committed Fruit not verified merged; it remains available for review"
-		return result, nil
-	}
-	if !report.UniqueWorkKnown && report.FruitState != FruitStateMerged {
-		result.BranchPreserved = true
-		result.BranchReason = "branch work could not be proven empty or merged; it remains available for review"
-		return result, nil
-	}
-	defaultBranch := ResolveDefaultBranch(ctx, target.Repository, target.ConfiguredBranch, target.Credential)
-	if defaultBranch.IsProtected(report.CurrentBranch) {
-		result.BranchPreserved = true
-		result.BranchReason = "the branch is protected as the resolved default"
-		return result, nil
-	}
-	checkedOut, err := runGitCommitCommandFn(ctx, target.Repository, "for-each-ref", "--format=%(worktreepath)", "refs/heads/"+report.CurrentBranch)
-	if err != nil {
-		result.BranchPreserved = true
-		result.BranchReason = "branch checkout occupancy could not be revalidated"
-		return result, nil
-	}
-	if strings.TrimSpace(checkedOut) != "" {
-		result.BranchPreserved = true
-		result.BranchReason = "branch remains checked out in another workspace"
-		return result, nil
-	}
-	if _, err := runGitCommitCommandFn(ctx, target.Repository, "branch", "-D", owned.Branch); err != nil {
-		result.BranchPreserved = true
-		result.BranchReason = "branch deletion failed and the reference record was retained"
+		result.BranchReason = deletion.Reason
 		return result, nil
 	}
 	result.BranchDeleted = true
-	if err := ForgetOwnedRef(target.Repository, owned.Branch); err != nil {
-		return result, fmt.Errorf("branch was deleted but its OwnedRef lifecycle record could not be retired: %w", err)
-	}
+	result.BranchReason = deletion.Reason
 	return result, nil
 }

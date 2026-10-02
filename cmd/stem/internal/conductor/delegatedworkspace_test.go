@@ -2,6 +2,7 @@ package conductor
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
@@ -79,6 +80,13 @@ func TestOpenFruitPreventsAutomaticReclamationEvenForEmptyOwnedBranch(t *testing
 	if report.FruitState != FruitStateOpen || report.AutoReclaimable {
 		t.Fatalf("open-Fruit workspace = %+v, want independently visible open Fruit and no automatic reclamation", report)
 	}
+	continued, err := ResolveDelegatedWorkspaceWithDefaultBranch(context.Background(), "demo", repository, "pollen", lifecycleCredential(t), "main")
+	if err != nil {
+		t.Fatalf("continue open-Fruit workspace: %v", err)
+	}
+	if continued.Path != workspace.Path || continued.Branch != workspace.Branch {
+		t.Fatalf("open-Fruit continuation = %+v, want the same reviewable workspace", continued)
+	}
 	result, err := AbandonDelegatedWorkspace(context.Background(), DelegatedWorkspaceTarget{
 		Pollen: "pollen", Substrate: "demo", Repository: repository, ConfiguredBranch: "main",
 		Credential: lifecycleCredential(t),
@@ -119,7 +127,7 @@ func TestResolveDelegatedWorkspaceReclaimsOnlyCleanEmptyWorkAndUsesFreshDefault(
 	}
 }
 
-func TestDirtyIgnoredWorkspaceIsNeverAutomaticallyReclaimed(t *testing.T) {
+func TestDirtyIgnoredWorkspaceContinuesWithoutAutomaticReclamation(t *testing.T) {
 	repository, path, workspace := newDelegatedWorkspaceLifecycleFixture(t)
 	exclude := gitIn(t, path, "rev-parse", "--git-path", "info/exclude")
 	if !filepath.IsAbs(exclude) {
@@ -146,8 +154,12 @@ func TestDirtyIgnoredWorkspaceIsNeverAutomaticallyReclaimed(t *testing.T) {
 	if !report.CleanKnown || report.Clean || report.AutoReclaimable {
 		t.Fatalf("ignored workspace state = %+v, want dirty and retained", report)
 	}
-	if _, err := ResolveDelegatedWorkspaceWithDefaultBranch(context.Background(), "demo", repository, "pollen", ResolvedCredential{}, "main"); err == nil {
-		t.Fatal("dirty retained workspace was silently reused")
+	continued, err := ResolveDelegatedWorkspaceWithDefaultBranch(context.Background(), "demo", repository, "pollen", ResolvedCredential{}, "main")
+	if err != nil {
+		t.Fatalf("continue dirty active workspace: %v", err)
+	}
+	if continued.Path != path || continued.Branch != workspace.Branch {
+		t.Fatalf("dirty workspace continuation = %+v, want same exact workspace and branch", continued)
 	}
 	if _, err := os.Stat(path); err != nil {
 		t.Fatalf("dirty retained workspace was removed: %v", err)
@@ -160,9 +172,84 @@ func TestDirtyIgnoredWorkspaceIsNeverAutomaticallyReclaimed(t *testing.T) {
 	}
 }
 
+func TestTerminalMergedWorkspaceIsReclaimedOnlyWhenClean(t *testing.T) {
+	t.Run("clean merged Fruit is reclaimed", func(t *testing.T) {
+		repository, path, _ := newDelegatedWorkspaceLifecycleFixture(t)
+		gitIn(t, repository, "remote", "add", "origin", "https://github.com/owner/repo.git")
+		if err := os.WriteFile(filepath.Join(path, "work.txt"), []byte("merged work\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		gitIn(t, path, "add", "work.txt")
+		gitIn(t, path, "commit", "-q", "-m", "merged work")
+		mergedHead := gitIn(t, path, "rev-parse", "HEAD")
+		newFakeForge(t, &fakeForge{byCommit: map[string][]map[string]any{
+			mergedHead: {{"number": 301, "state": "closed", "merged_at": "2026-10-01T00:00:00Z"}},
+		}, byHead: map[string][]map[string]any{}})
+		originalFetch := runGitFetchCommandFn
+		runGitFetchCommandFn = func(context.Context, string, []string, ...string) (string, error) {
+			return "", errors.New("network disabled in test")
+		}
+		t.Cleanup(func() { runGitFetchCommandFn = originalFetch })
+
+		fresh, err := ResolveDelegatedWorkspaceWithDefaultBranch(context.Background(), "demo", repository, "pollen", lifecycleCredential(t), "main")
+		if err != nil {
+			t.Fatalf("resolve after merged terminal workspace: %v", err)
+		}
+		if fresh.Path != path {
+			t.Fatalf("fresh workspace = %+v, want same isolated path", fresh)
+		}
+		currentDefault := gitIn(t, repository, "rev-parse", "main")
+		if got := gitIn(t, fresh.Path, "rev-parse", "HEAD"); got != currentDefault || got == mergedHead {
+			t.Fatalf("fresh workspace HEAD = %s, want current main", got)
+		}
+		owned, ok := delegatedOwnedRef(repository, fresh.Branch, "pollen")
+		if !ok || owned.Base != currentDefault {
+			t.Fatalf("replacement OwnedRef = %+v, want a new lifecycle record based on current main %s", owned, currentDefault)
+		}
+	})
+
+	t.Run("dirty merged residue blocks normal resolution", func(t *testing.T) {
+		repository, path, workspace := newDelegatedWorkspaceLifecycleFixture(t)
+		gitIn(t, repository, "remote", "add", "origin", "https://github.com/owner/repo.git")
+		if err := os.WriteFile(filepath.Join(path, "work.txt"), []byte("merged work\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		gitIn(t, path, "add", "work.txt")
+		gitIn(t, path, "commit", "-q", "-m", "merged work")
+		mergedHead := gitIn(t, path, "rev-parse", "HEAD")
+		newFakeForge(t, &fakeForge{byCommit: map[string][]map[string]any{
+			mergedHead: {{"number": 302, "state": "closed", "merged_at": "2026-10-01T00:00:00Z"}},
+		}, byHead: map[string][]map[string]any{}})
+		if err := os.WriteFile(filepath.Join(path, "uncommitted.txt"), []byte("preserve until recovery\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+
+		if _, err := ResolveDelegatedWorkspaceWithDefaultBranch(context.Background(), "demo", repository, "pollen", lifecycleCredential(t), "main"); err == nil {
+			t.Fatal("dirty terminal merged workspace was reused")
+		}
+		if _, err := os.Stat(path); err != nil {
+			t.Fatalf("dirty terminal workspace was removed: %v", err)
+		}
+		if branch := gitIn(t, path, "branch", "--show-current"); branch != workspace.Branch {
+			t.Fatalf("dirty terminal workspace branch changed to %s, want %s", branch, workspace.Branch)
+		}
+		if contents, err := os.ReadFile(filepath.Join(path, "uncommitted.txt")); err != nil || string(contents) != "preserve until recovery\n" {
+			t.Fatalf("dirty terminal residue changed: contents %q, error %v", contents, err)
+		}
+	})
+}
+
 func TestAbandonPreservesUnownedBranchAndFreshResolutionAvoidsCollision(t *testing.T) {
 	repository, path, workspace := newDelegatedWorkspaceLifecycleFixture(t)
 	gitIn(t, path, "switch", "-c", "feature/custom")
+	for _, mode := range []DelegatedWorkspaceMode{ExistingDelegatedWorkspaceOnly, CreateDelegatedWorkspaceIfMissing} {
+		if _, err := ResolveDelegatedWorkspaceWithMode(context.Background(), "demo", repository, "pollen", ResolvedCredential{}, mode); err == nil {
+			t.Fatalf("resolver mode %d accepted an unowned branch as this Pollen's workspace", mode)
+		}
+	}
+	if branch := gitIn(t, path, "branch", "--show-current"); branch != "feature/custom" {
+		t.Fatalf("refused unowned workspace changed branch to %s", branch)
+	}
 	result, err := AbandonDelegatedWorkspace(context.Background(), DelegatedWorkspaceTarget{
 		Pollen: "pollen", Substrate: "demo", Repository: repository, ConfiguredBranch: "main",
 	}, true)

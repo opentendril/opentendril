@@ -296,12 +296,10 @@ func TestOwnedWorkspaceBranchIsRegistered(t *testing.T) {
 	}
 }
 
-// TestWorkspaceBranchRotatesWhenFinished: a Pollinator returning to its workspace
-// after its work landed starts from the current default branch, rather than
-// piling the next task onto a branch that is already merged. A workspace whose
-// branch holds unmerged commits is retained but blocked from silent reuse;
-// that work in progress must remain available for review or explicit recovery.
-func TestWorkspaceBranchRotatesWhenFinished(t *testing.T) {
+// TestWorkspaceBranchRotatesWhenEmptyAndContinuesActiveWork: an empty workspace
+// starts from the current default branch, while active unmerged work continues
+// on the same delegated branch rather than being treated as a new task.
+func TestWorkspaceBranchRotatesWhenEmptyAndContinuesActiveWork(t *testing.T) {
 	name, path := newIsolationSubstrate(t)
 	ctx := pollenContext("claude")
 
@@ -331,7 +329,8 @@ func TestWorkspaceBranchRotatesWhenFinished(t *testing.T) {
 		t.Fatalf("workspace head = %s, want it rebuilt on the current default %s", head, movedHead)
 	}
 
-	// Now the Pollinator has unmerged work: the workspace must be left alone.
+	// Now the Pollinator has unmerged work. A later governed call for the same
+	// identity continues the existing workspace without rotating or discarding it.
 	if err := os.WriteFile(filepath.Join(again.Path, "wip.txt"), []byte("in progress\n"), 0o644); err != nil {
 		t.Fatalf("write: %v", err)
 	}
@@ -341,10 +340,14 @@ func TestWorkspaceBranchRotatesWhenFinished(t *testing.T) {
 
 	gitRun(t, path, "commit", "--allow-empty", "-m", "default moves again")
 
-	if _, err := conductor.ResolveDelegatedWorkspace(ctx, name, path, "claude", conductor.ResolvedCredential{}); err == nil {
-		t.Fatal("new delegated resolution silently reused retained unique work")
+	continued, err := conductor.ResolveDelegatedWorkspace(ctx, name, path, "claude", conductor.ResolvedCredential{})
+	if err != nil {
+		t.Fatalf("continue delegated workspace with active unique work: %v", err)
 	}
-	if head := gitRun(t, workspace.Path, "rev-parse", "HEAD"); head != workHead {
-		t.Fatalf("retained workspace head = %s, want the subject's unmerged work %s preserved", head, workHead)
+	if continued.Path != again.Path || continued.Branch != again.Branch {
+		t.Fatalf("active workspace continuation = %+v, want same path %s and branch %s", continued, again.Path, again.Branch)
+	}
+	if head := gitRun(t, continued.Path, "rev-parse", "HEAD"); head != workHead {
+		t.Fatalf("continued workspace head = %s, want the subject's unmerged work %s preserved", head, workHead)
 	}
 }

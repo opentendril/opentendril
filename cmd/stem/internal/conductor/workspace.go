@@ -53,43 +53,68 @@ func sanitizeWorkspaceComponent(value string) string {
 	return cleaned
 }
 
-// workspaceLocks provides fast in-process serialization for operations that
-// target the same workspace. LockWorkspaceContext also guards operations
-// across local Stem processes so they cannot race lifecycle removal against
-// delegated Git use.
+// workspaceLocks serializes operations that target the same workspace within
+// this Stem process. The process guard extends that exclusion across Stem
+// processes on supported platforms.
 var workspaceLocks sync.Map
 
-// LockWorkspace serializes access to one workspace path and returns the
-// release function. Callers defer the release.
-func LockWorkspace(path string) func() {
-	unlock, err := LockWorkspaceContext(context.Background(), path)
-	if err == nil {
-		return unlock
-	}
-	// Legacy callers that cannot return an error still retain in-process
-	// serialization. Destructive lifecycle paths use LockWorkspaceContext and
-	// fail closed if the interprocess guard cannot be acquired.
+var ErrWorkspaceProcessLockUnavailable = errors.New("cross-process workspace locking is unavailable on this platform")
+
+// lockWorkspaceAcrossProcessesFn is the platform guard seam. Ordinary Git
+// calls use it best-effort through LockWorkspacePortable; lifecycle mutation
+// requires it directly before destructive change.
+var lockWorkspaceAcrossProcessesFn = lockWorkspaceAcrossProcesses
+
+func lockWorkspaceInProcess(path string) func() {
 	value, _ := workspaceLocks.LoadOrStore(filepath.Clean(path), &sync.Mutex{})
 	mutex := value.(*sync.Mutex)
 	mutex.Lock()
 	return mutex.Unlock
 }
 
-// LockWorkspaceContext serializes workspace access both within this Stem and
-// across local Stem processes. The process lock avoids unnecessary contention;
-// the OS lock closes the CLI/daemon lifecycle race.
+// LockWorkspace serializes access to one workspace path and returns the
+// release function. It uses cross-process exclusion when available and falls
+// back to the portable in-process guard when the platform has no process lock.
+func LockWorkspace(path string) func() {
+	unlock, err := LockWorkspacePortable(context.Background(), path)
+	if err == nil {
+		return unlock
+	}
+	return lockWorkspaceInProcess(path)
+}
+
+// LockWorkspacePortable is LockWorkspace with a request context. Lack of
+// platform process locking falls back to same-process serialization, but
+// context cancellation still interrupts a wait instead of starting the Git
+// operation after its request has been canceled.
+func LockWorkspacePortable(ctx context.Context, path string) (func(), error) {
+	unlock, err := LockWorkspaceContext(ctx, path)
+	if err == nil {
+		return unlock, nil
+	}
+	if ctx != nil && ctx.Err() != nil {
+		return nil, ctx.Err()
+	}
+	if !errors.Is(err, ErrWorkspaceProcessLockUnavailable) {
+		return nil, err
+	}
+	return lockWorkspaceInProcess(path), nil
+}
+
+// LockWorkspaceContext requires both in-process and cross-process exclusion.
+// Lifecycle destruction calls it directly and fails closed on platforms
+// without a process guard; ordinary Git calls should use LockWorkspacePortable
+// to fall back safely only when that platform capability is unavailable.
 func LockWorkspaceContext(ctx context.Context, path string) (func(), error) {
-	value, _ := workspaceLocks.LoadOrStore(filepath.Clean(path), &sync.Mutex{})
-	mutex := value.(*sync.Mutex)
-	mutex.Lock()
-	unlockOS, err := lockWorkspaceAcrossProcesses(ctx, path)
+	unlockLocal := lockWorkspaceInProcess(path)
+	unlockOS, err := lockWorkspaceAcrossProcessesFn(ctx, path)
 	if err != nil {
-		mutex.Unlock()
+		unlockLocal()
 		return nil, err
 	}
 	return func() {
 		unlockOS()
-		mutex.Unlock()
+		unlockLocal()
 	}, nil
 }
 
@@ -197,30 +222,34 @@ func ResolveDelegatedWorkspaceWithModeAndDefaultBranch(ctx context.Context, subs
 		if rootErr != nil || substrateErr != nil || substrateInfo.Mode()&os.ModeSymlink != 0 || statErr != nil || !info.IsDir() || info.Mode()&os.ModeSymlink != 0 || resolvedErr != nil || !insideWorkspaceRoot || !checkoutHasGitMetadata(path) || !isGitRepo(path) {
 			return DelegatedWorkspace{}, fmt.Errorf("%w for Pollen %q on Substrate %q", ErrDelegatedWorkspaceAbsent, trimmedPollen, substrateName)
 		}
-		unlock, lockErr := LockWorkspaceContext(ctx, path)
-		if lockErr != nil {
-			return DelegatedWorkspace{}, fmt.Errorf("lock delegated workspace: %w", lockErr)
-		}
-		defer unlock()
+		unlock := LockWorkspace(path)
 		report, inspectErr := inspectDelegatedWorkspaceUnlocked(ctx, DelegatedWorkspaceTarget{
 			Pollen: trimmedPollen, Substrate: substrateName, Repository: base,
 			ConfiguredBranch: configuredBranch, Credential: credential,
 		}, path)
 		if inspectErr != nil {
+			unlock()
 			return DelegatedWorkspace{}, fmt.Errorf("retained delegated workspace could not be safely verified: %w", inspectErr)
 		}
-		workspace.Branch = report.CurrentBranch
-		if !report.CleanKnown || !report.Clean || !report.UniqueWorkKnown || report.UniqueWork || report.FruitState == FruitStateOpen || report.FruitState == FruitStateClosedUnmerged || report.FruitState == FruitStateMerged {
-			return DelegatedWorkspace{}, fmt.Errorf("existing delegated workspace is not an empty, reusable workspace; Botanist inspection or recovery is required: %s", report.Reason)
+		if !report.WorkspaceVerified || !report.BranchOwned {
+			unlock()
+			return DelegatedWorkspace{}, fmt.Errorf("existing delegated workspace ownership could not be verified for this Pollen")
 		}
+		workspace.Branch = report.CurrentBranch
+		if report.FruitState == FruitStateMerged {
+			unlock()
+			return DelegatedWorkspace{}, fmt.Errorf("existing delegated workspace contains terminal merged Fruit; recovery is required before git.apply: %s", report.Reason)
+		}
+		unlock()
 		return workspace, nil
 	}
 
 	if isGitRepo(path) {
-		unlockWorkspace, lockErr := LockWorkspaceContext(ctx, path)
-		if lockErr != nil {
-			return DelegatedWorkspace{}, fmt.Errorf("lock delegated workspace: %w", lockErr)
-		}
+		// Hold only the in-process mutex while inspecting. If this workspace
+		// proves reclaimable, the process guard is acquired below and held
+		// through removal and replacement creation. Ordinary Git callers use
+		// LockWorkspacePortable, which also takes that process guard when supported.
+		unlockWorkspace := lockWorkspaceInProcess(path)
 		if !isGitRepo(path) {
 			unlockWorkspace()
 		} else {
@@ -235,29 +264,90 @@ func ResolveDelegatedWorkspaceWithModeAndDefaultBranch(ctx context.Context, subs
 				unlockWorkspace()
 				return DelegatedWorkspace{}, fmt.Errorf("retained delegated workspace could not be safely verified: %w", inspectErr)
 			}
-			if report.AutoReclaimable {
-				resolvedStartPoint, inspectErr = workspaceStartPointFor(ctx, base, configuredBranch, credential)
-				if inspectErr != nil {
-					unlockWorkspace()
-					return DelegatedWorkspace{}, inspectErr
-				}
-				removed, removeErr := removeDelegatedWorkspace(ctx, DelegatedWorkspaceTarget{
-					Pollen: trimmedPollen, Substrate: substrateName, Repository: base,
-					ConfiguredBranch: configuredBranch, Credential: credential,
-				}, report, false)
-				if removeErr != nil {
-					unlockWorkspace()
-					return DelegatedWorkspace{}, fmt.Errorf("safely reclaim retained delegated workspace: %w", removeErr)
-				}
-				if !removed.WorktreeRemoved {
-					unlockWorkspace()
-					return DelegatedWorkspace{}, fmt.Errorf("retained delegated workspace was not removed")
-				}
-			} else {
+			if !report.WorkspaceVerified || !report.BranchOwned {
 				unlockWorkspace()
-				return DelegatedWorkspace{}, fmt.Errorf("retained delegated workspace for Pollen %q on Substrate %q is preserved and not safe to reuse: %s; Botanist inspection or confirmed abandonment is required before new work", trimmedPollen, substrateName, report.Reason)
+				return DelegatedWorkspace{}, fmt.Errorf("retained delegated workspace ownership could not be verified for this Pollen")
 			}
-			unlockWorkspace()
+			workspace.Branch = report.CurrentBranch
+			if report.FruitState == FruitStateMerged && !report.AutoReclaimable {
+				unlockWorkspace()
+				return DelegatedWorkspace{}, fmt.Errorf("terminal merged workspace residue is not clean and requires Botanist recovery: %s", report.Reason)
+			}
+			if !report.AutoReclaimable {
+				// Dirty, unique, open, closed-unmerged, and unverified work is
+				// continuation state for this exact Pollen/Substrate workspace.
+				unlockWorkspace()
+				return workspace, nil
+			}
+
+			// Empty/merged reclamation removes a worktree and may remove its
+			// exact owned branch. Keep the portable in-process guard, then add
+			// the platform process guard only around that destructive boundary.
+			unlockProcess, processErr := lockWorkspaceAcrossProcessesFn(ctx, path)
+			if processErr != nil {
+				unlockWorkspace()
+				if report.FruitState == FruitStateMerged {
+					return DelegatedWorkspace{}, fmt.Errorf("terminal merged workspace cannot be reclaimed safely on this platform: %w", processErr)
+				}
+				// A clean empty workspace contains no unique work. If the
+				// platform lacks process locking, keep it rather than make an
+				// ordinary Git call fail or remove it without exclusion.
+				return workspace, nil
+			}
+
+			report, inspectErr = inspectDelegatedWorkspaceUnlocked(ctx, DelegatedWorkspaceTarget{
+				Pollen: trimmedPollen, Substrate: substrateName, Repository: base,
+				ConfiguredBranch: configuredBranch, Credential: credential,
+			}, path)
+			if inspectErr != nil {
+				unlockProcess()
+				unlockWorkspace()
+				return DelegatedWorkspace{}, fmt.Errorf("retained delegated workspace could not be safely reverified: %w", inspectErr)
+			}
+			if !report.WorkspaceVerified || !report.BranchOwned {
+				unlockProcess()
+				unlockWorkspace()
+				return DelegatedWorkspace{}, fmt.Errorf("retained delegated workspace ownership changed before reclamation")
+			}
+			if report.FruitState == FruitStateMerged && !report.AutoReclaimable {
+				unlockProcess()
+				unlockWorkspace()
+				return DelegatedWorkspace{}, fmt.Errorf("terminal merged workspace residue is not clean and requires Botanist recovery: %s", report.Reason)
+			}
+			if !report.AutoReclaimable {
+				workspace.Branch = report.CurrentBranch
+				unlockProcess()
+				unlockWorkspace()
+				return workspace, nil
+			}
+
+			resolvedStartPoint, inspectErr = workspaceStartPointFor(ctx, base, configuredBranch, credential)
+			if inspectErr != nil {
+				unlockProcess()
+				unlockWorkspace()
+				return DelegatedWorkspace{}, inspectErr
+			}
+			removed, removeErr := removeDelegatedWorkspace(ctx, DelegatedWorkspaceTarget{
+				Pollen: trimmedPollen, Substrate: substrateName, Repository: base,
+				ConfiguredBranch: configuredBranch, Credential: credential,
+			}, report, false)
+			if removeErr != nil {
+				unlockProcess()
+				unlockWorkspace()
+				return DelegatedWorkspace{}, fmt.Errorf("safely reclaim retained delegated workspace: %w", removeErr)
+			}
+			if !removed.WorktreeRemoved {
+				unlockProcess()
+				unlockWorkspace()
+				return DelegatedWorkspace{}, fmt.Errorf("retained delegated workspace was not removed")
+			}
+			unlockExisting := func() {
+				unlockProcess()
+				unlockWorkspace()
+			}
+			// Keep both guards through creation so another process cannot
+			// claim the exact Pollen path between removal and replacement.
+			defer unlockExisting()
 		}
 	}
 

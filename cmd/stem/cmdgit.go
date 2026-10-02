@@ -197,7 +197,7 @@ func gitOperationsForConfig(substratesConfig *conductor.SubstratesConfig) core.G
 			if err != nil {
 				return core.GitApplyResult{}, err
 			}
-			unlock, err := conductor.LockWorkspaceContext(ctx, workspace.Path)
+			unlock, err := conductor.LockWorkspacePortable(ctx, workspace.Path)
 			if err != nil {
 				return core.GitApplyResult{}, err
 			}
@@ -228,7 +228,7 @@ func gitOperationsForConfig(substratesConfig *conductor.SubstratesConfig) core.G
 			if err != nil {
 				return core.GitCommitResult{}, err
 			}
-			unlock, err := conductor.LockWorkspaceContext(ctx, workspace.Path)
+			unlock, err := conductor.LockWorkspacePortable(ctx, workspace.Path)
 			if err != nil {
 				return core.GitCommitResult{}, err
 			}
@@ -267,7 +267,7 @@ func gitOperationsForConfig(substratesConfig *conductor.SubstratesConfig) core.G
 			if err != nil {
 				return core.GitPushResult{}, err
 			}
-			unlock, err := conductor.LockWorkspaceContext(ctx, workspace.Path)
+			unlock, err := conductor.LockWorkspacePortable(ctx, workspace.Path)
 			if err != nil {
 				return core.GitPushResult{}, err
 			}
@@ -294,7 +294,7 @@ func gitOperationsForConfig(substratesConfig *conductor.SubstratesConfig) core.G
 			if err != nil {
 				return core.GitPRResult{}, err
 			}
-			unlock, err := conductor.LockWorkspaceContext(ctx, workspace.Path)
+			unlock, err := conductor.LockWorkspacePortable(ctx, workspace.Path)
 			if err != nil {
 				return core.GitPRResult{}, err
 			}
@@ -360,7 +360,7 @@ func gitOperationsForConfig(substratesConfig *conductor.SubstratesConfig) core.G
 			if err != nil {
 				return core.GitStatusResult{}, err
 			}
-			unlock, err := conductor.LockWorkspaceContext(ctx, workspace.Path)
+			unlock, err := conductor.LockWorkspacePortable(ctx, workspace.Path)
 			if err != nil {
 				return core.GitStatusResult{}, err
 			}
@@ -417,7 +417,7 @@ func gitOperationsForConfig(substratesConfig *conductor.SubstratesConfig) core.G
 			if err != nil {
 				return core.GitBranchListResult{}, err
 			}
-			unlock, err := conductor.LockWorkspaceContext(ctx, workspace.Path)
+			unlock, err := conductor.LockWorkspacePortable(ctx, workspace.Path)
 			if err != nil {
 				return core.GitBranchListResult{}, err
 			}
@@ -447,7 +447,7 @@ func gitOperationsForConfig(substratesConfig *conductor.SubstratesConfig) core.G
 			if err != nil {
 				return core.GitPruneResult{}, err
 			}
-			unlock, err := conductor.LockWorkspaceContext(ctx, workspace.Path)
+			unlock, err := conductor.LockWorkspacePortable(ctx, workspace.Path)
 			if err != nil {
 				return core.GitPruneResult{}, err
 			}
@@ -483,7 +483,7 @@ func gitOperationsForConfig(substratesConfig *conductor.SubstratesConfig) core.G
 			if err != nil {
 				return core.GitBranchResult{}, err
 			}
-			unlock, err := conductor.LockWorkspaceContext(ctx, workspace.Path)
+			unlock, err := conductor.LockWorkspacePortable(ctx, workspace.Path)
 			if err != nil {
 				return core.GitBranchResult{}, err
 			}

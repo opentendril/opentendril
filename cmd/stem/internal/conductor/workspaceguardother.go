@@ -1,12 +1,9 @@
-//go:build !linux || (!amd64 && !arm64)
+//go:build (!linux && !darwin) || ((linux || darwin) && !amd64 && !arm64)
 
 package conductor
 
-import (
-	"context"
-	"fmt"
-)
+import "context"
 
 func lockWorkspaceAcrossProcesses(context.Context, string) (func(), error) {
-	return nil, fmt.Errorf("cross-process workspace locking is unavailable on this platform")
+	return nil, ErrWorkspaceProcessLockUnavailable
 }

@@ -90,14 +90,15 @@ func TestResolveDelegatedWorkspaceExistingOnlyDoesNotRotateAndKeepsPollenIsolati
 	gitIn(t, workspacePath, "add", "work.txt")
 	gitIn(t, workspacePath, "-c", "user.email=bot@example.com", "-c", "user.name=Bot", "commit", "-q", "-m", "unmerged work")
 	workHead := gitIn(t, workspacePath, "rev-parse", "HEAD")
-	if _, err := ResolveDelegatedWorkspaceWithMode(context.Background(), "demo", repository, "pollen-one", ResolvedCredential{}, ExistingDelegatedWorkspaceOnly); err == nil {
-		t.Fatal("existing-only resolution accepted retained unique branch work")
+	continued, err := ResolveDelegatedWorkspaceWithMode(context.Background(), "demo", repository, "pollen-one", ResolvedCredential{}, ExistingDelegatedWorkspaceOnly)
+	if err != nil {
+		t.Fatalf("existing-only resolution blocked active unique branch work: %v", err)
 	}
-	if got := gitIn(t, workspacePath, "branch", "--show-current"); got != branch {
-		t.Fatalf("refused existing-only resolution changed branch to %s, want %s", got, branch)
+	if continued.Path != workspacePath || continued.Branch != branch {
+		t.Fatalf("existing-only resolution = %+v, want the same active workspace %s on %s", continued, workspacePath, branch)
 	}
 	if got := gitIn(t, workspacePath, "rev-parse", "HEAD"); got != workHead {
-		t.Fatalf("refused existing-only resolution changed HEAD to %s, want preserved work %s", got, workHead)
+		t.Fatalf("existing-only resolution changed HEAD to %s, want preserved active work %s", got, workHead)
 	}
 
 	other, err := ResolveDelegatedWorkspaceWithMode(context.Background(), "demo", repository, "pollen-two", ResolvedCredential{}, ExistingDelegatedWorkspaceOnly)
