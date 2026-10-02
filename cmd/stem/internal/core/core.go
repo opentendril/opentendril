@@ -214,16 +214,17 @@ type MeshTraitRejectOutput struct {
 // sequence, and sprout fields are the injected execution ports for their capability families
 // (see genome.go, plasmid.go, mesh.go, sequence.go, and sprout.go).
 type Service struct {
-	sessions   *session.Manager
-	tendrilDir string
-	genome     GenomeOperations
-	plasmid    PlasmidOperations
-	mesh       MeshOperations
-	sequence   SequenceOperations
-	sprout     SproutOperations
-	stoma      StomaOperations
-	seed       SeedOperations
-	git        GitOperations
+	sessions           *session.Manager
+	tendrilDir         string
+	genome             GenomeOperations
+	plasmid            PlasmidOperations
+	mesh               MeshOperations
+	sequence           SequenceOperations
+	sprout             SproutOperations
+	stoma              StomaOperations
+	seed               SeedOperations
+	git                GitOperations
+	delegatedWorkspace DelegatedWorkspaceOperations
 
 	seedPersist    SeedPersistence
 	observation    PhytomerObservationSource

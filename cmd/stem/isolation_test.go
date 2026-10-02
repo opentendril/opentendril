@@ -50,6 +50,8 @@ func newIsolationSubstrate(t *testing.T) (name, path string) {
 	} {
 		gitRun(t, repo, args...)
 	}
+	gitRun(t, repo, "update-ref", "refs/remotes/origin/trunk", "HEAD")
+	gitRun(t, repo, "symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/trunk")
 	t.Setenv("HOME", t.TempDir())
 	return "shared", repo
 }
@@ -297,8 +299,8 @@ func TestOwnedWorkspaceBranchIsRegistered(t *testing.T) {
 // TestWorkspaceBranchRotatesWhenFinished: a Pollinator returning to its workspace
 // after its work landed starts from the current default branch, rather than
 // piling the next task onto a branch that is already merged. A workspace whose
-// branch holds unmerged commits is left strictly alone — that is work in
-// progress, and resetting it would destroy exactly what this design protects.
+// branch holds unmerged commits is retained but blocked from silent reuse;
+// that work in progress must remain available for review or explicit recovery.
 func TestWorkspaceBranchRotatesWhenFinished(t *testing.T) {
 	name, path := newIsolationSubstrate(t)
 	ctx := pollenContext("claude")
@@ -339,11 +341,10 @@ func TestWorkspaceBranchRotatesWhenFinished(t *testing.T) {
 
 	gitRun(t, path, "commit", "--allow-empty", "-m", "default moves again")
 
-	third, err := conductor.ResolveDelegatedWorkspace(ctx, name, path, "claude", conductor.ResolvedCredential{})
-	if err != nil {
-		t.Fatalf("third resolve: %v", err)
+	if _, err := conductor.ResolveDelegatedWorkspace(ctx, name, path, "claude", conductor.ResolvedCredential{}); err == nil {
+		t.Fatal("new delegated resolution silently reused retained unique work")
 	}
-	if head := gitRun(t, third.Path, "rev-parse", "HEAD"); head != workHead {
-		t.Fatalf("workspace head = %s, want the subject's unmerged work %s left untouched", head, workHead)
+	if head := gitRun(t, workspace.Path, "rev-parse", "HEAD"); head != workHead {
+		t.Fatalf("retained workspace head = %s, want the subject's unmerged work %s preserved", head, workHead)
 	}
 }

@@ -72,7 +72,14 @@ func TestResolveExistingGitApplyWorkspaceRequiresNamedConfiguredSubstrateAndPoll
 	if err := os.MkdirAll(filepath.Dir(workspacePath), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	runGitApplyTestGit(t, repository, "worktree", "add", "-q", "-b", "feature/apply", workspacePath, head)
+	branch := "tendril/pollen-one/work"
+	runGitApplyTestGit(t, repository, "worktree", "add", "-q", "-b", branch, workspacePath, head)
+	if err := conductor.RegisterOwnedRef(conductor.OwnedRef{
+		Repository: repository, Branch: branch, Purpose: conductor.PurposeDelegatedWorkspace,
+		Pollen: "pollen-one", Base: head,
+	}); err != nil {
+		t.Fatal(err)
+	}
 	config := &conductor.SubstratesConfig{Substrates: map[string]conductor.SubstrateSpec{
 		"demo": {Checkout: conductor.CheckoutSpec{Mode: "path", Path: repository}},
 	}}

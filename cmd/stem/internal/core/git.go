@@ -419,7 +419,14 @@ type GitBranchInfo struct {
 	// pull-request-closed, unpushed, no-pull-request, unverified, or
 	// checked-out-elsewhere.
 	Classification string `json:"classification"`
-	// PullRequest is the pull request the tip belongs to (0 when none).
+	// Current records checkout occupancy independently from Fruit state.
+	Current bool `json:"current"`
+	// FruitState records forge state for this exact tip independently from
+	// checkout occupancy: merged, open, closed-unmerged, or unverified. A
+	// known absence of a pull request is distinguished in Reason.
+	FruitState string `json:"fruitState"`
+	// PullRequest is the pull request the tip belongs to (0 when none or unknown;
+	// Reason distinguishes a known absence from unavailable evidence).
 	PullRequest int `json:"pullRequest,omitempty"`
 	// Deletable is true only for a merged branch.
 	Deletable bool `json:"deletable"`

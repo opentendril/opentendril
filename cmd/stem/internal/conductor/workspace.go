@@ -53,23 +53,44 @@ func sanitizeWorkspaceComponent(value string) string {
 	return cleaned
 }
 
-// workspaceLocks serializes operations that target the same workspace.
-//
-// Isolation removes subject-versus-pollen corruption; it does not remove one
-// pollen issuing two overlapping calls. This is an in-process lock, which
-// covers the realistic case: one Stem serving many Pollinators. It
-// deliberately does NOT claim to coordinate with a separate process on the same
-// directory. Claiming more than it delivers would be worse than the honest
-// limitation.
+// workspaceLocks provides fast in-process serialization for operations that
+// target the same workspace. LockWorkspaceContext also guards operations
+// across local Stem processes so they cannot race lifecycle removal against
+// delegated Git use.
 var workspaceLocks sync.Map
 
 // LockWorkspace serializes access to one workspace path and returns the
 // release function. Callers defer the release.
 func LockWorkspace(path string) func() {
+	unlock, err := LockWorkspaceContext(context.Background(), path)
+	if err == nil {
+		return unlock
+	}
+	// Legacy callers that cannot return an error still retain in-process
+	// serialization. Destructive lifecycle paths use LockWorkspaceContext and
+	// fail closed if the interprocess guard cannot be acquired.
 	value, _ := workspaceLocks.LoadOrStore(filepath.Clean(path), &sync.Mutex{})
 	mutex := value.(*sync.Mutex)
 	mutex.Lock()
 	return mutex.Unlock
+}
+
+// LockWorkspaceContext serializes workspace access both within this Stem and
+// across local Stem processes. The process lock avoids unnecessary contention;
+// the OS lock closes the CLI/daemon lifecycle race.
+func LockWorkspaceContext(ctx context.Context, path string) (func(), error) {
+	value, _ := workspaceLocks.LoadOrStore(filepath.Clean(path), &sync.Mutex{})
+	mutex := value.(*sync.Mutex)
+	mutex.Lock()
+	unlockOS, err := lockWorkspaceAcrossProcesses(ctx, path)
+	if err != nil {
+		mutex.Unlock()
+		return nil, err
+	}
+	return func() {
+		unlockOS()
+		mutex.Unlock()
+	}, nil
 }
 
 // DelegatedWorkspace describes where an operation will actually run.
@@ -116,7 +137,14 @@ var ErrDelegatedWorkspaceAbsent = errors.New("delegated workspace is absent")
 // reclaimable rather than litter.
 
 func ResolveDelegatedWorkspace(ctx context.Context, substrateName, substratePath, pollen string, credential ResolvedCredential) (DelegatedWorkspace, error) {
-	return ResolveDelegatedWorkspaceWithMode(ctx, substrateName, substratePath, pollen, credential, CreateDelegatedWorkspaceIfMissing)
+	return ResolveDelegatedWorkspaceWithDefaultBranch(ctx, substrateName, substratePath, pollen, credential, "")
+}
+
+// ResolveDelegatedWorkspaceWithDefaultBranch is ResolveDelegatedWorkspace with
+// the Substrate's explicitly configured default branch. The branch is passed
+// through the same authoritative resolver used by the Botanist lifecycle view.
+func ResolveDelegatedWorkspaceWithDefaultBranch(ctx context.Context, substrateName, substratePath, pollen string, credential ResolvedCredential, configuredBranch string) (DelegatedWorkspace, error) {
+	return ResolveDelegatedWorkspaceWithModeAndDefaultBranch(ctx, substrateName, substratePath, pollen, credential, CreateDelegatedWorkspaceIfMissing, configuredBranch)
 }
 
 // ResolveDelegatedWorkspaceWithMode returns the subject's private worktree.
@@ -124,6 +152,13 @@ func ResolveDelegatedWorkspace(ctx context.Context, substrateName, substratePath
 // branch; it is the resolution mode for operations that require pre-existing
 // state and must have no resolver side effects.
 func ResolveDelegatedWorkspaceWithMode(ctx context.Context, substrateName, substratePath, pollen string, credential ResolvedCredential, mode DelegatedWorkspaceMode) (DelegatedWorkspace, error) {
+	return ResolveDelegatedWorkspaceWithModeAndDefaultBranch(ctx, substrateName, substratePath, pollen, credential, mode, "")
+}
+
+// ResolveDelegatedWorkspaceWithModeAndDefaultBranch accepts both the resolver
+// mode and configured default-branch evidence. ExistingWorkspaceOnly remains
+// side-effect-free.
+func ResolveDelegatedWorkspaceWithModeAndDefaultBranch(ctx context.Context, substrateName, substratePath, pollen string, credential ResolvedCredential, mode DelegatedWorkspaceMode, configuredBranch string) (DelegatedWorkspace, error) {
 	if ctx == nil {
 		ctx = context.Background()
 	}
@@ -149,6 +184,7 @@ func ResolveDelegatedWorkspaceWithMode(ctx context.Context, substrateName, subst
 	path := filepath.Join(delegatedWorkspaceRoot(), name, sanitizeWorkspaceComponent(trimmedPollen))
 
 	workspace := DelegatedWorkspace{Path: path, Repository: base, Pollen: trimmedPollen, Isolated: true}
+	resolvedStartPoint := ""
 	if mode == ExistingDelegatedWorkspaceOnly {
 		workspaceRoot := delegatedWorkspaceRoot()
 		rootResolved, rootErr := filepath.EvalSymlinks(workspaceRoot)
@@ -161,34 +197,67 @@ func ResolveDelegatedWorkspaceWithMode(ctx context.Context, substrateName, subst
 		if rootErr != nil || substrateErr != nil || substrateInfo.Mode()&os.ModeSymlink != 0 || statErr != nil || !info.IsDir() || info.Mode()&os.ModeSymlink != 0 || resolvedErr != nil || !insideWorkspaceRoot || !checkoutHasGitMetadata(path) || !isGitRepo(path) {
 			return DelegatedWorkspace{}, fmt.Errorf("%w for Pollen %q on Substrate %q", ErrDelegatedWorkspaceAbsent, trimmedPollen, substrateName)
 		}
-		if current, err := runGitCommitCommandFn(ctx, path, "branch", "--show-current"); err == nil {
-			workspace.Branch = strings.TrimSpace(current)
+		unlock, lockErr := LockWorkspaceContext(ctx, path)
+		if lockErr != nil {
+			return DelegatedWorkspace{}, fmt.Errorf("lock delegated workspace: %w", lockErr)
+		}
+		defer unlock()
+		report, inspectErr := inspectDelegatedWorkspaceUnlocked(ctx, DelegatedWorkspaceTarget{
+			Pollen: trimmedPollen, Substrate: substrateName, Repository: base,
+			ConfiguredBranch: configuredBranch, Credential: credential,
+		}, path)
+		if inspectErr != nil {
+			return DelegatedWorkspace{}, fmt.Errorf("retained delegated workspace could not be safely verified: %w", inspectErr)
+		}
+		workspace.Branch = report.CurrentBranch
+		if !report.CleanKnown || !report.Clean || !report.UniqueWorkKnown || report.UniqueWork || report.FruitState == FruitStateOpen || report.FruitState == FruitStateClosedUnmerged || report.FruitState == FruitStateMerged {
+			return DelegatedWorkspace{}, fmt.Errorf("existing delegated workspace is not an empty, reusable workspace; Botanist inspection or recovery is required: %s", report.Reason)
 		}
 		return workspace, nil
 	}
 
 	if isGitRepo(path) {
-		// Existing-workspace branch inspection can trigger a reset when the
-		// owned branch is finished. Serialize it with Git execution, but release
-		// before returning because the caller acquires this same lock around its
-		// own operation.
-		unlockWorkspace := LockWorkspace(path)
+		unlockWorkspace, lockErr := LockWorkspaceContext(ctx, path)
+		if lockErr != nil {
+			return DelegatedWorkspace{}, fmt.Errorf("lock delegated workspace: %w", lockErr)
+		}
 		if !isGitRepo(path) {
 			unlockWorkspace()
 		} else {
 			if current, err := runGitCommitCommandFn(ctx, path, "branch", "--show-current"); err == nil {
 				workspace.Branch = strings.TrimSpace(current)
 			}
-			// A workspace whose branch is finished is cycled onto a fresh one, so
-			// the next piece of work starts from the current default branch rather
-			// than piling onto something already merged. This is the other half of
-			// owning a reference: it is reclaimed at the moment its purpose ends,
-			// which for a subject's working branch is the moment its work lands.
-			if rotated, err := rotateFinishedWorkspaceBranch(ctx, base, path, workspace.Branch, trimmedPollen, credential); err == nil && rotated != "" {
-				workspace.Branch = rotated
+			report, inspectErr := inspectDelegatedWorkspaceUnlocked(ctx, DelegatedWorkspaceTarget{
+				Pollen: trimmedPollen, Substrate: substrateName, Repository: base,
+				ConfiguredBranch: configuredBranch, Credential: credential,
+			}, path)
+			if inspectErr != nil {
+				unlockWorkspace()
+				return DelegatedWorkspace{}, fmt.Errorf("retained delegated workspace could not be safely verified: %w", inspectErr)
+			}
+			if report.AutoReclaimable {
+				resolvedStartPoint, inspectErr = workspaceStartPointFor(ctx, base, configuredBranch, credential)
+				if inspectErr != nil {
+					unlockWorkspace()
+					return DelegatedWorkspace{}, inspectErr
+				}
+				removed, removeErr := removeDelegatedWorkspace(ctx, DelegatedWorkspaceTarget{
+					Pollen: trimmedPollen, Substrate: substrateName, Repository: base,
+					ConfiguredBranch: configuredBranch, Credential: credential,
+				}, report, false)
+				if removeErr != nil {
+					unlockWorkspace()
+					return DelegatedWorkspace{}, fmt.Errorf("safely reclaim retained delegated workspace: %w", removeErr)
+				}
+				if !removed.WorktreeRemoved {
+					unlockWorkspace()
+					return DelegatedWorkspace{}, fmt.Errorf("retained delegated workspace was not removed")
+				}
+			} else {
+				unlockWorkspace()
+				return DelegatedWorkspace{}, fmt.Errorf("retained delegated workspace for Pollen %q on Substrate %q is preserved and not safe to reuse: %s; Botanist inspection or confirmed abandonment is required before new work", trimmedPollen, substrateName, report.Reason)
 			}
 			unlockWorkspace()
-			return workspace, nil
 		}
 	}
 
@@ -199,13 +268,19 @@ func ResolveDelegatedWorkspaceWithMode(ctx context.Context, substrateName, subst
 	// Cut from the repository's resolved default branch, never from whatever
 	// the substrate checkout happens to be on. The workspace's starting point
 	// is as much a thing that must not be assumed as the default branch's name.
-	startPoint, err := workspaceStartPoint(ctx, base)
+	var err error
+	if resolvedStartPoint == "" {
+		resolvedStartPoint, err = workspaceStartPointFor(ctx, base, configuredBranch, credential)
+		if err != nil {
+			return DelegatedWorkspace{}, err
+		}
+	}
+
+	branch, err := uniqueOwnedWorkspaceBranchName(ctx, base, trimmedPollen)
 	if err != nil {
 		return DelegatedWorkspace{}, err
 	}
-
-	branch := ownedWorkspaceBranchName(trimmedPollen)
-	if _, err := runGitCommitCommandFn(ctx, base, "worktree", "add", "-b", branch, path, startPoint); err != nil {
+	if _, err := runGitCommitCommandFn(ctx, base, "worktree", "add", "-b", branch, path, resolvedStartPoint); err != nil {
 		return DelegatedWorkspace{}, fmt.Errorf("create isolated workspace for pollen %q on substrate %q: %w", trimmedPollen, substrateName, err)
 	}
 	workspace.Branch = branch
@@ -229,102 +304,36 @@ func ResolveDelegatedWorkspaceWithMode(ctx context.Context, substrateName, subst
 	return workspace, nil
 }
 
-// rotateFinishedWorkspaceBranch resets a subject's working branch onto the
-// current default branch when the old one is finished, meaning it holds
-// nothing, or everything it held has merged. It returns the branch name when
-// it rotated, and "" when the branch was left alone.
-//
-// Anything else is left strictly alone: a branch carrying unmerged commits is
-// the subject's work in progress, and resetting it would destroy exactly what
-// this whole design exists to protect.
-func rotateFinishedWorkspaceBranch(ctx context.Context, base, workspacePath, branch, pollen string, credential ResolvedCredential) (string, error) {
-	branch = strings.TrimSpace(branch)
-	if branch == "" || branch != ownedWorkspaceBranchName(pollen) {
-		return "", nil
-	}
-
-	var ref OwnedRef
-	for _, candidate := range OwnedRefsFor(base) {
-		if candidate.Branch == branch {
-			ref = candidate
-			break
-		}
-	}
-	if ref.Branch == "" {
-		return "", nil
-	}
-
-	finished := branchHasNoWork(ctx, workspacePath, ref)
-	if !finished {
-		merged, _ := ownedRefIsMerged(ctx, workspacePath, ref, credential)
-		finished = merged
-	}
-	if !finished {
-		return "", nil
-	}
-
-	startPoint, err := workspaceStartPoint(ctx, base)
-	if err != nil {
-		return "", err
-	}
-	// Already current: rotating would achieve nothing.
-	if current, err := runGitCommitCommandFn(ctx, workspacePath, "rev-parse", "HEAD"); err == nil {
-		if target, targetErr := runGitCommitCommandFn(ctx, workspacePath, "rev-parse", startPoint); targetErr == nil {
-			if strings.TrimSpace(current) == strings.TrimSpace(target) {
-				return "", nil
-			}
-		}
-	}
-
-	if _, err := runGitCommitCommandFn(ctx, workspacePath, "checkout", "-B", branch, startPoint); err != nil {
-		return "", err
-	}
-	baseCommit := ""
-	if out, revErr := runGitCommitCommandFn(ctx, workspacePath, "rev-parse", "HEAD"); revErr == nil {
-		baseCommit = strings.TrimSpace(out)
-	}
-	_ = RegisterOwnedRef(OwnedRef{
-		Repository: base,
-		Branch:     branch,
-		Purpose:    PurposeDelegatedWorkspace,
-		Pollen:     pollen,
-		Base:       baseCommit,
-	})
-	return branch, nil
-}
-
 // workspaceStartPoint resolves what a new delegated workspace should be cut
-// from: the remote-tracking default branch when there is one (so a Pollinator
-// starts from what the remote actually has), then the local default branch,
-// then the substrate's head as a last resort.
+// from the resolved default branch. A successful fetch makes origin/<branch>
+// the freshest source; when that fetch is unavailable, the local resolved
+// default branch is preferred over a potentially stale remote-tracking ref.
 //
 // It returns a resolved COMMIT, not a reference name, and that matters. A
 // worktree has its own HEAD, so a name like "HEAD" means one thing in the
 // substrate and another inside the workspace. Resolving it here, against the
 // substrate, removes the ambiguity before the value travels anywhere.
 func workspaceStartPoint(ctx context.Context, base string) (string, error) {
+	return workspaceStartPointFor(ctx, base, "", ResolvedCredential{})
+}
+
+func workspaceStartPointFor(ctx context.Context, base, configuredBranch string, credential ResolvedCredential) (string, error) {
 	unlockRemoteRefs, lockErr := lockCommonGitRemoteRefs(ctx, base)
 	if lockErr != nil {
 		return "", fmt.Errorf("lock repository remote refs: %w", lockErr)
 	}
 	defer unlockRemoteRefs()
 
-	resolution := ResolveDefaultBranchLocal(ctx, base, "")
+	resolution := ResolveDefaultBranch(ctx, base, configuredBranch, credential)
 
-	refreshRemoteDefaultBranch(ctx, base, resolution)
+	refreshed := refreshRemoteDefaultBranch(ctx, base, resolution)
 
-	candidates := []string{}
-	if resolution.Known() {
-		candidates = append(candidates, "origin/"+resolution.Branch, resolution.Branch)
+	if !resolution.Known() {
+		return "", fmt.Errorf("substrate %q default branch could not be resolved; refusing to start from the current checkout", base)
 	}
-	// The protection floor, for the same reason IsProtected applies it: an
-	// undetermined default branch is a real outcome: a clone without an
-	// origin/HEAD record resolves to nothing. Without this protection, the next
-	// candidate is HEAD, which is whatever the checkout was last left on. A
-	// sibling branch still carrying another change's commits is exactly what
-	// this start point exists to avoid inheriting.
-	for _, floor := range defaultBranchProtectionFloorNames {
-		candidates = append(candidates, "origin/"+floor, floor)
+	candidates := []string{resolution.Branch, "origin/" + resolution.Branch}
+	if refreshed {
+		candidates[0], candidates[1] = candidates[1], candidates[0]
 	}
 
 	for _, candidate := range candidates {
@@ -337,23 +346,38 @@ func workspaceStartPoint(ctx context.Context, base string) (string, error) {
 		}
 	}
 
-	// HEAD is the last resort rather than a silent one. A repository with no
-	// default branch and no floor name is usually a fresh single-branch one,
-	// where HEAD is correct, but it is also how work would be cut from a
-	// sibling in-flight branch, so the caller is told which branch it inherited.
-	commit, err := runGitCommitCommandFn(ctx, base, "rev-parse", "--verify", "--quiet", "HEAD")
-	if err == nil && strings.TrimSpace(commit) != "" {
-		current := "a detached HEAD"
-		if out, branchErr := runGitCommitCommandFn(ctx, base, "branch", "--show-current"); branchErr == nil {
-			if trimmed := strings.TrimSpace(out); trimmed != "" {
-				current = fmt.Sprintf("branch %q", trimmed)
+	return "", fmt.Errorf("resolved default branch %q for Substrate %q has no available commit; refusing to start from the current checkout", resolution.Branch, base)
+}
+
+func uniqueOwnedWorkspaceBranchName(ctx context.Context, repository, pollen string) (string, error) {
+	base := ownedWorkspaceBranchName(pollen)
+	local, err := runGitCommitCommandFn(ctx, repository, "for-each-ref", "--format=%(refname:short)", "refs/heads")
+	if err != nil {
+		return "", fmt.Errorf("inspect local branches before workspace creation: %w", err)
+	}
+	remote, err := runGitCommitCommandFn(ctx, repository, "for-each-ref", "--format=%(refname:short)", "refs/remotes")
+	if err != nil {
+		return "", fmt.Errorf("inspect remote branches before workspace creation: %w", err)
+	}
+	exists := func(candidate string) bool {
+		for _, branch := range strings.Split(local+"\n"+remote, "\n") {
+			branch = strings.TrimSpace(branch)
+			if branch == candidate || strings.HasSuffix(branch, "/"+candidate) {
+				return true
 			}
 		}
-		fmt.Fprintf(os.Stderr, "⚠️ No default branch could be established for %s, so this workspace starts from %s. Anything already committed there is inherited by the new branch.\n", base, current)
-		return strings.TrimSpace(commit), nil
+		return false
 	}
-
-	return "", fmt.Errorf("substrate %q has no commits to start a workspace from", base)
+	if !exists(base) {
+		return base, nil
+	}
+	for suffix := 2; suffix < 10000; suffix++ {
+		candidate := fmt.Sprintf("%s-%d", base, suffix)
+		if !exists(candidate) {
+			return candidate, nil
+		}
+	}
+	return "", fmt.Errorf("could not find a collision-free workspace branch for Pollen %q", pollen)
 }
 
 // refreshRemoteDefaultBranch updates the remote-tracking ref the start point is
@@ -369,11 +393,12 @@ func workspaceStartPoint(ctx context.Context, base string) (string, error) {
 // GIT_TERMINAL_PROMPT=0 is what makes "best effort" true. Without it a private
 // substrate with no usable credential leaves git waiting on a terminal that is
 // not there, turning workspace creation into a hang rather than a fast failure.
-func refreshRemoteDefaultBranch(ctx context.Context, base string, resolution DefaultBranchResolution) {
+func refreshRemoteDefaultBranch(ctx context.Context, base string, resolution DefaultBranchResolution) bool {
 	if !resolution.Known() {
-		return
+		return false
 	}
-	_, _ = runGitFetchCommandFn(ctx, base, []string{"GIT_TERMINAL_PROMPT=0"}, "fetch", "origin", resolution.Branch)
+	_, err := runGitFetchCommandFn(ctx, base, []string{"GIT_TERMINAL_PROMPT=0"}, "fetch", "origin", resolution.Branch)
+	return err == nil
 }
 
 // runGitFetchCommandFn is the seam for the start-point refresh, so a test can
