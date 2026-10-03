@@ -297,10 +297,14 @@ func RunGitBranchList(ctx context.Context, execution GitBranchListExecution) (Gi
 				info.FruitState = FruitStateUnverified
 				fruitClassification = BranchUnpushed
 				fruitReason = "its tip commit is unknown to the remote; no remote check can vouch for this local-only work"
-			case state.Merged:
+			case state.Merged && strings.EqualFold(strings.TrimSpace(state.HeadSHA), info.Head):
 				info.FruitState = FruitStateMerged
 				fruitClassification = BranchMerged
-				fruitReason = fmt.Sprintf("pull request %d merged", state.Number)
+				fruitReason = fmt.Sprintf("pull request %d merged with an exact branch-tip match", state.Number)
+			case state.Merged:
+				info.FruitState = FruitStateUnverified
+				fruitClassification = BranchUnverified
+				fruitReason = fmt.Sprintf("pull request %d is merged but its head SHA does not match this branch tip; merged state is unverified", state.Number)
 			case state.Number > 0 && strings.EqualFold(state.State, "closed"):
 				info.FruitState = FruitStateClosedUnmerged
 				fruitClassification = BranchPullRequestClosed
