@@ -204,6 +204,27 @@ const (
 	githubMutationRefConflict       = "target-ref-conflict"
 )
 
+func explicitGitHub4xx(mutationErr *githubMutationError) bool {
+	return mutationErr != nil && mutationErr.ResponseReceived && mutationErr.StatusCode >= 400 && mutationErr.StatusCode <= 499
+}
+
+func ambiguousGitHubMutation(mutationErr *githubMutationError) bool {
+	if mutationErr == nil {
+		return false
+	}
+	if mutationErr.ResponseReceived {
+		return mutationErr.StatusCode >= 500 && mutationErr.StatusCode <= 599
+	}
+	return mutationErr.RequestWritten && mutationErr.Kind == githubMutationTransport
+}
+
+func safeGitHubHTTPStatus(statusCode int) int {
+	if statusCode < 100 || statusCode > 599 {
+		return 0
+	}
+	return statusCode
+}
+
 func (e *githubMutationError) Error() string {
 	if e == nil {
 		return "github mutation failed"
@@ -212,22 +233,29 @@ func (e *githubMutationError) Error() string {
 	if operation == "" {
 		operation = "github mutation"
 	}
+	var message string
 	switch e.Kind {
 	case githubMutationBeforeWrite:
 		return operation + " was not written to GitHub"
 	case githubMutationRefConflict:
-		return operation + " reported a target-ref conflict; the target ref already exists or its base is invalid"
+		message = fmt.Sprintf("%s returned HTTP %d; the target ref already exists or its base is invalid", operation, e.StatusCode)
 	case githubMutationHTTP:
-		return fmt.Sprintf("%s returned HTTP %d", operation, e.StatusCode)
+		message = fmt.Sprintf("%s returned HTTP %d", operation, e.StatusCode)
 	case githubMutationGraphQLError:
-		return operation + " returned a GraphQL error"
+		message = operation + " returned a GraphQL error"
 	case githubMutationMalformedResponse:
-		return operation + " returned a malformed response"
+		message = operation + " returned a malformed response"
 	case githubMutationPartialResponse:
-		return operation + " returned no authoritative result"
+		message = operation + " returned no authoritative result"
 	default:
-		return operation + " failed after the request may have reached GitHub"
+		message = operation + " failed after the request may have reached GitHub"
 	}
+	if e.ResponseReceived && e.StatusCode >= 400 && e.StatusCode <= 499 {
+		if requestID := safeGitHubRequestID(e.RequestID); requestID != "" {
+			message += " (GitHub request " + requestID + ")"
+		}
+	}
+	return message
 }
 
 // githubGraphQLPost issues a GraphQL request against api.github.com/graphql,

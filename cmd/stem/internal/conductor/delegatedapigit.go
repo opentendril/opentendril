@@ -324,22 +324,26 @@ func establishDelegatedAPICommitBranch(ctx context.Context, intent apiFruitPubli
 	}
 
 	var mutationErr *githubMutationError
-	if !errors.As(createErr, &mutationErr) || !mutationErr.RequestWritten {
+	if !errors.As(createErr, &mutationErr) || (!mutationErr.RequestWritten && !mutationErr.ResponseReceived) {
 		return apiFruitReconciliation{}, newAPIFruitPublicationFailure("target-ref-creation", apiFruitOutcomePreMutationFailure, false, mutationRequestID(createErr), apiFruitFailureMessage(apiFruitOutcomePreMutationFailure))
 	}
 	state, err = reconcileAPIFruit(ctx, intent, token)
 	if err != nil {
-		return apiFruitReconciliation{}, newAPIFruitPublicationFailure("reconciliation", apiFruitOutcomeReconciliationFailure, false, mutationRequestID(createErr), apiFruitFailureMessage(apiFruitOutcomeReconciliationFailure))
+		return apiFruitReconciliation{}, newAPIFruitPublicationFailureWithStatus("reconciliation", apiFruitOutcomeReconciliationFailure, false, mutationErr.RequestID, mutationErr.StatusCode, apiFruitFailureMessage(apiFruitOutcomeReconciliationFailure))
 	}
 	if state.Outcome == apiFruitReconciledBase || state.Outcome == apiFruitReconciledExact {
 		return state, nil
 	}
 	if state.Outcome != apiFruitReconciledAbsent {
-		return apiFruitReconciliation{}, newAPIFruitPublicationFailure("target-ref-creation", apiFruitOutcomeTargetRefConflict, false, mutationRequestID(createErr), apiFruitFailureMessage(apiFruitOutcomeTargetRefConflict))
+		return apiFruitReconciliation{}, newAPIFruitPublicationFailureWithStatus("target-ref-creation", apiFruitOutcomeTargetRefConflict, false, mutationErr.RequestID, mutationErr.StatusCode, apiFruitFailureMessage(apiFruitOutcomeTargetRefConflict))
+	}
+	if !ambiguousGitHubMutation(mutationErr) {
+		return apiFruitReconciliation{}, newAPIFruitPublicationFailureWithStatus("target-ref-creation", apiFruitOutcomeTargetRefAbsent, false, mutationErr.RequestID, mutationErr.StatusCode, apiFruitFailureMessage(apiFruitOutcomeTargetRefAbsent))
 	}
 
-	// One identical create is permitted only after a read proved that the
-	// target remains absent. The failed mutation is never replayed blindly.
+	// One identical create is permitted only after an ambiguous outcome and a
+	// read proving that the target remains absent. Explicit 4xx responses are
+	// deterministic failures and are never replayed.
 	secondErr := githubCreateRef(ctx, intent.Owner, intent.Repo, intent.Branch, intent.BaseCommit, token)
 	if secondErr == nil {
 		state, err = reconcileAPIFruit(ctx, intent, token)
@@ -349,14 +353,24 @@ func establishDelegatedAPICommitBranch(ctx context.Context, intent apiFruitPubli
 		return apiFruitReconciliation{}, newAPIFruitPublicationFailure("reconciliation", apiFruitOutcomeReconciliationFailure, false, mutationRequestID(createErr), apiFruitFailureMessage(apiFruitOutcomeReconciliationFailure))
 	}
 	var secondMutationErr *githubMutationError
-	if !errors.As(secondErr, &secondMutationErr) || !secondMutationErr.RequestWritten {
+	if !errors.As(secondErr, &secondMutationErr) || (!secondMutationErr.RequestWritten && !secondMutationErr.ResponseReceived) {
 		return apiFruitReconciliation{}, newAPIFruitPublicationFailure("target-ref-creation", apiFruitOutcomeRetryExhausted, false, mutationRequestID(secondErr), apiFruitFailureMessage(apiFruitOutcomeRetryExhausted))
 	}
 	state, err = reconcileAPIFruit(ctx, intent, token)
-	if err == nil && (state.Outcome == apiFruitReconciledBase || state.Outcome == apiFruitReconciledExact) {
+	if err != nil {
+		return apiFruitReconciliation{}, newAPIFruitPublicationFailureWithStatus("reconciliation", apiFruitOutcomeReconciliationFailure, false, secondMutationErr.RequestID, secondMutationErr.StatusCode, apiFruitFailureMessage(apiFruitOutcomeReconciliationFailure))
+	}
+	if state.Outcome == apiFruitReconciledBase || state.Outcome == apiFruitReconciledExact {
 		return state, nil
 	}
-	return apiFruitReconciliation{}, newAPIFruitPublicationFailure("target-ref-creation", apiFruitOutcomeRetryExhausted, false, mutationRequestID(secondErr), apiFruitFailureMessage(apiFruitOutcomeRetryExhausted))
+	if explicitGitHub4xx(secondMutationErr) {
+		outcome := apiFruitOutcomeTargetRefConflict
+		if state.Outcome == apiFruitReconciledAbsent {
+			outcome = apiFruitOutcomeTargetRefAbsent
+		}
+		return apiFruitReconciliation{}, newAPIFruitPublicationFailureWithStatus("target-ref-creation", outcome, false, secondMutationErr.RequestID, secondMutationErr.StatusCode, apiFruitFailureMessage(outcome))
+	}
+	return apiFruitReconciliation{}, newAPIFruitPublicationFailureWithStatus("target-ref-creation", apiFruitOutcomeRetryExhausted, false, secondMutationErr.RequestID, secondMutationErr.StatusCode, apiFruitFailureMessage(apiFruitOutcomeRetryExhausted))
 }
 
 func reconcileDelegatedAPICommitWorkspace(ctx context.Context, execution GitCommitExecution, intent apiFruitPublicationIntent, token, targetOID string, allAdditions []apiCommitFileAddition, allDeletions []apiCommitFileDeletion, selectedAdditions []apiCommitFileAddition, selectedDeletions []apiCommitFileDeletion) error {

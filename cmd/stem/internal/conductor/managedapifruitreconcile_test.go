@@ -42,6 +42,7 @@ type reconcileFruitFake struct {
 	createRefCalls       int
 	graphQLCalls         int
 	readCalls            int
+	targetRefReads       int
 	defaultOID           string
 	defaultBranchTouched bool
 	createRefBranches    []string
@@ -84,8 +85,11 @@ func (f *reconcileFruitFake) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			f.defaultOID = request.SHA
 		}
 		if status < 200 || status >= 300 {
+			if f.requestID != "" {
+				w.Header().Set("X-GitHub-Request-Id", f.requestID)
+			}
 			w.WriteHeader(status)
-			_, _ = io.WriteString(w, "Authorization: Bearer upstream-secret-content")
+			_, _ = io.WriteString(w, "Authorization: Bearer upstream-secret-content https://x-access-token:credential-secret@github.com/private PRIVATE_TASK_CONTENT")
 			return
 		}
 		w.WriteHeader(status)
@@ -163,6 +167,12 @@ func (f *reconcileFruitFake) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	f.readCalls++
+	if strings.HasPrefix(r.URL.Path, "/repos/owner/repo/git/ref/heads/") {
+		branch := strings.TrimPrefix(r.URL.Path, "/repos/owner/repo/git/ref/heads/")
+		if branch != f.defaultBranch {
+			f.targetRefReads++
+		}
+	}
 	if f.readFailure != "" {
 		w.WriteHeader(http.StatusInternalServerError)
 		_, _ = io.WriteString(w, f.readFailure)
@@ -312,8 +322,11 @@ func TestPublishAPIFruitReconcilesManagedMutationOutcomes(t *testing.T) {
 		wantOutcome       string
 		requestID         string
 		wantRequestID     string
+		wantStatusCode    int
 		wantMutations     int
 		wantReads         bool
+		wantRefReads      int
+		checkRefReads     bool
 		wantDefaultBranch string
 	}{
 		{
@@ -370,6 +383,20 @@ func TestPublishAPIFruitReconcilesManagedMutationOutcomes(t *testing.T) {
 			wantOutcome:       apiFruitOutcomeTargetRefConflict,
 			wantMutations:     0,
 			wantReads:         true,
+			wantDefaultBranch: reconcileMainOID,
+		},
+		{
+			name:              "explicit 4xx with absent target is deterministic and does not retry",
+			createRefStatus:   http.StatusUnprocessableEntity,
+			requestID:         reconcileRequestID,
+			wantErr:           apiFruitOutcomeTargetRefAbsent,
+			wantOutcome:       apiFruitOutcomeTargetRefAbsent,
+			wantRequestID:     reconcileRequestID,
+			wantStatusCode:    http.StatusUnprocessableEntity,
+			wantMutations:     0,
+			wantReads:         true,
+			wantRefReads:      1,
+			checkRefReads:     true,
 			wantDefaultBranch: reconcileMainOID,
 		},
 		{
@@ -479,8 +506,10 @@ func TestPublishAPIFruitReconcilesManagedMutationOutcomes(t *testing.T) {
 				if !strings.Contains(strings.ToLower(err.Error()), strings.ToLower(tc.wantErr)) {
 					t.Fatalf("error = %q, want %q", err, tc.wantErr)
 				}
-				if strings.Contains(err.Error(), "upstream-secret-content") {
-					t.Fatalf("unsafe upstream content leaked in error: %q", err)
+				for _, forbidden := range []string{"upstream-secret-content", "credential-secret", "PRIVATE_TASK_CONTENT", "Authorization:", "https://"} {
+					if strings.Contains(err.Error(), forbidden) {
+						t.Fatalf("unsafe provider data %q leaked in diagnostic: %q", forbidden, err)
+					}
 				}
 				if tc.wantRequestID != "" && !strings.Contains(err.Error(), tc.wantRequestID) {
 					t.Fatalf("error = %q, want captured request ID %q", err, tc.wantRequestID)
@@ -495,6 +524,9 @@ func TestPublishAPIFruitReconcilesManagedMutationOutcomes(t *testing.T) {
 					}
 					if tc.wantRequestID != "" && failure.RequestID != tc.wantRequestID {
 						t.Fatalf("publication request ID = %q, want %q", failure.RequestID, tc.wantRequestID)
+					}
+					if tc.wantStatusCode != 0 && failure.StatusCode != tc.wantStatusCode {
+						t.Fatalf("publication HTTP status = %d, want %d", failure.StatusCode, tc.wantStatusCode)
 					}
 				}
 			}
@@ -533,6 +565,9 @@ func TestPublishAPIFruitReconcilesManagedMutationOutcomes(t *testing.T) {
 			}
 			if tc.wantReads && fake.readCalls == 0 {
 				t.Fatal("expected read-only reconciliation calls")
+			}
+			if tc.checkRefReads && fake.targetRefReads != tc.wantRefReads {
+				t.Fatalf("target-ref reconciliation reads = %d, want %d", fake.targetRefReads, tc.wantRefReads)
 			}
 			if fake.defaultOID != tc.wantDefaultBranch {
 				t.Fatalf("default branch OID = %q, want %q", fake.defaultOID, tc.wantDefaultBranch)
