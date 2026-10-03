@@ -13,7 +13,7 @@ exists to make possible.
 
 ## Current
 
-**A Botanist unfamiliar with OpenTendril can go from a clean supported machine to one reviewed Git Fruit using the governed installation path and Greenhouse as the primary workbench, without needing OpenTendril-internal knowledge or separate command-line orchestration for the normal work lifecycle.**
+**A Botanist can use a supported governed OpenTendril installation and Greenhouse as the primary workbench to produce one reviewed Git Fruit, without needing OpenTendril-internal knowledge or separate command-line orchestration for the normal work lifecycle.**
 
 ## Done when
 
@@ -29,7 +29,6 @@ exists to make possible.
 * The default branch remains unchanged until maintainer review or merge.
 * Browser refresh and supported local restart do not duplicate work.
 * Supported failures identify the failed category and the supported action required next.
-* Fresh-machine qualification records elapsed time, manual decisions, commands outside Greenhouse, ambiguity, and boundary/default-branch state.
 
 This objective does not require public Internet Pollinator ingress, GitHub-native
 Pollinators, automatic merge, removal of administrative CLI authority, a new
