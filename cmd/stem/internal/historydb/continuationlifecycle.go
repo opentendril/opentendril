@@ -319,7 +319,7 @@ func (s *Store) CompleteSeedSettlement(ctx context.Context, target SeedTarget, r
 	if run.FinishedAt.IsZero() {
 		run.FinishedAt = time.Now().UTC()
 	}
-	if err := s.updateSeedRunResultTx(ctx, tx, run, seedStatusSettling); err != nil {
+	if err := s.updateSeedRunResultTx(ctx, tx, run, seedStatusSettling, true); err != nil {
 		return err
 	}
 	if err := tx.Commit(); err != nil {
@@ -382,7 +382,7 @@ func (s *Store) AccountSeedTerminalFailure(ctx context.Context, target SeedTarge
 
 	switch {
 	case current == seedStatusRunning || current == seedStatusSettling:
-		if err := s.updateSeedRunResultTx(ctx, tx, run, current); err != nil {
+		if err := s.updateSeedRunResultTx(ctx, tx, run, current, false); err != nil {
 			return TerminalFailureAccount{}, err
 		}
 	case seedStatusIsTerminal(current):
@@ -390,7 +390,7 @@ func (s *Store) AccountSeedTerminalFailure(ctx context.Context, target SeedTarge
 			return TerminalFailureAccount{}, ErrSeedSettlementInvalid
 		}
 		if unresolved > 0 && current != seedStatusWithered {
-			if err := s.updateSeedRunResultTx(ctx, tx, run, current); err != nil {
+			if err := s.updateSeedRunResultTx(ctx, tx, run, current, false); err != nil {
 				return TerminalFailureAccount{}, err
 			}
 		}
@@ -435,7 +435,7 @@ func (s *Store) ReconcileOrphanedSeedWork(ctx context.Context) error {
 		run.Branch = ""
 		run.Commit = ""
 		run.FinishedAt = finishedAt
-		if err := s.updateSeedRunResultTx(ctx, tx, run, strings.TrimSpace(seed.Status)); err != nil {
+		if err := s.updateSeedRunResultTx(ctx, tx, run, strings.TrimSpace(seed.Status), false); err != nil {
 			return err
 		}
 		if _, err := s.failUnresolvedContinuationsTx(ctx, tx, seed.PhytomerID); err != nil {
@@ -650,13 +650,28 @@ WHERE status IN (` + strings.Join(placeholders, ", ") + `)`
 	return out, nil
 }
 
-func (s *Store) updateSeedRunResultTx(ctx context.Context, tx *sql.Tx, run SeedRun, expectedStatus string) error {
+func (s *Store) updateSeedRunResultTx(ctx context.Context, tx *sql.Tx, run SeedRun, expectedStatus string, persistFruitProvenance bool) error {
 	if strings.TrimSpace(run.Handle) == "" || strings.TrimSpace(run.PhytomerID) == "" {
 		return ErrContinuationInvalid
 	}
 	finishedAt := ""
 	if !run.FinishedAt.IsZero() {
 		finishedAt = run.FinishedAt.UTC().Format(time.RFC3339Nano)
+	}
+	fruitRepository := ""
+	fruitWorkspace := ""
+	fruitPublicationState := ""
+	fruitCreatedAt := ""
+	if persistFruitProvenance {
+		if !validFruitPublicationState(run.FruitPublicationState) {
+			return fmt.Errorf("seed run has invalid Fruit publication state %q", run.FruitPublicationState)
+		}
+		fruitRepository = strings.TrimSpace(run.FruitRepository)
+		fruitWorkspace = strings.TrimSpace(run.FruitWorkspace)
+		fruitPublicationState = strings.TrimSpace(run.FruitPublicationState)
+		if !run.FruitCreatedAt.IsZero() {
+			fruitCreatedAt = run.FruitCreatedAt.UTC().Format(time.RFC3339Nano)
+		}
 	}
 	goal, err := s.enc(run.Goal, "historydb/seedruns/goal")
 	if err != nil {
@@ -685,6 +700,10 @@ UPDATE seedruns SET
 	iterations = CASE WHEN "idempotency-key" <> '' AND goal = '' THEN iterations ELSE ? END,
 	branch = CASE WHEN "idempotency-key" <> '' AND goal = '' THEN branch ELSE ? END,
 	fruitCommit = CASE WHEN "idempotency-key" <> '' AND goal = '' THEN fruitCommit ELSE ? END,
+	fruitRepository = CASE WHEN "idempotency-key" <> '' AND goal = '' THEN fruitRepository ELSE COALESCE(NULLIF(?, ''), fruitRepository) END,
+	fruitWorkspace = CASE WHEN "idempotency-key" <> '' AND goal = '' THEN fruitWorkspace ELSE COALESCE(NULLIF(?, ''), fruitWorkspace) END,
+	fruitPublicationState = CASE WHEN "idempotency-key" <> '' AND goal = '' THEN fruitPublicationState ELSE COALESCE(NULLIF(?, ''), fruitPublicationState) END,
+	fruitCreatedAt = CASE WHEN "idempotency-key" <> '' AND goal = '' THEN fruitCreatedAt ELSE COALESCE(NULLIF(?, ''), fruitCreatedAt) END,
 	diff = CASE WHEN "idempotency-key" <> '' AND goal = '' THEN diff ELSE ? END,
 	logs = CASE WHEN "idempotency-key" <> '' AND goal = '' THEN logs ELSE ? END,
 	error = CASE WHEN "idempotency-key" <> '' AND goal = '' THEN error ELSE ? END,
@@ -700,6 +719,10 @@ WHERE handle = ? AND phytomerId = ? AND pollen = ? AND substrate = ? AND status 
 		run.Iterations,
 		run.Branch,
 		run.Commit,
+		fruitRepository,
+		fruitWorkspace,
+		fruitPublicationState,
+		fruitCreatedAt,
 		diff,
 		logs,
 		runError,
