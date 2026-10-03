@@ -419,14 +419,29 @@ func TestCompleteSeedSettlementRequiresSettlingAndNoUnresolved(t *testing.T) {
 	if err != nil || !fenced {
 		t.Fatalf("fence: fenced=%v err=%v", fenced, err)
 	}
+	fruitCreatedAt := time.Date(2026, time.January, 2, 3, 4, 5, 987654321, time.FixedZone("UTC+2", 2*60*60))
 	if err := store.CompleteSeedSettlement(ctx, target2, SeedRun{
 		Status: seedStatusSatisfied, Iterations: 2, Branch: "tendril/seed", Commit: "abc", Diff: "the diff", Logs: "logs",
+		FruitRepository: "opentendril/opentendril", FruitWorkspace: "/private/stem-workspaces/seed-2",
+		FruitPublicationState: FruitPublicationPublished, FruitCreatedAt: fruitCreatedAt,
 	}); err != nil {
 		t.Fatalf("complete: %v", err)
 	}
 	seed, ok, err := store.GetSeedRunByPhytomer(ctx, "tendril-2")
-	if err != nil || !ok || seed.Status != seedStatusSatisfied || seed.Commit != "abc" || seed.FinishedAt.IsZero() {
+	if err != nil || !ok || seed.Status != seedStatusSatisfied || seed.Commit != "abc" || seed.Branch != "tendril/seed" || seed.FinishedAt.IsZero() {
 		t.Fatalf("settled = %+v ok=%v err=%v", seed, ok, err)
+	}
+	if seed.FruitRepository != "opentendril/opentendril" {
+		t.Fatalf("Fruit repository = %q", seed.FruitRepository)
+	}
+	if seed.FruitWorkspace != "/private/stem-workspaces/seed-2" {
+		t.Fatalf("Fruit workspace = %q", seed.FruitWorkspace)
+	}
+	if seed.FruitPublicationState != FruitPublicationPublished {
+		t.Fatalf("Fruit publication state = %q", seed.FruitPublicationState)
+	}
+	if !seed.FruitCreatedAt.Equal(fruitCreatedAt) {
+		t.Fatalf("Fruit createdAt = %s, want %s", seed.FruitCreatedAt.Format(time.RFC3339Nano), fruitCreatedAt.Format(time.RFC3339Nano))
 	}
 }
 
