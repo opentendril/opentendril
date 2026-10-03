@@ -29,17 +29,23 @@ type delegatedAPIGitFixture struct {
 }
 
 type delegatedAPIGitForge struct {
-	t                 *testing.T
-	repository        string
-	origin            string
-	refs              map[string]string
-	createRefCalls    int
-	graphQLCalls      int
-	commitCount       int
-	ambiguousRef      bool
-	ambiguousGraphQL  bool
-	ambiguousRefSpent bool
-	ambiguousGQLSpent bool
+	t                     *testing.T
+	repository            string
+	origin                string
+	refs                  map[string]string
+	createRefCalls        int
+	targetRefReadCalls    int
+	graphQLCalls          int
+	commitCount           int
+	ambiguousRef          bool
+	ambiguousRefAbsent    bool
+	ambiguousRefTransport bool
+	createRefStatus       int
+	materializeRefOn4xx   bool
+	createRefRequestID    string
+	ambiguousGraphQL      bool
+	ambiguousRefSpent     bool
+	ambiguousGQLSpent     bool
 }
 
 func newDelegatedAPIGitFixture(t *testing.T, remoteFeature string) *delegatedAPIGitFixture {
@@ -169,6 +175,9 @@ func (f *delegatedAPIGitForge) ServeHTTP(w http.ResponseWriter, r *http.Request)
 		f.createCommit(w, r)
 	case strings.Contains(r.URL.Path, "/git/ref/heads/") && r.Method == http.MethodGet:
 		branch := strings.TrimPrefix(r.URL.Path, strings.SplitN(r.URL.Path, "/git/ref/heads/", 2)[0]+"/git/ref/heads/")
+		if branch == "feat/api" {
+			f.targetRefReadCalls++
+		}
 		if oid := f.refs[branch]; oid != "" {
 			_ = json.NewEncoder(w).Encode(map[string]any{"object": map[string]any{"sha": oid, "type": "commit"}})
 			return
@@ -199,6 +208,38 @@ func (f *delegatedAPIGitForge) createRef(w http.ResponseWriter, r *http.Request)
 	branch := strings.TrimPrefix(body.Ref, "refs/heads/")
 	if f.refs[branch] != "" {
 		w.WriteHeader(http.StatusUnprocessableEntity)
+		return
+	}
+	if f.ambiguousRefTransport && !f.ambiguousRefSpent {
+		f.ambiguousRefSpent = true
+		if hijacker, ok := w.(http.Hijacker); ok {
+			connection, _, err := hijacker.Hijack()
+			if err == nil {
+				_ = connection.Close()
+				return
+			}
+		}
+		w.WriteHeader(http.StatusInternalServerError)
+		return
+	}
+	if f.ambiguousRefAbsent && !f.ambiguousRefSpent {
+		f.ambiguousRefSpent = true
+		w.WriteHeader(http.StatusInternalServerError)
+		return
+	}
+	status := f.createRefStatus
+	if status == 0 {
+		status = http.StatusCreated
+	}
+	if status != http.StatusCreated {
+		if f.materializeRefOn4xx && status >= 400 && status <= 499 {
+			f.seedRemoteRef(f.t, branch, body.SHA)
+		}
+		if f.createRefRequestID != "" {
+			w.Header().Set("X-GitHub-Request-Id", f.createRefRequestID)
+		}
+		w.WriteHeader(status)
+		_, _ = w.Write([]byte("Authorization: Bearer upstream-secret-content https://x-access-token:credential-secret@github.com/private PRIVATE_TASK_CONTENT"))
 		return
 	}
 	f.seedRemoteRef(f.t, branch, body.SHA)
@@ -379,6 +420,72 @@ func TestDelegatedAPICommitCreatesAbsentFeatureBranchAndReconcilesWorkspace(t *t
 	}
 	if f.startOID("feat/api") != result.CommitHash || f.fake.commitCount != 1 {
 		t.Fatal("subsequent git.push changed the already-published commit")
+	}
+}
+
+func TestDelegatedAPICommitDoesNotReplayCreateRefAfterExplicit4xxAbsent(t *testing.T) {
+	f := newDelegatedAPIGitFixture(t, "absent")
+	f.fake.createRefStatus = http.StatusUnprocessableEntity
+	f.fake.createRefRequestID = "SAFE-REF-422"
+
+	_, err := RunGitCommit(context.Background(), f.execution("feat: rejected ref"))
+	var failure *apiFruitPublicationFailure
+	if err == nil || !errors.As(err, &failure) {
+		t.Fatalf("error = %v, want a classified deterministic failure", err)
+	}
+	if failure.Outcome != apiFruitOutcomeTargetRefAbsent || failure.StatusCode != http.StatusUnprocessableEntity || failure.RequestID != "SAFE-REF-422" {
+		t.Fatalf("failure = %+v, want absent target with HTTP 422 and sanitized request ID", failure)
+	}
+	if !strings.Contains(err.Error(), "HTTP 422") || !strings.Contains(err.Error(), "SAFE-REF-422") {
+		t.Fatalf("diagnostic = %q, want safe HTTP/request metadata", err)
+	}
+	for _, forbidden := range []string{"upstream-secret-content", "credential-secret", "PRIVATE_TASK_CONTENT", "Authorization:", "https://"} {
+		if strings.Contains(err.Error(), forbidden) {
+			t.Fatalf("unsafe provider data %q leaked in diagnostic: %q", forbidden, err)
+		}
+	}
+	if f.fake.createRefCalls != 1 || f.fake.graphQLCalls != 0 || f.fake.targetRefReadCalls != 2 {
+		t.Fatalf("calls = create-ref:%d GraphQL:%d target-ref-reads:%d, want 1/0/2 (one precheck, one reconciliation)", f.fake.createRefCalls, f.fake.graphQLCalls, f.fake.targetRefReadCalls)
+	}
+}
+
+func TestDelegatedAPICommitAcceptsTargetStateAfterExplicit4xx(t *testing.T) {
+	f := newDelegatedAPIGitFixture(t, "absent")
+	f.fake.createRefStatus = http.StatusUnprocessableEntity
+	f.fake.materializeRefOn4xx = true
+
+	result, err := RunGitCommit(context.Background(), f.execution("feat: reconcile rejected ref"))
+	if err != nil {
+		t.Fatalf("delegated API commit after acceptable reconciliation: %v", err)
+	}
+	if result.Status != "committed" || f.fake.createRefCalls != 1 || f.fake.targetRefReadCalls != 2 || f.fake.graphQLCalls != 1 || f.fake.commitCount != 1 {
+		t.Fatalf("result = %+v; calls = create-ref:%d target-ref-reads:%d GraphQL:%d commits:%d, want committed and 1/2/1/1", result, f.fake.createRefCalls, f.fake.targetRefReadCalls, f.fake.graphQLCalls, f.fake.commitCount)
+	}
+}
+
+func TestDelegatedAPICommitRetriesAbsent5xxOnlyAfterReconciliation(t *testing.T) {
+	f := newDelegatedAPIGitFixture(t, "absent")
+	f.fake.ambiguousRefAbsent = true
+
+	result, err := RunGitCommit(context.Background(), f.execution("feat: retry ambiguous ref"))
+	if err != nil {
+		t.Fatalf("delegated API commit after absent-ref reconciliation: %v", err)
+	}
+	if result.Status != "committed" || f.fake.createRefCalls != 2 || f.fake.targetRefReadCalls != 3 || f.fake.graphQLCalls != 1 || f.fake.commitCount != 1 {
+		t.Fatalf("result = %+v; calls = create-ref:%d target-ref-reads:%d GraphQL:%d commits:%d, want committed and 2/3/1/1", result, f.fake.createRefCalls, f.fake.targetRefReadCalls, f.fake.graphQLCalls, f.fake.commitCount)
+	}
+}
+
+func TestDelegatedAPICommitRetriesTransportAmbiguityOnlyAfterReconciliation(t *testing.T) {
+	f := newDelegatedAPIGitFixture(t, "absent")
+	f.fake.ambiguousRefTransport = true
+
+	result, err := RunGitCommit(context.Background(), f.execution("feat: retry ambiguous transport"))
+	if err != nil {
+		t.Fatalf("delegated API commit after absent-ref reconciliation: %v", err)
+	}
+	if result.Status != "committed" || f.fake.createRefCalls != 2 || f.fake.targetRefReadCalls != 3 || f.fake.graphQLCalls != 1 || f.fake.commitCount != 1 {
+		t.Fatalf("result = %+v; calls = create-ref:%d target-ref-reads:%d GraphQL:%d commits:%d, want committed and 2/3/1/1", result, f.fake.createRefCalls, f.fake.targetRefReadCalls, f.fake.graphQLCalls, f.fake.commitCount)
 	}
 }
 

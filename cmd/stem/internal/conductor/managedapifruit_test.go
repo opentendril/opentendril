@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -41,13 +42,14 @@ type apifruitFake struct {
 	graphQLOID      string // OID to embed in the GraphQL createCommitOnBranch response
 
 	// Captured requests
-	installCalled   int
-	tokenCalled     int
-	createRefCalled int
-	graphQLCalled   int
-	createRefBody   string // raw JSON body of the first create-ref POST
-	graphQLBody     string // raw JSON body of the GraphQL POST
-	installTokenURL string // for reference
+	installCalled      int
+	tokenCalled        int
+	createRefCalled    int
+	graphQLCalled      int
+	createRefBody      string // raw JSON body of the first create-ref POST
+	graphQLBody        string // raw JSON body of the GraphQL POST
+	createRefRequestID string
+	installTokenURL    string // for reference
 
 	// Set to non-empty to return an error from GraphQL.
 	graphQLError string
@@ -73,6 +75,9 @@ func (f *apifruitFake) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			f.createRefBody = body
 		}
 		if f.createRefStatus != 0 && f.createRefStatus != http.StatusCreated {
+			if f.createRefRequestID != "" {
+				w.Header().Set("X-GitHub-Request-Id", f.createRefRequestID)
+			}
 			w.WriteHeader(f.createRefStatus)
 			return
 		}
@@ -145,6 +150,7 @@ func TestGithubCreateRefSuccess(t *testing.T) {
 // from GitHub is surfaced as an explicit "already exists" error.
 func TestGithubCreateRefAlreadyExists(t *testing.T) {
 	fake := startAPIFruitFake(t, http.StatusUnprocessableEntity, "")
+	fake.createRefRequestID = "create-ref-422"
 
 	err := githubCreateRef(context.Background(), "owner", "repo", "sprout/task-exists", "deadbeef", "ghs_tok")
 	if err == nil {
@@ -152,6 +158,13 @@ func TestGithubCreateRefAlreadyExists(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "already exists") {
 		t.Fatalf("error = %q, want 'already exists' message", err.Error())
+	}
+	var mutationErr *githubMutationError
+	if !errors.As(err, &mutationErr) {
+		t.Fatalf("error = %T %v, want a typed mutation error", err, err)
+	}
+	if mutationErr.StatusCode != http.StatusUnprocessableEntity || mutationErr.RequestID != fake.createRefRequestID {
+		t.Fatalf("create-ref metadata = status %d, request %q; want %d, %q", mutationErr.StatusCode, mutationErr.RequestID, http.StatusUnprocessableEntity, fake.createRefRequestID)
 	}
 	_ = fake
 }

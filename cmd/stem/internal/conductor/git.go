@@ -1359,11 +1359,12 @@ const (
 // state-machine values and an optional GitHub request ID; upstream bodies and
 // request contents never cross this boundary.
 type apiFruitPublicationFailure struct {
-	Phase     string
-	Outcome   string
-	RetrySafe bool
-	RequestID string
-	Message   string
+	Phase      string
+	Outcome    string
+	RetrySafe  bool
+	RequestID  string
+	StatusCode int
+	Message    string
 }
 
 func (e *apiFruitPublicationFailure) Error() string {
@@ -1374,10 +1375,14 @@ func (e *apiFruitPublicationFailure) Error() string {
 	if message == "" {
 		message = "managed API Fruit publication could not establish an authoritative outcome"
 	}
-	if e.RequestID != "" {
-		return fmt.Sprintf("api Fruit publication failed during %s (%s; GitHub request %s): %s", e.Phase, e.Outcome, e.RequestID, message)
+	metadata := []string{e.Outcome}
+	if statusCode := safeGitHubHTTPStatus(e.StatusCode); statusCode != 0 {
+		metadata = append(metadata, fmt.Sprintf("HTTP %d", statusCode))
 	}
-	return fmt.Sprintf("api Fruit publication failed during %s (%s): %s", e.Phase, e.Outcome, message)
+	if requestID := safeGitHubRequestID(e.RequestID); requestID != "" {
+		metadata = append(metadata, "GitHub request "+requestID)
+	}
+	return fmt.Sprintf("api Fruit publication failed during %s (%s): %s", e.Phase, strings.Join(metadata, "; "), message)
 }
 
 type apiFruitPublicationIntent struct {
@@ -1440,12 +1445,17 @@ type githubBlobResponse struct {
 }
 
 func newAPIFruitPublicationFailure(phase, outcome string, retrySafe bool, requestID, message string) error {
+	return newAPIFruitPublicationFailureWithStatus(phase, outcome, retrySafe, requestID, 0, message)
+}
+
+func newAPIFruitPublicationFailureWithStatus(phase, outcome string, retrySafe bool, requestID string, statusCode int, message string) error {
 	return &apiFruitPublicationFailure{
-		Phase:     phase,
-		Outcome:   outcome,
-		RetrySafe: retrySafe,
-		RequestID: safeGitHubRequestID(requestID),
-		Message:   message,
+		Phase:      phase,
+		Outcome:    outcome,
+		RetrySafe:  retrySafe,
+		RequestID:  safeGitHubRequestID(requestID),
+		StatusCode: safeGitHubHTTPStatus(statusCode),
+		Message:    message,
 	}
 }
 
@@ -1774,12 +1784,12 @@ func publishAPIFruit(ctx context.Context, repoPath, branch, baseCommit string, a
 
 	if err := githubCreateRef(ctx, owner, repo, intent.Branch, intent.BaseCommit, token); err != nil {
 		var mutationErr *githubMutationError
-		if !errors.As(err, &mutationErr) || !mutationErr.RequestWritten {
+		if !errors.As(err, &mutationErr) || (!mutationErr.RequestWritten && !mutationErr.ResponseReceived) {
 			return "", newAPIFruitPublicationFailure("target-ref-creation", apiFruitOutcomePreMutationFailure, false, mutationRequestID(err), apiFruitFailureMessage(apiFruitOutcomePreMutationFailure))
 		}
 		reconciliation, reconcileErr := reconcileAPIFruit(ctx, intent, token)
 		if reconcileErr != nil {
-			return "", newAPIFruitPublicationFailure("reconciliation", apiFruitOutcomeReconciliationFailure, false, mutationRequestID(err), apiFruitFailureMessage(apiFruitOutcomeReconciliationFailure))
+			return "", newAPIFruitPublicationFailureWithStatus("reconciliation", apiFruitOutcomeReconciliationFailure, false, mutationErr.RequestID, mutationErr.StatusCode, apiFruitFailureMessage(apiFruitOutcomeReconciliationFailure))
 		}
 		if reconciliation.Outcome == apiFruitReconciledExact {
 			return reconciliation.OID, nil
@@ -1788,7 +1798,7 @@ func publishAPIFruit(ctx context.Context, repoPath, branch, baseCommit string, a
 		if reconciliation.Outcome == apiFruitReconciledAbsent {
 			outcome = apiFruitOutcomeTargetRefAbsent
 		}
-		return "", newAPIFruitPublicationFailure("target-ref-creation", outcome, false, mutationRequestID(err), apiFruitFailureMessage(outcome))
+		return "", newAPIFruitPublicationFailureWithStatus("target-ref-creation", outcome, false, mutationErr.RequestID, mutationErr.StatusCode, apiFruitFailureMessage(outcome))
 	}
 
 	return publishAPIFruitCommit(ctx, token, intent)
