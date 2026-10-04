@@ -17,25 +17,25 @@ import (
 
 // Growing a Seed: the bounded-task executor. A Seed is a bounded intent — a
 // goal and iteration/time bounds, with an optional explicit verify predicate.
-// It composes two sealed
-// execution paths already in the conductor, changing neither:
+// It composes the sealed builder path with an optional sealed verifier path:
 //
 //   - The builder is RunSprout with DisableMergeBack: an agentic Sprout builds
 //     toward the goal and commits onto a dedicated seed branch, never touching
 //     the host workspace (the work stays a branch for review — the Phloem).
-//   - The verdict is RunStoma (the stoma.pass executor): the verify command is
-//     run deterministically in a network-sealed Terrarium against the seed
-//     branch. Its exit code — never the Sprout's self-report — is the
-//     authoritative pass/fail. Trust the builder to try; verify the result.
+//   - When requested, RunStoma (the stoma.pass executor) runs the verifier
+//     deterministically in a network-sealed Terrarium against an immutable
+//     candidate. Exit 0 passes, exit 1 is a repairable predicate failure, other
+//     completed non-zero exits are configuration-invalid, and inability or
+//     timeout are non-repairable verification outcomes.
 //
 // Each iteration re-bases on the seed branch (RunSprout's shadow worktree is
 // created from SubstrateBranch), so a second attempt builds on the first and
-// the deterministic verify failure is fed back into the next prompt. A pure,
+// a deterministic predicate failure is fed back into the next prompt. A pure,
 // recoverable protocol failure may still leave an immutable checkpoint for the
-// verifier and next iteration; other Sprout failures wither the Seed.
+// verifier and next iteration; other Sprout failures stop cognitive execution.
 
-// Seed growth terminal statuses. The string values match core.SeedStatus* so
-// the adapter passes the verdict straight through without translation.
+// Seed growth lifecycle statuses. The string values match core.SeedStatus* so
+// the adapter passes them through without translation.
 const (
 	SeedStatusSettled   = core.SeedStatusSettled
 	SeedStatusSatisfied = core.SeedStatusSatisfied // historical compatibility
@@ -645,11 +645,11 @@ func isRecoverableSeedSproutFailure(runErr error) bool {
 }
 
 // runSeedVerify runs the verify command deterministically against a throwaway
-// worktree of the exact candidate commit and reports whether it passed. The
-// worktree is rooted in the Stem-owned run-workspace boundary so the Docker
+// worktree of the exact candidate commit and reports its deterministic result.
+// The workspace is read-only and rooted in the Stem-owned run-workspace boundary so the Docker
 // daemon sees the same host path the Stem materialized. A non-nil error is an
-// infrastructure failure (the verdict could not be produced), distinct from a
-// clean non-zero exit (a normal failed verification the loop iterates on).
+// infrastructure failure (the verdict could not be produced), distinct from
+// command exits. Only exit 1 is repairable.
 func runSeedVerify(ctx context.Context, sourcePath, candidateCommit string, verify, egress []string) seedVerifyReport {
 	worktree, err := createSeedVerificationWorktree(ctx, sourcePath, candidateCommit)
 	if err != nil {
@@ -767,9 +767,9 @@ const seedCandidateDiffHeading = "Current candidate diff against the Seed base:"
 const seedEvidenceTruncatedSuffix = "\n…(truncated)"
 
 // seedVerificationFeedback is the single bounded feedback path from a
-// deterministic verifier to the next Sprout prompt. Infrastructure failures
-// are intentionally excluded: they wither the Seed rather than becoming a
-// retry instruction.
+// deterministic verifier to the next Sprout prompt. Only predicate failures
+// are repairable; configuration, infrastructure, and timeout outcomes stop
+// verification-driven convergence.
 func seedVerificationFeedback(report seedVerifyReport) string {
 	if seedVerificationDiagnostic(0, report).Outcome != core.SeedVerificationOutcomePredicateFailed {
 		return ""
@@ -796,7 +796,7 @@ func boundSeedVerifyFeedback(message string) string {
 // immutable identities established by the Seed lifecycle, so this describes
 // base -> current candidate rather than only the latest iteration delta.
 // Auxiliary evidence is best-effort: a Git failure must not replace the
-// authoritative verifier verdict or wither the Seed.
+// authoritative verifier verdict or change the execution outcome.
 func seedCandidateDiff(ctx context.Context, sourcePath, baseRevision, candidateRevision string) string {
 	baseRevision = strings.TrimSpace(baseRevision)
 	candidateRevision = strings.TrimSpace(candidateRevision)

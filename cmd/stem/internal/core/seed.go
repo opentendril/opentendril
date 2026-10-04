@@ -17,18 +17,19 @@ import (
 // The seed/grow capability family: grow a Seed — a bounded, well-specified
 // intent — to Fruit. Where stoma.pass runs ONE command and sprout.grow
 // runs an open-ended transcript, seed.grow hands the Stem a bounded unit of work
-// — a goal plus a verification predicate plus explicit iteration and time bounds
-// — and asks it to converge: build toward the goal, run the verify predicate,
-// and iterate until the predicate passes or the bounds are spent. It is the
+// — a goal, an optional explicit verification predicate, and iteration/time
+// bounds — and asks it to build toward the goal, optionally iterating on
+// predicate failures until the predicate passes or the bounds are spent. It is the
 // "run + fix the failing tests" / "regenerate fixtures" shape.
 //
 // The Core owns only the contract and its validation. Execution — the sprout
-// builder loop, the sealed-Terrarium verify run, worktree reconciliation — is
+// builder loop, the optional sealed-Terrarium verifier, and worktree
+// reconciliation — is
 // injected as a transport-free port (WithSeed), so the Core never imports the
 // conductor (see internal/core/boundary_test.go). Until that port is wired the
 // capability reports that it is not wired rather than acting.
 //
-// Egress model (identical to stoma): the verify predicate and any build
+// Egress model (identical to stoma): any explicit verify predicate and build
 // work run network-sealed; the only external reach is Stem-mediated and bounded
 // by the delegation grant's egress allow-list. Egress carries json:"-", so it
 // is set only by the Stem's own call sites from an authorized grant and can
@@ -39,23 +40,24 @@ const (
 	// SeedStatusRunning is the durable opening status of a Seed-owned
 	// Phytomer. It is the only continuation-eligible lifecycle state.
 	SeedStatusRunning = "running"
-	// SeedStatusSettling is the non-terminal fence acquired after verification
-	// passes and before successful Fruit may be persisted. It is not
+	// SeedStatusSettling is the non-terminal fence acquired before terminal
+	// accounting and any reviewable Fruit may be persisted. It is not
 	// continuation-eligible.
 	SeedStatusSettling = "settling"
-	// SeedStatusSettled is the neutral terminal lifecycle state. It says only
-	// that bounded Seed execution has been durably accounted for.
+	// SeedStatusSettled is the neutral terminal lifecycle state. It carries no
+	// objective-success or objective-failure judgement.
 	SeedStatusSettled = "settled"
-	// SeedStatusSatisfied means the verify predicate exited 0 within bounds.
+	// SeedStatusSatisfied is a historical terminal value for rows written before
+	// neutral lifecycle statuses were introduced.
 	SeedStatusSatisfied = "satisfied"
-	// SeedStatusExhausted means the iteration/time bounds were spent before
-	// the verify predicate passed.
+	// SeedStatusExhausted is a historical terminal value for rows written before
+	// neutral lifecycle statuses were introduced.
 	SeedStatusExhausted = "exhausted"
-	// SeedStatusWithered means the underlying sprout failed and was Abscised;
-	// host state is untouched (the Terrarium contained it).
+	// SeedStatusWithered is a historical terminal value for rows written before
+	// neutral lifecycle statuses were introduced.
 	SeedStatusWithered = "withered"
-	// SeedStatusFruitPublicationFailed means Seed execution reached Fruit
-	// publication, but no authoritative remote Fruit could be established.
+	// SeedStatusFruitPublicationFailed is a historical terminal value for rows
+	// written before neutral lifecycle statuses were introduced.
 	SeedStatusFruitPublicationFailed = "fruit-publication-failed"
 	// SeedFailureCategoryFruitPublication is the safe diagnostic category for a
 	// failed managed Fruit publication.

@@ -379,7 +379,10 @@ func TestRunSeedNoChangeVerifiesBaseCandidate(t *testing.T) {
 		t.Fatalf("RunSeed: %v", err)
 	}
 	if res.Status != SeedStatusSettled {
-		t.Fatalf("status = %q, want exhausted after a normal predicate failure", res.Status)
+		t.Fatalf("status = %q, want settled after a normal predicate failure", res.Status)
+	}
+	if res.ExecutionOutcome != core.SeedExecutionOutcomeBoundsExhausted || res.VerificationOutcome != core.SeedVerificationOutcomePredicateFailed {
+		t.Fatalf("outcomes = %q/%q, want bounds-exhausted/predicate-failed", res.ExecutionOutcome, res.VerificationOutcome)
 	}
 	if res.Branch != "" {
 		t.Fatalf("no-change Seed created a review branch %q", res.Branch)
@@ -1203,6 +1206,9 @@ func TestSeedVerificationDiagnosticsDistinguishOutcomes(t *testing.T) {
 	if failed.VerificationDiagnostics[0].TimedOut {
 		t.Fatal("predicate failure was marked timed out")
 	}
+	if failed.ExecutionOutcome != core.SeedExecutionOutcomeBoundsExhausted || failed.VerificationOutcome != core.SeedVerificationOutcomePredicateFailed {
+		t.Fatalf("predicate outcomes = %q/%q, want bounds-exhausted/predicate-failed", failed.ExecutionOutcome, failed.VerificationOutcome)
+	}
 
 	seedVerifyFn = func(context.Context, string, string, []string, []string) seedVerifyReport {
 		return seedVerifyReport{TimedOut: true, Passed: false}
@@ -1218,7 +1224,10 @@ func TestSeedVerificationDiagnosticsDistinguishOutcomes(t *testing.T) {
 		t.Fatalf("timeout diagnostic = %+v", timedOut.VerificationDiagnostics[0])
 	}
 	if timedOut.Status != SeedStatusSettled || timedOut.Iterations != 1 {
-		t.Fatalf("timeout status/iterations = %q/%d, want withered/1", timedOut.Status, timedOut.Iterations)
+		t.Fatalf("timeout status/iterations = %q/%d, want settled/1", timedOut.Status, timedOut.Iterations)
+	}
+	if timedOut.ExecutionOutcome != core.SeedExecutionOutcomeCompleted || timedOut.VerificationOutcome != core.SeedVerificationOutcomeTimedOut {
+		t.Fatalf("timeout outcomes = %q/%q, want completed/timed-out", timedOut.ExecutionOutcome, timedOut.VerificationOutcome)
 	}
 
 	seedVerifyFn = func(context.Context, string, string, []string, []string) seedVerifyReport {
@@ -1232,7 +1241,10 @@ func TestSeedVerificationDiagnosticsDistinguishOutcomes(t *testing.T) {
 		t.Fatalf("infra RunSeed: %v", err)
 	}
 	if infra.Status != SeedStatusSettled {
-		t.Fatalf("infra status = %q, want withered", infra.Status)
+		t.Fatalf("infra status = %q, want settled", infra.Status)
+	}
+	if infra.ExecutionOutcome != core.SeedExecutionOutcomeCompleted || infra.VerificationOutcome != core.SeedVerificationOutcomeInfrastructureFailed {
+		t.Fatalf("infra outcomes = %q/%q, want completed/infrastructure-failed", infra.ExecutionOutcome, infra.VerificationOutcome)
 	}
 	diag := infra.VerificationDiagnostics[0]
 	if diag.Outcome != core.SeedVerificationOutcomeInfrastructureFailed || diag.TimedOut || diag.ExitCode != nil {
@@ -1337,6 +1349,9 @@ func TestFailedVerificationPreservesSeedCheckpointForNextIteration(t *testing.T)
 	}
 	if len(starts) != 2 {
 		t.Fatalf("starts = %v", starts)
+	}
+	if res.ExecutionOutcome != core.SeedExecutionOutcomeBoundsExhausted || res.VerificationOutcome != core.SeedVerificationOutcomePredicateFailed {
+		t.Fatalf("bounded repair outcomes = %q/%q, want bounds-exhausted/predicate-failed", res.ExecutionOutcome, res.VerificationOutcome)
 	}
 	if starts[0] != base {
 		t.Fatalf("first start = %q, want base %q", starts[0], base)

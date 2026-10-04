@@ -125,7 +125,10 @@ func TestRunSeedSatisfiedOnFirstVerify(t *testing.T) {
 		t.Fatalf("RunSeed: %v", err)
 	}
 	if res.Status != SeedStatusSettled {
-		t.Fatalf("status = %q, want satisfied. log:\n%s", res.Status, res.Logs)
+		t.Fatalf("status = %q, want settled. log:\n%s", res.Status, res.Logs)
+	}
+	if res.ExecutionOutcome != core.SeedExecutionOutcomeCompleted || res.VerificationOutcome != core.SeedVerificationOutcomePassed {
+		t.Fatalf("outcomes = %q/%q, want completed/passed", res.ExecutionOutcome, res.VerificationOutcome)
 	}
 	if res.Iterations != 1 {
 		t.Fatalf("iterations = %d, want 1", res.Iterations)
@@ -164,7 +167,10 @@ func TestRunSeedExhaustedThreadsFeedback(t *testing.T) {
 		t.Fatalf("RunSeed: %v", err)
 	}
 	if res.Status != SeedStatusSettled {
-		t.Fatalf("status = %q, want exhausted", res.Status)
+		t.Fatalf("status = %q, want settled", res.Status)
+	}
+	if res.ExecutionOutcome != core.SeedExecutionOutcomeBoundsExhausted || res.VerificationOutcome != core.SeedVerificationOutcomePredicateFailed {
+		t.Fatalf("outcomes = %q/%q, want bounds-exhausted/predicate-failed", res.ExecutionOutcome, res.VerificationOutcome)
 	}
 	if res.Iterations != 3 {
 		t.Fatalf("iterations = %d, want 3", res.Iterations)
@@ -200,7 +206,10 @@ func TestRunSeedSilentVerificationThreadsExitFeedback(t *testing.T) {
 		t.Fatalf("RunSeed: %v", err)
 	}
 	if res.Status != SeedStatusSettled {
-		t.Fatalf("status = %q, want exhausted", res.Status)
+		t.Fatalf("status = %q, want settled", res.Status)
+	}
+	if res.ExecutionOutcome != core.SeedExecutionOutcomeCompleted || res.VerificationOutcome != core.SeedVerificationOutcomeConfigurationInvalid {
+		t.Fatalf("outcomes = %q/%q, want completed/configuration-invalid", res.ExecutionOutcome, res.VerificationOutcome)
 	}
 	if len(prompts) != 1 {
 		t.Fatalf("build ran %d time(s), want 1 for a non-repairable exit", len(prompts))
