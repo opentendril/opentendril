@@ -502,6 +502,64 @@ func TestSchemaVersion7UpgradesSeedRunsWithoutInventingRetryIdentity(t *testing.
 	}
 }
 
+func TestSchemaVersion9AddsSeedOutcomesWithoutBackfill(t *testing.T) {
+	t.Setenv(EnvEncryptAtRest, "off")
+	ctx := context.Background()
+	path := filepath.Join(t.TempDir(), "history.db")
+	store, err := Open(ctx, path)
+	if err != nil {
+		t.Fatalf("open current history database: %v", err)
+	}
+	if err := store.RecordSeedOpening(ctx, SeedRun{
+		Handle: "historical-seed", Pollen: "pollen-old", PhytomerID: "tendril-old",
+		Substrate: "core", Goal: "historical goal", Status: "satisfied", StartedAt: time.Now().UTC(),
+	}); err != nil {
+		t.Fatalf("record historical Seed: %v", err)
+	}
+	for _, column := range []string{"executionOutcome", "verificationOutcome"} {
+		if _, err := store.db.ExecContext(ctx, `ALTER TABLE seedruns DROP COLUMN `+column); err != nil {
+			t.Fatalf("rewind version-10 column %s: %v", column, err)
+		}
+	}
+	if _, err := store.db.ExecContext(ctx, `UPDATE schemaMeta SET version = 9 WHERE id = 1`); err != nil {
+		t.Fatalf("mark version-9 database: %v", err)
+	}
+	if err := store.Close(); err != nil {
+		t.Fatalf("close version-9 database: %v", err)
+	}
+
+	store, err = Open(ctx, path)
+	if err != nil {
+		t.Fatalf("open and migrate version-9 database: %v", err)
+	}
+	defer store.Close()
+	run, found, err := store.GetSeedRun(ctx, "historical-seed")
+	if err != nil || !found {
+		t.Fatalf("read migrated Seed: found=%v err=%v", found, err)
+	}
+	if run.ExecutionOutcome != "" || run.VerificationOutcome != "" {
+		t.Fatalf("migration inferred historical outcomes: %q / %q", run.ExecutionOutcome, run.VerificationOutcome)
+	}
+	for _, column := range []string{"executionOutcome", "verificationOutcome"} {
+		var name, dataType, defaultValue string
+		var notNull int
+		if err := store.db.QueryRowContext(ctx, `SELECT name, type, "notnull", dflt_value FROM pragma_table_info('seedruns') WHERE name = ?`, column).
+			Scan(&name, &dataType, &notNull, &defaultValue); err != nil {
+			t.Fatalf("inspect migrated column %s: %v", column, err)
+		}
+		if name != column || dataType != "TEXT" || notNull != 1 || defaultValue != "''" {
+			t.Fatalf("migrated column %s shape = %q %q notNull=%d default=%q", column, name, dataType, notNull, defaultValue)
+		}
+	}
+	var version int
+	if err := store.db.QueryRowContext(ctx, `SELECT version FROM schemaMeta WHERE id = 1`).Scan(&version); err != nil {
+		t.Fatalf("read migrated schema version: %v", err)
+	}
+	if version != currentSchemaVersion {
+		t.Fatalf("migrated schema version = %d, want %d", version, currentSchemaVersion)
+	}
+}
+
 func TestSchemaVersionBackstampsPreVersioningDatabase(t *testing.T) {
 	dbDir := t.TempDir()
 	path := filepath.Join(dbDir, "history.db")

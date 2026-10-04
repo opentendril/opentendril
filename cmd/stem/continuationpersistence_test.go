@@ -271,7 +271,14 @@ func TestProductionAdapterEmptyPollenOpenedSeedLifecycle(t *testing.T) {
 				if err != nil || !fenced {
 					t.Fatalf("local fence: fenced=%v err=%v", fenced, err)
 				}
-				return core.SeedGrowResult{Status: core.SeedStatusSatisfied, Iterations: 1, PhytomerID: spec.PhytomerID}, nil
+				code := 0
+				return core.SeedGrowResult{
+					Status: core.SeedStatusSatisfied, Iterations: 1, PhytomerID: spec.PhytomerID,
+					ExecutionOutcome: core.SeedExecutionOutcomeCompleted, VerificationOutcome: core.SeedVerificationOutcomePassed,
+					VerificationDiagnostics: []core.SeedVerificationDiagnostic{{
+						Iteration: 1, Outcome: core.SeedVerificationOutcomePassed, ExitCode: &code,
+					}},
+				}, nil
 			},
 		}).
 		WithSeedPersistence(seedPersistence(store)).
@@ -305,9 +312,67 @@ func TestProductionAdapterEmptyPollenOpenedSeedLifecycle(t *testing.T) {
 	if err != nil || !ok || seed.Pollen != "" || seed.Status != core.SeedStatusSatisfied {
 		t.Fatalf("settled = %+v ok=%v err=%v", seed, ok, err)
 	}
+	if seed.ExecutionOutcome != core.SeedExecutionOutcomeCompleted || seed.VerificationOutcome != core.SeedVerificationOutcomePassed {
+		t.Fatalf("settled outcome facts = %q / %q", seed.ExecutionOutcome, seed.VerificationOutcome)
+	}
+	if len(seed.VerificationDiagnostics) != 1 || seed.VerificationDiagnostics[0].ExitCode == nil || *seed.VerificationDiagnostics[0].ExitCode != 0 {
+		t.Fatalf("successful verification diagnostics changed: %+v", seed.VerificationDiagnostics)
+	}
 	got, ok, err := store.GetContinuation(ctx, accepted.ContinuationID)
 	if err != nil || !ok || got.DeliveryState != core.ContinuationDeliveryDelivered || got.Pollen != "" {
 		t.Fatalf("continuation = %+v ok=%v err=%v", got, ok, err)
+	}
+}
+
+func TestProductionAdapterDetachedTerminalSettlementPersistsOutcomeFacts(t *testing.T) {
+	ctx := context.Background()
+	store, err := historydb.Open(ctx, filepath.Join(t.TempDir(), "history.db"))
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+	manager, err := session.NewManager(ctx, store)
+	if err != nil {
+		t.Fatalf("manager: %v", err)
+	}
+	code := 1
+	svc := core.NewService(manager).
+		WithSeed(core.SeedOperations{Run: func(_ context.Context, spec core.SeedSpec, _ *core.SeedContinuationLifecycle) (core.SeedGrowResult, error) {
+			return core.SeedGrowResult{
+				Status: core.SeedStatusExhausted, Iterations: 3, PhytomerID: spec.PhytomerID,
+				ExecutionOutcome:    core.SeedExecutionOutcomeBoundsExhausted,
+				VerificationOutcome: core.SeedVerificationOutcomePredicateFailed,
+				VerificationDiagnostics: []core.SeedVerificationDiagnostic{{
+					Iteration: 3, Outcome: core.SeedVerificationOutcomePredicateFailed, ExitCode: &code,
+				}},
+			}, nil
+		}}).
+		WithSeedPersistence(seedPersistence(store)).
+		WithContinuationPersistence(continuationPersistence(store))
+
+	growth, err := svc.PrepareSeed(ctx, core.SeedGrowInput{
+		Substrate: "myrepo", Goal: "make it pass", Verify: []string{"true"},
+		MaxIterations: 3, IdempotencyKey: "terminal-outcome-open",
+	})
+	if err != nil {
+		t.Fatalf("prepare: %v", err)
+	}
+	if _, err := svc.OpenPreparedSeed(ctx, growth); err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	if _, err := svc.GrowPreparedSeed(ctx, growth); err != nil {
+		t.Fatalf("grow: %v", err)
+	}
+	seed, found, err := store.GetSeedRunByPhytomer(ctx, growth.PhytomerID())
+	if err != nil || !found {
+		t.Fatalf("read terminal Seed: found=%v err=%v", found, err)
+	}
+	if seed.ExecutionOutcome != core.SeedExecutionOutcomeBoundsExhausted || seed.VerificationOutcome != core.SeedVerificationOutcomePredicateFailed {
+		t.Fatalf("terminal outcome facts = %q / %q", seed.ExecutionOutcome, seed.VerificationOutcome)
+	}
+	if len(seed.VerificationDiagnostics) != 1 || seed.VerificationDiagnostics[0].Iteration != 3 ||
+		seed.VerificationDiagnostics[0].ExitCode == nil || *seed.VerificationDiagnostics[0].ExitCode != 1 {
+		t.Fatalf("terminal diagnostics changed: %+v", seed.VerificationDiagnostics)
 	}
 }
 

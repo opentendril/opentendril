@@ -697,6 +697,8 @@ func (s *Store) updateSeedRunResultTx(ctx context.Context, tx *sql.Tx, run SeedR
 UPDATE seedruns SET
 	goal = CASE WHEN "idempotency-key" <> '' AND goal = '' THEN goal ELSE ? END,
 	status = ?,
+	executionOutcome = CASE WHEN "idempotency-key" <> '' AND goal = '' THEN executionOutcome ELSE COALESCE(NULLIF(?, ''), executionOutcome) END,
+	verificationOutcome = CASE WHEN "idempotency-key" <> '' AND goal = '' THEN verificationOutcome ELSE COALESCE(NULLIF(?, ''), verificationOutcome) END,
 	iterations = CASE WHEN "idempotency-key" <> '' AND goal = '' THEN iterations ELSE ? END,
 	branch = CASE WHEN "idempotency-key" <> '' AND goal = '' THEN branch ELSE ? END,
 	fruitCommit = CASE WHEN "idempotency-key" <> '' AND goal = '' THEN fruitCommit ELSE ? END,
@@ -716,6 +718,8 @@ UPDATE seedruns SET
 WHERE handle = ? AND phytomerId = ? AND pollen = ? AND substrate = ? AND status = ?`,
 		goal,
 		run.Status,
+		run.ExecutionOutcome,
+		run.VerificationOutcome,
 		run.Iterations,
 		run.Branch,
 		run.Commit,

@@ -81,6 +81,7 @@ func TestPhytomerObservationSourceCopiesVerificationDiagnostics(t *testing.T) {
 	if err := store.RecordSeedRun(context.Background(), historydb.SeedRun{
 		Handle: "seed-verify", Pollen: "claude", PhytomerID: "tendril-verify",
 		Substrate: "myrepo", Status: "exhausted", Iterations: 1,
+		ExecutionOutcome: "bounds-exhausted", VerificationOutcome: "predicate-failed",
 		VerificationDiagnostics: []historydb.SeedVerificationDiagnostic{{
 			Iteration: 1, Outcome: "predicate-failed", ExitCode: &code, Message: "verify command exited 1",
 		}},
@@ -96,6 +97,9 @@ func TestPhytomerObservationSourceCopiesVerificationDiagnostics(t *testing.T) {
 	}
 	if len(seed.VerificationDiagnostics) != 1 || seed.VerificationDiagnostics[0].Outcome != "predicate-failed" {
 		t.Fatalf("verification diagnostics = %+v", seed.VerificationDiagnostics)
+	}
+	if seed.ExecutionOutcome != "bounds-exhausted" || seed.VerificationOutcome != "predicate-failed" {
+		t.Fatalf("projected Seed outcome evidence = %q / %q", seed.ExecutionOutcome, seed.VerificationOutcome)
 	}
 	if seed.VerificationDiagnostics[0].ExitCode == nil || *seed.VerificationDiagnostics[0].ExitCode != 1 {
 		t.Fatalf("exit code = %+v", seed.VerificationDiagnostics[0])

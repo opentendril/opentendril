@@ -46,6 +46,7 @@ func TestSeedRunRoundTrip(t *testing.T) {
 	// Settle: the same handle upserts the terminal Fruit.
 	if err := store.RecordSeedRun(ctx, SeedRun{
 		Handle: "seed-1", Pollen: "claude", PhytomerID: "tendril-seed-1", Substrate: "core", Status: "satisfied",
+		ExecutionOutcome: "completed", VerificationOutcome: "passed",
 		Iterations: 2, Branch: "tendril/seed-1", Commit: "abc123", Diff: "the diff", Logs: "the logs",
 		StartedAt: started, FinishedAt: time.Now().UTC(),
 	}); err != nil {
@@ -58,6 +59,9 @@ func TestSeedRunRoundTrip(t *testing.T) {
 	}
 	if run.Status != "satisfied" || run.Iterations != 2 || run.Branch != "tendril/seed-1" || run.Diff != "the diff" || run.Commit != "abc123" {
 		t.Fatalf("settled record = %+v", run)
+	}
+	if run.ExecutionOutcome != "completed" || run.VerificationOutcome != "passed" {
+		t.Fatalf("settled outcomes = %q / %q", run.ExecutionOutcome, run.VerificationOutcome)
 	}
 	if run.PhytomerID != "tendril-seed-1" {
 		t.Fatalf("settled phytomer = %q, want the identity recorded at dispatch", run.PhytomerID)
@@ -244,7 +248,8 @@ func TestPruneOlderThanRetainsOnlyDetachedSeedRetryIdentity(t *testing.T) {
 		Branch: "tendril/private", Commit: "deadbeef", Diff: "private diff", Logs: "private logs", Error: "private error",
 		PublicationDiagnostic:   &SeedPublicationDiagnostic{FailureCategory: "private diagnostic"},
 		VerificationDiagnostics: []SeedVerificationDiagnostic{{Iteration: 1, Outcome: "failed", Message: "private verification"}},
-		StartedAt:               old, FinishedAt: finished,
+		ExecutionOutcome:        "completed", VerificationOutcome: "passed",
+		StartedAt: old, FinishedAt: finished,
 	}
 	if err := store.CompleteSeedSettlement(ctx, target, settlement); err != nil {
 		t.Fatalf("complete compacted detached Seed settlement: %v", err)
@@ -260,7 +265,8 @@ func TestPruneOlderThanRetainsOnlyDetachedSeedRetryIdentity(t *testing.T) {
 		t.Fatalf("settled retry identity/status = %+v", settled)
 	}
 	if settled.Goal != "" || settled.Diff != "" || settled.Logs != "" || settled.Error != "" ||
-		settled.Iterations != 0 || settled.Branch != "" || settled.Commit != "" || settled.PublicationDiagnostic != nil || len(settled.VerificationDiagnostics) != 0 {
+		settled.Iterations != 0 || settled.Branch != "" || settled.Commit != "" || settled.PublicationDiagnostic != nil || len(settled.VerificationDiagnostics) != 0 ||
+		settled.ExecutionOutcome != "" || settled.VerificationOutcome != "" {
 		t.Fatalf("late settlement repopulated expired Seed payload: %+v", settled)
 	}
 
