@@ -20,7 +20,7 @@ import (
 // runSeedCmd is the CLI adapter for the governed seed/grow capability family —
 // grow a Seed (a bounded intent) to Fruit: a thin projection of the same
 // transport-free core.Core the REST and MCP surfaces use. `tendril seed grow`
-// hands off a Seed — build toward a goal with optional command verification —
+// hands off a Seed and builds toward its goal, with optional command verification.
 // and prints the reviewable Fruit.
 //
 // A CLI invocation is never delegated (there is no Pollen), so its egress
@@ -651,7 +651,7 @@ func runSeedCollect(ctx context.Context, args []string) {
 		fmt.Fprintf(os.Stderr, "Verification outcome: %s\n", run.VerificationOutcome)
 	}
 
-	// A still-growing Seed is not an error — collect again later. Terminal exit
+	// A still-growing Seed is not an error; collect again later. Terminal exit
 	// handling follows the execution/verification facts, not a legacy status.
 	if run.Status == "running" {
 		return
