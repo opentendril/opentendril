@@ -712,9 +712,10 @@ func TestGrowPreparedSeedPersistsVerificationDiagnostics(t *testing.T) {
 	svc := NewService(manager).WithSeed(SeedOperations{
 		Run: func(_ context.Context, spec SeedSpec, _ *SeedContinuationLifecycle) (SeedGrowResult, error) {
 			return SeedGrowResult{
-				Status:     SeedStatusExhausted,
-				Iterations: 1,
-				PhytomerID: spec.PhytomerID,
+				Status:              SeedStatusExhausted,
+				VerificationOutcome: SeedVerificationOutcomeInfrastructureFailed,
+				Iterations:          1,
+				PhytomerID:          spec.PhytomerID,
 				VerificationDiagnostics: []SeedVerificationDiagnostic{{
 					Iteration: 1,
 					Outcome:   SeedVerificationOutcomeInfrastructureFailed,
@@ -747,5 +748,35 @@ func TestGrowPreparedSeedPersistsVerificationDiagnostics(t *testing.T) {
 	}
 	if len(settled.VerificationDiagnostics) != 1 || settled.VerificationDiagnostics[0].ExitCode == nil || *settled.VerificationDiagnostics[0].ExitCode != 2 {
 		t.Fatalf("settled diagnostics = %+v", settled.VerificationDiagnostics)
+	}
+	if settled.ExecutionOutcome != "" || settled.VerificationOutcome != SeedVerificationOutcomeInfrastructureFailed {
+		t.Fatalf("settled outcome facts = %q / %q", settled.ExecutionOutcome, settled.VerificationOutcome)
+	}
+}
+
+func TestSeedOutcomeVocabularies(t *testing.T) {
+	for _, outcome := range []string{
+		"", SeedExecutionOutcomeCompleted, SeedExecutionOutcomeSproutFailed,
+		SeedExecutionOutcomeInfrastructureFailed, SeedExecutionOutcomeTimedOut,
+		SeedExecutionOutcomeBoundsExhausted, SeedExecutionOutcomeBoundaryRefused,
+	} {
+		if !ValidSeedExecutionOutcome(outcome) {
+			t.Errorf("execution outcome %q rejected", outcome)
+		}
+	}
+	for _, outcome := range []string{
+		"", SeedVerificationOutcomeNotRequested, SeedVerificationOutcomePassed,
+		SeedVerificationOutcomePredicateFailed, SeedVerificationOutcomeConfigurationInvalid,
+		SeedVerificationOutcomeInfrastructureFailed, SeedVerificationOutcomeTimedOut,
+	} {
+		if !ValidSeedVerificationOutcome(outcome) {
+			t.Errorf("verification outcome %q rejected", outcome)
+		}
+	}
+	if ValidSeedExecutionOutcome("objective-succeeded") {
+		t.Fatal("unknown execution outcome accepted")
+	}
+	if ValidSeedVerificationOutcome("objective-succeeded") {
+		t.Fatal("unknown verification outcome accepted")
 	}
 }

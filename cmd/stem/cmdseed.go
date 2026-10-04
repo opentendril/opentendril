@@ -166,6 +166,8 @@ func seedPersistence(history *historydb.Store) core.SeedPersistence {
 				Diff:                    settled.Diff,
 				Logs:                    settled.Logs,
 				Error:                   settled.Error,
+				ExecutionOutcome:        settled.ExecutionOutcome,
+				VerificationOutcome:     settled.VerificationOutcome,
 				PublicationDiagnostic:   historySeedPublicationDiagnostic(settled.PublicationDiagnostic),
 				VerificationDiagnostics: historySeedVerificationDiagnostics(settled.VerificationDiagnostics),
 				StartedAt:               settled.StartedAt,
@@ -214,8 +216,13 @@ func seedOperations(history *historydb.Store, ambientBus *eventbus.Bus) core.See
 				}
 			}
 			result, err := conductor.RunSeed(ctx, execution)
+			sproutFailure := result.Status == conductor.SeedStatusWithered && len(result.VerificationDiagnostics) < result.Iterations &&
+				seedSproutFailureEstablished(context.WithoutCancel(ctx), history, spec.PhytomerID, result.Iterations)
+			executionOutcome, verificationOutcome := seedOutcomeFacts(result, err, ctx.Err(), spec.MaxIterations, sproutFailure)
 			translated := core.SeedGrowResult{
 				Status:                  result.Status,
+				ExecutionOutcome:        executionOutcome,
+				VerificationOutcome:     verificationOutcome,
 				Iterations:              result.Iterations,
 				PhytomerID:              spec.PhytomerID,
 				Branch:                  result.Branch,
@@ -232,6 +239,71 @@ func seedOperations(history *historydb.Store, ambientBus *eventbus.Bus) core.See
 			return translated, err
 		},
 	}
+}
+
+// seedOutcomeFacts projects only deterministic evidence already produced by
+// the current Seed executor. It intentionally leaves ambiguous legacy status
+// paths empty instead of turning a combined terminal status into an execution
+// or verification claim.
+func seedOutcomeFacts(result conductor.SeedRunResult, runErr, contextErr error, maxIterations int, sproutFailure bool) (string, string) {
+	verificationOutcome := ""
+	if len(result.VerificationDiagnostics) > 0 {
+		last := result.VerificationDiagnostics[len(result.VerificationDiagnostics)-1]
+		switch {
+		case last.TimedOut:
+			verificationOutcome = core.SeedVerificationOutcomeTimedOut
+		case core.ValidSeedVerificationOutcome(last.Outcome):
+			verificationOutcome = last.Outcome
+		}
+	}
+
+	executionOutcome := ""
+	switch {
+	case errors.Is(runErr, core.ErrContinuationUndeliverable):
+		executionOutcome = core.SeedExecutionOutcomeBoundaryRefused
+	case result.Status == conductor.SeedStatusSatisfied && verificationOutcome == core.SeedVerificationOutcomePassed:
+		executionOutcome = core.SeedExecutionOutcomeCompleted
+	case errors.Is(contextErr, context.DeadlineExceeded):
+		executionOutcome = core.SeedExecutionOutcomeTimedOut
+	case sproutFailure:
+		executionOutcome = core.SeedExecutionOutcomeSproutFailed
+	case result.Status == conductor.SeedStatusExhausted && maxIterations > 0 &&
+		result.Iterations >= maxIterations && verificationOutcome == core.SeedVerificationOutcomePredicateFailed:
+		executionOutcome = core.SeedExecutionOutcomeBoundsExhausted
+	}
+	return executionOutcome, verificationOutcome
+}
+
+// seedSproutFailureEstablished requires the exact final iteration's persisted
+// Sprout row to be terminally withered. The Seed's combined status alone is
+// insufficient to distinguish a Sprout failure from other failure paths.
+func seedSproutFailureEstablished(ctx context.Context, history *historydb.Store, phytomerID string, iteration int) bool {
+	if history == nil || strings.TrimSpace(phytomerID) == "" || iteration < 1 {
+		return false
+	}
+	runs, err := history.LoadSproutRuns(ctx, phytomerID, 100)
+	if err != nil {
+		return false
+	}
+	prefix := "seed-" + strings.TrimSpace(phytomerID) + "-"
+	matched := 0
+	failed := false
+	for _, run := range runs {
+		suffix, ok := strings.CutPrefix(run.StepID, prefix)
+		if !ok {
+			continue
+		}
+		iterationText, _, ok := strings.Cut(suffix, "-")
+		if !ok {
+			continue
+		}
+		if iterationText != fmt.Sprint(iteration) {
+			continue
+		}
+		matched++
+		failed = strings.TrimSpace(run.Status) == "withered"
+	}
+	return matched == 1 && failed
 }
 
 func copySeedPublicationDiagnostic(diagnostic *core.SeedPublicationDiagnostic) *core.SeedPublicationDiagnostic {

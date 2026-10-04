@@ -58,13 +58,53 @@ const (
 	// failed managed Fruit publication.
 	SeedFailureCategoryFruitPublication = "fruit-publication"
 
+	// Seed execution outcomes describe only what the bounded execution did;
+	// they do not imply that the natural-language objective was achieved.
+	SeedExecutionOutcomeCompleted            = "completed"
+	SeedExecutionOutcomeSproutFailed         = "sprout-failed"
+	SeedExecutionOutcomeInfrastructureFailed = "infrastructure-failed"
+	SeedExecutionOutcomeTimedOut             = "timed-out"
+	SeedExecutionOutcomeBoundsExhausted      = "bounds-exhausted"
+	SeedExecutionOutcomeBoundaryRefused      = "boundary-refused"
+
 	// Seed verification outcomes. These distinguish a completed predicate from
 	// a timeout or an inability to execute the verifier. They are not Seed
 	// terminal statuses.
+	SeedVerificationOutcomeNotRequested         = "not-requested"
 	SeedVerificationOutcomePassed               = "passed"
 	SeedVerificationOutcomePredicateFailed      = "predicate-failed"
+	SeedVerificationOutcomeConfigurationInvalid = "configuration-invalid"
 	SeedVerificationOutcomeInfrastructureFailed = "infrastructure-failed"
+	SeedVerificationOutcomeTimedOut             = "timed-out"
 )
+
+// ValidSeedExecutionOutcome reports whether outcome belongs to the closed
+// Core execution vocabulary. Empty remains valid for absent or unknowable
+// historical/current evidence.
+func ValidSeedExecutionOutcome(outcome string) bool {
+	switch strings.TrimSpace(outcome) {
+	case "", SeedExecutionOutcomeCompleted, SeedExecutionOutcomeSproutFailed,
+		SeedExecutionOutcomeInfrastructureFailed, SeedExecutionOutcomeTimedOut,
+		SeedExecutionOutcomeBoundsExhausted, SeedExecutionOutcomeBoundaryRefused:
+		return true
+	default:
+		return false
+	}
+}
+
+// ValidSeedVerificationOutcome reports whether outcome belongs to the closed
+// Core verification vocabulary. Empty remains valid for absent or unknowable
+// historical/current evidence.
+func ValidSeedVerificationOutcome(outcome string) bool {
+	switch strings.TrimSpace(outcome) {
+	case "", SeedVerificationOutcomeNotRequested, SeedVerificationOutcomePassed,
+		SeedVerificationOutcomePredicateFailed, SeedVerificationOutcomeConfigurationInvalid,
+		SeedVerificationOutcomeInfrastructureFailed, SeedVerificationOutcomeTimedOut:
+		return true
+	default:
+		return false
+	}
+}
 
 // seedDefaultMaxIterations bounds the build/verify loop when the caller does
 // not; seedMaximumMaxIterations caps what a caller may request. A Seed is a
@@ -238,6 +278,8 @@ type SeedSettlement struct {
 	Substrate               string
 	Goal                    string
 	Status                  string
+	ExecutionOutcome        string
+	VerificationOutcome     string
 	Iterations              int
 	Branch                  string
 	Commit                  string
@@ -312,6 +354,10 @@ func (s *Service) WithSeedLifecycleReporter(report func(SeedLifecycleReport)) *S
 type SeedGrowResult struct {
 	// Status is satisfied, exhausted, withered, or fruit-publication-failed.
 	Status string `json:"status"`
+	// ExecutionOutcome and VerificationOutcome are independent deterministic
+	// facts. Empty means existing evidence cannot truthfully establish them.
+	ExecutionOutcome    string `json:"executionOutcome,omitempty"`
+	VerificationOutcome string `json:"verificationOutcome,omitempty"`
 	// Iterations is how many build/verify passes ran.
 	Iterations int `json:"iterations"`
 	// PhytomerID is the Stem-created execution/observation identity for this
@@ -494,6 +540,8 @@ func composeOpenedSeedSettlement(spec SeedSpec, pollen, handle string, started t
 		StartedAt:               started,
 		FinishedAt:              time.Now().UTC(),
 		Iterations:              result.Iterations,
+		ExecutionOutcome:        result.ExecutionOutcome,
+		VerificationOutcome:     result.VerificationOutcome,
 		Diff:                    result.Diff,
 		Logs:                    result.Logs,
 		VerificationDiagnostics: CopySeedVerificationDiagnostics(result.VerificationDiagnostics),

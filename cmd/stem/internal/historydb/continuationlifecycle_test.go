@@ -477,6 +477,8 @@ func TestAccountSeedTerminalFailureFailsUnresolvedAtomically(t *testing.T) {
 
 	account, err := store.AccountSeedTerminalFailure(ctx, target, SeedRun{
 		Status: seedStatusExhausted, Iterations: 3, Logs: "verify failed", Error: "nominal exhausted",
+		ExecutionOutcome: "boundary-refused", VerificationOutcome: "predicate-failed",
+		VerificationDiagnostics: []SeedVerificationDiagnostic{{Iteration: 3, Outcome: "predicate-failed", ExitCode: intPtr(1)}},
 	})
 	if err != nil {
 		t.Fatalf("account: %v", err)
@@ -487,6 +489,11 @@ func TestAccountSeedTerminalFailureFailsUnresolvedAtomically(t *testing.T) {
 	seed, ok, err := store.GetSeedRunByPhytomer(ctx, "tendril-1")
 	if err != nil || !ok || seed.Status != seedStatusWithered || seed.Error != continuationUndeliverableError {
 		t.Fatalf("seed after undelivered accounting = %+v ok=%v err=%v", seed, ok, err)
+	}
+	if seed.ExecutionOutcome != "boundary-refused" || seed.VerificationOutcome != "predicate-failed" ||
+		len(seed.VerificationDiagnostics) != 1 || seed.VerificationDiagnostics[0].Outcome != "predicate-failed" ||
+		seed.VerificationDiagnostics[0].ExitCode == nil || *seed.VerificationDiagnostics[0].ExitCode != 1 {
+		t.Fatalf("terminal accounting changed outcome evidence: %+v", seed)
 	}
 	gotPending, ok, err := store.GetContinuation(ctx, pending.ContinuationID)
 	if err != nil || !ok || gotPending.DeliveryState != continuationDeliveryFailed || gotPending.FailedAt.IsZero() {

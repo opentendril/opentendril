@@ -28,6 +28,10 @@ var ErrPhytomerObservationOwnershipConflict = errors.New("phytomer observation o
 // continued intent.
 var ErrPhytomerObservationContinuationInvalid = errors.New("phytomer continuation observation evidence is invalid")
 
+// ErrPhytomerObservationOutcomeInvalid is returned when durable Seed outcome
+// evidence falls outside Core's closed vocabularies.
+var ErrPhytomerObservationOutcomeInvalid = errors.New("phytomer seed outcome evidence is invalid")
+
 // PhytomerObservation is the transport-free current-state projection of one
 // Seed-owned Phytomer. A sprout.watch observer may see these facts when they
 // actually exist: identities, Seed lifecycle, iteration progress, actual
@@ -42,6 +46,8 @@ type PhytomerObservation struct {
 	Handle                  string                       `json:"handle,omitempty"`
 	PhytomerID              string                       `json:"phytomerId,omitempty"`
 	Status                  string                       `json:"status,omitempty"`
+	ExecutionOutcome        string                       `json:"executionOutcome,omitempty"`
+	VerificationOutcome     string                       `json:"verificationOutcome,omitempty"`
 	Iterations              int                          `json:"iterations"`
 	Branch                  string                       `json:"branch,omitempty"`
 	Commit                  string                       `json:"commit,omitempty"`
@@ -91,6 +97,8 @@ type SeedObservationEvidence struct {
 	PhytomerID              string
 	Substrate               string
 	Status                  string
+	ExecutionOutcome        string
+	VerificationOutcome     string
 	Iterations              int
 	Branch                  string
 	Commit                  string
@@ -198,18 +206,23 @@ func (s *Service) ObservePhytomer(ctx context.Context, phytomerID string) (Phyto
 // Substrate. Unknown or empty continuation delivery state fails closed.
 // Any disagreement releases no observation.
 func ProjectPhytomerObservation(seed SeedObservationEvidence, sprouts []SproutObservationEvidence, continuations []ContinuationObservationEvidence) (PhytomerObservation, error) {
+	if !ValidSeedExecutionOutcome(seed.ExecutionOutcome) || !ValidSeedVerificationOutcome(seed.VerificationOutcome) {
+		return PhytomerObservation{}, ErrPhytomerObservationOutcomeInvalid
+	}
 	if err := phytomerObservationOwnershipAgrees(seed, sprouts, continuations); err != nil {
 		return PhytomerObservation{}, err
 	}
 	obs := PhytomerObservation{
-		Pollen:     strings.TrimSpace(seed.Pollen),
-		Substrate:  strings.TrimSpace(seed.Substrate),
-		Handle:     strings.TrimSpace(seed.Handle),
-		PhytomerID: strings.TrimSpace(seed.PhytomerID),
-		Status:     strings.TrimSpace(seed.Status),
-		Iterations: seed.Iterations,
-		Branch:     strings.TrimSpace(seed.Branch),
-		Commit:     strings.TrimSpace(seed.Commit),
+		Pollen:              strings.TrimSpace(seed.Pollen),
+		Substrate:           strings.TrimSpace(seed.Substrate),
+		Handle:              strings.TrimSpace(seed.Handle),
+		PhytomerID:          strings.TrimSpace(seed.PhytomerID),
+		Status:              strings.TrimSpace(seed.Status),
+		ExecutionOutcome:    strings.TrimSpace(seed.ExecutionOutcome),
+		VerificationOutcome: strings.TrimSpace(seed.VerificationOutcome),
+		Iterations:          seed.Iterations,
+		Branch:              strings.TrimSpace(seed.Branch),
+		Commit:              strings.TrimSpace(seed.Commit),
 	}
 	if seed.PublicationDiagnostic != nil {
 		copied := *seed.PublicationDiagnostic

@@ -146,6 +146,8 @@ func historySeedRun(settled core.SeedSettlement) historydb.SeedRun {
 		Diff:                    settled.Diff,
 		Logs:                    settled.Logs,
 		Error:                   settled.Error,
+		ExecutionOutcome:        settled.ExecutionOutcome,
+		VerificationOutcome:     settled.VerificationOutcome,
 		PublicationDiagnostic:   historySeedPublicationDiagnostic(settled.PublicationDiagnostic),
 		VerificationDiagnostics: historySeedVerificationDiagnostics(settled.VerificationDiagnostics),
 		StartedAt:               settled.StartedAt,

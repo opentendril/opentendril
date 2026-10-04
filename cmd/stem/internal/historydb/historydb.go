@@ -104,7 +104,10 @@ func historyRetentionDaysFromEnv() int {
 // identity, private local verification locator, publication state, and Fruit
 // creation time on the existing Seed/Sprout execution rows. Historical rows
 // retain empty provenance; no identity is reconstructed.
-const currentSchemaVersion = 9
+// Version 10 records independent Seed execution and verification outcomes.
+// Existing rows retain empty outcomes because the old combined status cannot
+// establish those facts independently.
+const currentSchemaVersion = 10
 
 const (
 	FruitPublicationLocalOnly = "local-only"
@@ -241,6 +244,8 @@ type SeedRun struct {
 	Substrate               string                       `json:"substrate,omitempty"`
 	Goal                    string                       `json:"goal,omitempty"`
 	Status                  string                       `json:"status"`
+	ExecutionOutcome        string                       `json:"executionOutcome,omitempty"`
+	VerificationOutcome     string                       `json:"verificationOutcome,omitempty"`
 	Iterations              int                          `json:"iterations"`
 	Branch                  string                       `json:"branch,omitempty"`
 	Commit                  string                       `json:"commit,omitempty"`
@@ -502,6 +507,8 @@ CREATE TABLE IF NOT EXISTS seedruns (
 	substrate TEXT NOT NULL DEFAULT '',
 	goal TEXT NOT NULL DEFAULT '',
 	status TEXT NOT NULL,
+	executionOutcome TEXT NOT NULL DEFAULT '',
+	verificationOutcome TEXT NOT NULL DEFAULT '',
 	iterations INTEGER NOT NULL DEFAULT 0,
 	branch TEXT NOT NULL DEFAULT '',
 	fruitCommit TEXT NOT NULL DEFAULT '',
@@ -627,6 +634,12 @@ func (s *Store) migrateSchema(ctx context.Context) error {
 		return err
 	}
 	if err := s.ensureColumn(ctx, "seedruns", "request-digest", `ALTER TABLE seedruns ADD COLUMN "request-digest" TEXT NOT NULL DEFAULT ''`); err != nil {
+		return err
+	}
+	if err := s.ensureColumn(ctx, "seedruns", "executionOutcome", `ALTER TABLE seedruns ADD COLUMN executionOutcome TEXT NOT NULL DEFAULT ''`); err != nil {
+		return err
+	}
+	if err := s.ensureColumn(ctx, "seedruns", "verificationOutcome", `ALTER TABLE seedruns ADD COLUMN verificationOutcome TEXT NOT NULL DEFAULT ''`); err != nil {
 		return err
 	}
 	if _, err := s.db.ExecContext(ctx, `CREATE INDEX IF NOT EXISTS seedrunsByPhytomer ON seedruns(phytomerId, startedAt)`); err != nil {
@@ -1516,6 +1529,8 @@ type encodedSeedRun struct {
 	substrate             string
 	goal                  string
 	status                string
+	executionOutcome      string
+	verificationOutcome   string
 	iterations            int
 	branch                string
 	commit                string
@@ -1580,6 +1595,8 @@ func (s *Store) encodeSeedRun(run SeedRun) (encodedSeedRun, error) {
 		substrate:             run.Substrate,
 		goal:                  goal,
 		status:                run.Status,
+		executionOutcome:      run.ExecutionOutcome,
+		verificationOutcome:   run.VerificationOutcome,
 		iterations:            run.Iterations,
 		branch:                run.Branch,
 		commit:                run.Commit,
@@ -1656,10 +1673,12 @@ func (s *Store) RecordSeedRun(ctx context.Context, run SeedRun) error {
 	}
 
 	const statement = `
-INSERT INTO seedruns (handle, pollen, phytomerId, substrate, goal, status, iterations, branch, fruitCommit, fruitRepository, fruitWorkspace, fruitPublicationState, fruitCreatedAt, diff, logs, error, startedAt, finishedAt, observation, "idempotency-key", "request-digest")
-VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+INSERT INTO seedruns (handle, pollen, phytomerId, substrate, goal, status, executionOutcome, verificationOutcome, iterations, branch, fruitCommit, fruitRepository, fruitWorkspace, fruitPublicationState, fruitCreatedAt, diff, logs, error, startedAt, finishedAt, observation, "idempotency-key", "request-digest")
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 ON CONFLICT(handle) DO UPDATE SET
 	status = excluded.status,
+	executionOutcome = CASE WHEN seedruns."idempotency-key" <> '' AND seedruns.goal = '' THEN seedruns.executionOutcome ELSE COALESCE(NULLIF(excluded.executionOutcome, ''), seedruns.executionOutcome) END,
+	verificationOutcome = CASE WHEN seedruns."idempotency-key" <> '' AND seedruns.goal = '' THEN seedruns.verificationOutcome ELSE COALESCE(NULLIF(excluded.verificationOutcome, ''), seedruns.verificationOutcome) END,
 	substrate = CASE WHEN seedruns."idempotency-key" <> '' AND seedruns.goal = '' THEN seedruns.substrate ELSE excluded.substrate END,
 	goal = CASE WHEN seedruns."idempotency-key" <> '' AND seedruns.goal = '' THEN seedruns.goal ELSE excluded.goal END,
 	iterations = CASE WHEN seedruns."idempotency-key" <> '' AND seedruns.goal = '' THEN seedruns.iterations ELSE excluded.iterations END,
@@ -1683,6 +1702,8 @@ ON CONFLICT(handle) DO UPDATE SET
 		encoded.substrate,
 		encoded.goal,
 		encoded.status,
+		encoded.executionOutcome,
+		encoded.verificationOutcome,
 		encoded.iterations,
 		encoded.branch,
 		encoded.commit,
@@ -1705,7 +1726,7 @@ ON CONFLICT(handle) DO UPDATE SET
 	return nil
 }
 
-const seedRunSelectColumns = `handle, pollen, phytomerId, substrate, goal, status, iterations, branch, fruitCommit, fruitRepository, fruitWorkspace, fruitPublicationState, fruitCreatedAt, diff, logs, error, startedAt, finishedAt, observation, "idempotency-key", "request-digest"`
+const seedRunSelectColumns = `handle, pollen, phytomerId, substrate, goal, status, executionOutcome, verificationOutcome, iterations, branch, fruitCommit, fruitRepository, fruitWorkspace, fruitPublicationState, fruitCreatedAt, diff, logs, error, startedAt, finishedAt, observation, "idempotency-key", "request-digest"`
 
 type seedRunScanner interface {
 	Scan(dest ...any) error
@@ -1715,7 +1736,8 @@ func (s *Store) scanSeedRun(row seedRunScanner) (SeedRun, error) {
 	var run SeedRun
 	var startedAt, finishedAt, observation, fruitCreatedAt string
 	if err := row.Scan(
-		&run.Handle, &run.Pollen, &run.PhytomerID, &run.Substrate, &run.Goal, &run.Status, &run.Iterations,
+		&run.Handle, &run.Pollen, &run.PhytomerID, &run.Substrate, &run.Goal, &run.Status,
+		&run.ExecutionOutcome, &run.VerificationOutcome, &run.Iterations,
 		&run.Branch, &run.Commit, &run.FruitRepository, &run.FruitWorkspace, &run.FruitPublicationState, &fruitCreatedAt,
 		&run.Diff, &run.Logs, &run.Error, &startedAt, &finishedAt, &observation,
 		&run.IdempotencyKey, &run.RequestDigest); err != nil {

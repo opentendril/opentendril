@@ -30,6 +30,8 @@ func phytomerObservationSource(history *historydb.Store) core.PhytomerObservatio
 				PhytomerID:              seed.PhytomerID,
 				Substrate:               seed.Substrate,
 				Status:                  seed.Status,
+				ExecutionOutcome:        seed.ExecutionOutcome,
+				VerificationOutcome:     seed.VerificationOutcome,
 				Iterations:              seed.Iterations,
 				Branch:                  seed.Branch,
 				Commit:                  seed.Commit,
