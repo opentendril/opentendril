@@ -29,7 +29,7 @@ func (t SeedTarget) validate() error {
 
 func seedStatusIsTerminalFailure(status string) bool {
 	switch strings.TrimSpace(status) {
-	case seedStatusExhausted, seedStatusWithered, seedStatusFruitPublicationFailed:
+	case seedStatusSettled, seedStatusExhausted, seedStatusWithered, seedStatusFruitPublicationFailed:
 		return true
 	default:
 		return false
@@ -38,7 +38,7 @@ func seedStatusIsTerminalFailure(status string) bool {
 
 func seedStatusIsTerminal(status string) bool {
 	switch strings.TrimSpace(status) {
-	case seedStatusSatisfied, seedStatusExhausted, seedStatusWithered, seedStatusFruitPublicationFailed:
+	case seedStatusSettled, seedStatusSatisfied, seedStatusExhausted, seedStatusWithered, seedStatusFruitPublicationFailed:
 		return true
 	default:
 		return false
@@ -273,8 +273,8 @@ WHERE phytomerId = ? AND handle = ? AND pollen = ? AND substrate = ? AND status 
 	return true, nil
 }
 
-// CompleteSeedSettlement persists successful Fruit only for an exact target
-// that is still settling and has no unresolved continuation.
+// CompleteSeedSettlement persists terminal accounting and any reviewable Fruit
+// only for an exact target that is still settling and has no unresolved continuation.
 func (s *Store) CompleteSeedSettlement(ctx context.Context, target SeedTarget, run SeedRun) error {
 	if s == nil {
 		return fmt.Errorf("history store is not available")
@@ -283,7 +283,7 @@ func (s *Store) CompleteSeedSettlement(ctx context.Context, target SeedTarget, r
 	if err := target.validate(); err != nil {
 		return err
 	}
-	if strings.TrimSpace(run.Status) != seedStatusSatisfied {
+	if strings.TrimSpace(run.Status) != seedStatusSettled {
 		return ErrSeedSettlementInvalid
 	}
 	tx, err := s.db.BeginTx(ctx, nil)
@@ -315,7 +315,7 @@ func (s *Store) CompleteSeedSettlement(ctx context.Context, target SeedTarget, r
 	run.PhytomerID = target.PhytomerID
 	run.Pollen = target.Pollen
 	run.Substrate = target.Substrate
-	run.Status = seedStatusSatisfied
+	run.Status = seedStatusSettled
 	if run.FinishedAt.IsZero() {
 		run.FinishedAt = time.Now().UTC()
 	}
@@ -331,7 +331,7 @@ func (s *Store) CompleteSeedSettlement(ctx context.Context, target SeedTarget, r
 
 // AccountSeedTerminalFailure atomically terminalizes the exact Seed and fails
 // every unresolved continuation for that Phytomer. If unresolved continuation
-// exists, the durable Seed outcome is withered with a safe delivery failure.
+// exists, the durable Seed remains settled with a safe delivery failure.
 func (s *Store) AccountSeedTerminalFailure(ctx context.Context, target SeedTarget, run SeedRun) (TerminalFailureAccount, error) {
 	if s == nil {
 		return TerminalFailureAccount{}, fmt.Errorf("history store is not available")
@@ -360,12 +360,15 @@ func (s *Store) AccountSeedTerminalFailure(ctx context.Context, target SeedTarge
 		return TerminalFailureAccount{}, err
 	}
 	current := strings.TrimSpace(seed.Status)
+	if current == seedStatusRunning || current == seedStatusSettling {
+		status = seedStatusSettled
+	}
 	unresolved, err := s.failUnresolvedContinuationsTx(ctx, tx, target.PhytomerID)
 	if err != nil {
 		return TerminalFailureAccount{}, err
 	}
 	if unresolved > 0 {
-		status = seedStatusWithered
+		status = seedStatusSettled
 		run.Error = continuationUndeliverableError
 		run.Branch = ""
 		run.Commit = ""
@@ -389,7 +392,7 @@ func (s *Store) AccountSeedTerminalFailure(ctx context.Context, target SeedTarge
 		if current == seedStatusSatisfied && status != seedStatusSatisfied {
 			return TerminalFailureAccount{}, ErrSeedSettlementInvalid
 		}
-		if unresolved > 0 && current != seedStatusWithered {
+		if unresolved > 0 && current == seedStatusSettled {
 			if err := s.updateSeedRunResultTx(ctx, tx, run, current, false); err != nil {
 				return TerminalFailureAccount{}, err
 			}
@@ -430,7 +433,7 @@ func (s *Store) ReconcileOrphanedSeedWork(ctx context.Context) error {
 	finishedAt := time.Now().UTC()
 	for _, seed := range orphans {
 		run := seed
-		run.Status = seedStatusWithered
+		run.Status = seedStatusSettled
 		run.Error = seedRestartInterruptedError
 		run.Branch = ""
 		run.Commit = ""

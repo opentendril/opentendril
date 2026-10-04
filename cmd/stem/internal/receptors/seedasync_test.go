@@ -338,8 +338,8 @@ func TestSeedAsyncDispatchAndCollect(t *testing.T) {
 	}
 
 	settled := waitForSeedRun(t, store, accepted.Handle)
-	if settled.Status != core.SeedStatusSatisfied {
-		t.Fatalf("settled status = %q, want satisfied", settled.Status)
+	if settled.Status != core.SeedStatusSettled {
+		t.Fatalf("settled status = %q, want settled", settled.Status)
 	}
 	if settled.PhytomerID != accepted.PhytomerID {
 		t.Fatalf("collected phytomer %q != dispatch phytomer %q", settled.PhytomerID, accepted.PhytomerID)
@@ -356,7 +356,7 @@ func TestSeedAsyncDispatchAndCollect(t *testing.T) {
 	if err := json.Unmarshal(crec.Body.Bytes(), &fruit); err != nil {
 		t.Fatalf("decode collect: %v", err)
 	}
-	if fruit.Status != core.SeedStatusSatisfied || fruit.Branch != "tendril/seed-x" || fruit.Diff != "the diff" {
+	if fruit.Status != core.SeedStatusSettled || fruit.Branch != "tendril/seed-x" || fruit.Diff != "the diff" {
 		t.Fatalf("collected Fruit = %+v", fruit)
 	}
 	if fruit.PhytomerID != accepted.PhytomerID {
@@ -593,7 +593,7 @@ func TestDetachedSeedIdempotencySurvivesCoreReconstruction(t *testing.T) {
 		if err != nil || !found {
 			t.Fatalf("read settled retry row: found=%v err=%v", found, err)
 		}
-		if run.Status == core.SeedStatusSatisfied {
+		if run.Status == core.SeedStatusSettled {
 			break
 		}
 		if time.Now().After(deadline) {
@@ -605,7 +605,7 @@ func TestDetachedSeedIdempotencySurvivesCoreReconstruction(t *testing.T) {
 	if err != nil {
 		t.Fatalf("terminal replay after retention: %v", err)
 	}
-	if terminalReplay.Handle != first.Handle || terminalReplay.PhytomerID != first.PhytomerID || terminalReplay.Status != core.SeedStatusSatisfied {
+	if terminalReplay.Handle != first.Handle || terminalReplay.PhytomerID != first.PhytomerID || terminalReplay.Status != core.SeedStatusSettled {
 		t.Fatalf("terminal replay changed retained identity/status: first=%+v replay=%+v", first, terminalReplay)
 	}
 	if secondRuns.Load() != 0 || firstRuns.Load() != 1 || openingWrites.Load() != 1 {
@@ -616,7 +616,7 @@ func TestDetachedSeedIdempotencySurvivesCoreReconstruction(t *testing.T) {
 		t.Fatalf("second manager sessions after terminal replay = %d, err=%v; want none", len(settledSessions), err)
 	}
 	run, found, err = store.GetSeedRunByPollenIdempotencyKey(ctx, "restart-pollen", "restart-retry-key")
-	if err != nil || !found || run.Handle != first.Handle || run.PhytomerID != first.PhytomerID || run.Status != core.SeedStatusSatisfied ||
+	if err != nil || !found || run.Handle != first.Handle || run.PhytomerID != first.PhytomerID || run.Status != core.SeedStatusSettled ||
 		run.Substrate != "core" || run.Goal != "" || run.Diff != "" || run.Logs != "" || run.Error != "" || run.Iterations != 0 || run.Branch != "" || run.Commit != "" {
 		t.Fatalf("settled retained row = found %v run %+v err %v", found, run, err)
 	}
@@ -670,7 +670,7 @@ func TestSeedAsyncCollectionPreservesFruitPublicationFailureDiagnostic(t *testin
 		t.Fatalf("decode dispatch: %v", err)
 	}
 	settled := waitForSeedRun(t, store, accepted.Handle)
-	if settled.Status != core.SeedStatusFruitPublicationFailed || settled.Branch != "" || settled.Commit != "" {
+	if settled.Status != core.SeedStatusSettled || settled.Branch != "" || settled.Commit != "" {
 		t.Fatalf("settled Fruit = %+v", settled)
 	}
 	if settled.Iterations != 2 || settled.Diff != "completed diff" || settled.Logs != "completed logs" {
@@ -691,7 +691,7 @@ func TestSeedAsyncCollectionPreservesFruitPublicationFailureDiagnostic(t *testin
 	if err := json.Unmarshal(collected.Body.Bytes(), &got); err != nil {
 		t.Fatalf("decode collection: %v", err)
 	}
-	if got.Status != core.SeedStatusFruitPublicationFailed || got.PublicationDiagnostic == nil || got.PublicationDiagnostic.Outcome != diagnostic.Outcome {
+	if got.Status != core.SeedStatusSettled || got.PublicationDiagnostic == nil || got.PublicationDiagnostic.Outcome != diagnostic.Outcome {
 		t.Fatalf("collected publication failure = %+v", got)
 	}
 	if strings.Contains(collected.Body.String(), "upstream-secret-content") {

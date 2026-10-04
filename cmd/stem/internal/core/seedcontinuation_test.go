@@ -35,7 +35,7 @@ func TestSynchronousSeedGrowWithoutContinuationPersistenceStillRuns(t *testing.T
 	if err != nil {
 		t.Fatalf("grow: %v", err)
 	}
-	if result.Status != SeedStatusSatisfied || captured.Substrate != "core" || captured.PhytomerID == "" {
+	if result.Status != SeedStatusSettled || captured.Substrate != "core" || captured.PhytomerID == "" {
 		t.Fatalf("result=%+v spec=%+v", result, captured)
 	}
 }
@@ -234,8 +234,8 @@ func TestOpenedSettlementPersistenceErrorsArePropagated(t *testing.T) {
 	if !errors.Is(err, persistErr) {
 		t.Fatalf("grow err = %v, want persist error", err)
 	}
-	if result.Status == SeedStatusSatisfied {
-		t.Fatal("failed settlement persistence still reported satisfied")
+	if result.Status == SeedStatusSettled {
+		t.Fatal("failed settlement persistence reported terminal settlement")
 	}
 }
 
@@ -320,8 +320,8 @@ func TestOpenedSeedTerminalFailureAccountsUndeliveredContinuation(t *testing.T) 
 	}
 	port := wiredContinuationPersistence()
 	port.AccountTerminalFailure = func(_ context.Context, settled SeedSettlement) (TerminalFailureAccount, error) {
-		if settled.Status != SeedStatusExhausted {
-			t.Errorf("accounted status = %q, want exhausted", settled.Status)
+		if settled.Status != SeedStatusSettled {
+			t.Errorf("accounted status = %q, want settled", settled.Status)
 		}
 		if strings.Contains(settled.Error, "SECRET-INTENT") {
 			t.Errorf("settlement error leaked continued intent: %q", settled.Error)
@@ -330,7 +330,7 @@ func TestOpenedSeedTerminalFailureAccountsUndeliveredContinuation(t *testing.T) 
 	}
 	svc := NewService(manager).WithSeed(SeedOperations{
 		Run: func(_ context.Context, spec SeedSpec, _ *SeedContinuationLifecycle) (SeedGrowResult, error) {
-			return SeedGrowResult{Status: SeedStatusExhausted, Iterations: 1, PhytomerID: spec.PhytomerID}, nil
+			return SeedGrowResult{Status: SeedStatusExhausted, ExecutionOutcome: SeedExecutionOutcomeBoundsExhausted, Iterations: 1, PhytomerID: spec.PhytomerID}, nil
 		},
 	}).WithSeedPersistence(SeedPersistence{
 		RecordOpening: func(context.Context, SeedOpening) error { return nil },
@@ -348,8 +348,8 @@ func TestOpenedSeedTerminalFailureAccountsUndeliveredContinuation(t *testing.T) 
 	if !errors.Is(err, ErrContinuationUndeliverable) {
 		t.Fatalf("grow err = %v, want undeliverable", err)
 	}
-	if result.Status != SeedStatusWithered {
-		t.Fatalf("status = %q, want withered", result.Status)
+	if result.Status != SeedStatusSettled {
+		t.Fatalf("status = %q, want settled", result.Status)
 	}
 	if strings.Contains(err.Error(), "SECRET-INTENT") {
 		t.Fatalf("error leaked continued intent: %v", err)

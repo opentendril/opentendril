@@ -23,6 +23,7 @@ const (
 	// cannot import Core.
 	seedStatusRunning                = "running"
 	seedStatusSettling               = "settling"
+	seedStatusSettled                = "settled"
 	seedStatusSatisfied              = "satisfied"
 	seedStatusExhausted              = "exhausted"
 	seedStatusWithered               = "withered"

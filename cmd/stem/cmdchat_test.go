@@ -609,6 +609,37 @@ func TestWatchNonSuccessTerminalDistinguished(t *testing.T) {
 	}
 }
 
+func TestRenderTerminalSettlementPresentsFactsWithoutObjectiveJudgement(t *testing.T) {
+	origStdout := os.Stdout
+	reader, writer, err := os.Pipe()
+	if err != nil {
+		t.Fatalf("pipe: %v", err)
+	}
+	os.Stdout = writer
+	renderTerminalSettlement(core.PhytomerObservation{
+		Status: core.SeedStatusSettled, ExecutionOutcome: core.SeedExecutionOutcomeCompleted,
+		VerificationOutcome: core.SeedVerificationOutcomeNotRequested,
+	})
+	_ = writer.Close()
+	os.Stdout = origStdout
+	body, err := io.ReadAll(reader)
+	_ = reader.Close()
+	if err != nil {
+		t.Fatalf("read output: %v", err)
+	}
+	text := string(body)
+	for _, fact := range []string{"Status:     settled", "Execution:  completed", "Verification: not-requested"} {
+		if !strings.Contains(text, fact) {
+			t.Errorf("terminal output omitted %q: %s", fact, text)
+		}
+	}
+	for _, judgment := range []string{"satisfied", "non-success", "objective succeeded", "objective failed"} {
+		if strings.Contains(strings.ToLower(text), judgment) {
+			t.Errorf("terminal output inferred judgement %q: %s", judgment, text)
+		}
+	}
+}
+
 // =============================================================================
 // Continuation
 // =============================================================================

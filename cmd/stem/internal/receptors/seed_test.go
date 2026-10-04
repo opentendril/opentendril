@@ -70,6 +70,20 @@ func TestSeedUnchangedWithoutDelegationMarker(t *testing.T) {
 	}
 }
 
+func TestSeedGrowAcceptsOmittedVerification(t *testing.T) {
+	mux, _, executed, lastSpec := newSeedTestHandler(t, nil)
+	body := `{"substrate":"core","goal":"review this candidate"}`
+	request := httptest.NewRequest(http.MethodPost, "/v1/seeds/grow", strings.NewReader(body))
+	recorder := httptest.NewRecorder()
+	mux.ServeHTTP(recorder, request)
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200: %s", recorder.Code, recorder.Body.String())
+	}
+	if executed.Load() != 1 || len(lastSpec.Verify) != 0 {
+		t.Fatalf("execution/spec verify = %d/%v, want one execution with no verifier", executed.Load(), lastSpec.Verify)
+	}
+}
+
 // TestDelegatedSeedDeniedAndAuditedWithoutGrant: a delegated invocation with no
 // covering grant is refused before the execution port is reached, and the
 // denial is audited.

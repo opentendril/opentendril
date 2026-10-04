@@ -77,51 +77,47 @@ func TestSeedOutcomeFactsUseOnlyDeterministicEvidence(t *testing.T) {
 		wantVerify    string
 	}{
 		{
-			name: "completed verifier pass",
-			result: conductor.SeedRunResult{Status: conductor.SeedStatusSatisfied, VerificationDiagnostics: []core.SeedVerificationDiagnostic{{
-				Outcome: core.SeedVerificationOutcomePassed,
-			}}},
+			name:          "completed verifier pass",
+			result:        conductor.SeedRunResult{Status: conductor.SeedStatusSettled, ExecutionOutcome: core.SeedExecutionOutcomeCompleted, VerificationOutcome: core.SeedVerificationOutcomePassed},
 			maxIterations: 3, wantExecution: core.SeedExecutionOutcomeCompleted, wantVerify: core.SeedVerificationOutcomePassed,
 		},
 		{
-			name: "predicate failure spent iteration bound",
-			result: conductor.SeedRunResult{Status: conductor.SeedStatusExhausted, Iterations: 3, VerificationDiagnostics: []core.SeedVerificationDiagnostic{{
-				Outcome: core.SeedVerificationOutcomePredicateFailed,
-			}}},
+			name:          "predicate failure spent iteration bound",
+			result:        conductor.SeedRunResult{Status: conductor.SeedStatusSettled, ExecutionOutcome: core.SeedExecutionOutcomeBoundsExhausted, VerificationOutcome: core.SeedVerificationOutcomePredicateFailed, Iterations: 3},
 			maxIterations: 3, wantExecution: core.SeedExecutionOutcomeBoundsExhausted, wantVerify: core.SeedVerificationOutcomePredicateFailed,
 		},
 		{
-			name:          "combined satisfied status without diagnostic is not enough",
-			result:        conductor.SeedRunResult{Status: conductor.SeedStatusSatisfied},
+			name:          "settled lifecycle without outcomes does not infer objective facts",
+			result:        conductor.SeedRunResult{Status: conductor.SeedStatusSettled},
 			maxIterations: 3,
 		},
 		{
 			name: "verifier timeout remains a verification fact",
-			result: conductor.SeedRunResult{Status: conductor.SeedStatusWithered, VerificationDiagnostics: []core.SeedVerificationDiagnostic{{
-				Outcome: core.SeedVerificationOutcomeInfrastructureFailed, TimedOut: true,
+			result: conductor.SeedRunResult{Status: conductor.SeedStatusSettled, VerificationDiagnostics: []core.SeedVerificationDiagnostic{{
+				Outcome: core.SeedVerificationOutcomeTimedOut, TimedOut: true,
 			}}},
 			maxIterations: 3, wantVerify: core.SeedVerificationOutcomeTimedOut,
 		},
 		{
 			name:          "proven terminal sprout failure",
-			result:        conductor.SeedRunResult{Status: conductor.SeedStatusWithered},
+			result:        conductor.SeedRunResult{Status: conductor.SeedStatusSettled},
 			maxIterations: 3, sproutFailure: true, wantExecution: core.SeedExecutionOutcomeSproutFailed,
 		},
 		{
 			name:       "whole growth deadline",
-			result:     conductor.SeedRunResult{Status: conductor.SeedStatusExhausted},
+			result:     conductor.SeedRunResult{Status: conductor.SeedStatusSettled},
 			contextErr: context.DeadlineExceeded, maxIterations: 3,
 			wantExecution: core.SeedExecutionOutcomeTimedOut,
 		},
 		{
 			name:   "continuation boundary refusal",
-			result: conductor.SeedRunResult{Status: conductor.SeedStatusWithered},
+			result: conductor.SeedRunResult{Status: conductor.SeedStatusSettled},
 			runErr: core.ErrContinuationUndeliverable, maxIterations: 3,
 			wantExecution: core.SeedExecutionOutcomeBoundaryRefused,
 		},
 		{
 			name: "unknown diagnostic is left empty",
-			result: conductor.SeedRunResult{Status: conductor.SeedStatusWithered, VerificationDiagnostics: []core.SeedVerificationDiagnostic{{
+			result: conductor.SeedRunResult{Status: conductor.SeedStatusSettled, VerificationDiagnostics: []core.SeedVerificationDiagnostic{{
 				Outcome: "configuration-guessed-from-stderr",
 			}}},
 			maxIterations: 3,
@@ -136,7 +132,7 @@ func TestSeedOutcomeFactsUseOnlyDeterministicEvidence(t *testing.T) {
 		})
 	}
 	if _, verify := seedOutcomeFacts(
-		conductor.SeedRunResult{Status: conductor.SeedStatusExhausted, Iterations: 2, VerificationDiagnostics: []core.SeedVerificationDiagnostic{{Outcome: core.SeedVerificationOutcomePredicateFailed}}},
+		conductor.SeedRunResult{Status: conductor.SeedStatusSettled, Iterations: 2, VerificationDiagnostics: []core.SeedVerificationDiagnostic{{Outcome: core.SeedVerificationOutcomePredicateFailed}}},
 		nil, errors.New("canceled"), 3, false,
 	); verify != core.SeedVerificationOutcomePredicateFailed {
 		t.Fatalf("known verifier outcome = %q", verify)
@@ -151,7 +147,7 @@ func TestSeedSproutFailureRequiresTheExactTerminalIteration(t *testing.T) {
 	t.Cleanup(func() { _ = store.Close() })
 	if err := store.RecordSproutRun(context.Background(), historydb.SproutRun{
 		RunID: "seed-run-2", SessionID: "tendril-seed", StepID: "seed-tendril-seed-2-123",
-		Status: "withered", StartedAt: time.Now().UTC(),
+		Status: "withered", FailureCategory: string(core.FailureCategoryExecutionFailed), StartedAt: time.Now().UTC(),
 	}); err != nil {
 		t.Fatalf("record withered Sprout: %v", err)
 	}

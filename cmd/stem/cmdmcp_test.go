@@ -53,7 +53,7 @@ func TestNewInProcessMCPHandlerReconcilesOrphansBeforeServing(t *testing.T) {
 	if isError {
 		t.Fatalf("operator watch after reconcile: %s", text)
 	}
-	if !strings.Contains(text, `"status": "withered"`) && !strings.Contains(text, `"status":"withered"`) {
+	if !strings.Contains(text, `"status": "settled"`) && !strings.Contains(text, `"status":"settled"`) {
 		t.Fatalf("orphan seed was not terminalized: %s", text)
 	}
 	if !strings.Contains(text, `"deliveryState": "failed"`) && !strings.Contains(text, `"deliveryState":"failed"`) {

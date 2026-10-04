@@ -2,6 +2,7 @@
 // terminal.
 
 const TERMINAL_SEED_STATUSES = new Set([
+  "settled",
   "satisfied",
   "exhausted",
   "withered",

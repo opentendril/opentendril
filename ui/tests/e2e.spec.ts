@@ -7,9 +7,19 @@
 
 import { test, expect, type Page, type Request, type WebSocketRoute } from "@playwright/test";
 import { readSSEFrames } from "../src/lib/sse";
+import { seedStatusIsTerminal } from "../src/lib/seed";
 import type { EventRecord, PendingConfirmation, Session, SproutRun } from "../src/lib/types";
 
 const testApiKey = "e2e-test-key";
+
+test("Seed terminal helper recognizes settled and historical terminal states", () => {
+  for (const status of ["settled", "satisfied", "exhausted", "withered", "fruit-publication-failed"]) {
+    expect(seedStatusIsTerminal(status)).toBe(true);
+  }
+  for (const status of ["", "running", "settling", "unknown"]) {
+    expect(seedStatusIsTerminal(status)).toBe(false);
+  }
+});
 
 /** A session shaped exactly like the Go Stem's `GET /v1/sessions` response. */
 function makeSession(overrides: Partial<Session>): Session {

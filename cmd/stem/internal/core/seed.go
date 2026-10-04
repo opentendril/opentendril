@@ -43,6 +43,9 @@ const (
 	// passes and before successful Fruit may be persisted. It is not
 	// continuation-eligible.
 	SeedStatusSettling = "settling"
+	// SeedStatusSettled is the neutral terminal lifecycle state. It says only
+	// that bounded Seed execution has been durably accounted for.
+	SeedStatusSettled = "settled"
 	// SeedStatusSatisfied means the verify predicate exited 0 within bounds.
 	SeedStatusSatisfied = "satisfied"
 	// SeedStatusExhausted means the iteration/time bounds were spent before
@@ -116,8 +119,8 @@ const (
 	seedMaximumTimeout       = time.Hour
 )
 
-// SeedGrowInput asks the Stem to grow a Seed: build toward Goal, then run
-// Verify, iterating up to the bounds until Verify passes.
+// SeedGrowInput asks the Stem to grow a Seed toward Goal, optionally running
+// Verify as an explicit deterministic convergence gate.
 type SeedGrowInput struct {
 	// Substrate is the absolute path or named substrate key of the target
 	// workspace.
@@ -125,12 +128,9 @@ type SeedGrowInput struct {
 	// Goal is the natural-language intent handed to the sprout builder — the
 	// "what to accomplish" (e.g. "make the failing tests pass").
 	Goal string `json:"goal"`
-	// Verify is the argv command that defines "done": the Seed is satisfied
-	// only when this command exits 0. It runs inside the sealed Terrarium, one
-	// bounded command executed directly (never through a shell) — the same
-	// harness stoma.pass uses. (The argv form is the predicate; a
-	// named-sequence predicate is a compatible future addition.)
-	Verify []string `json:"verify"`
+	// Verify is an optional argv command used as an explicit deterministic
+	// convergence gate. It runs directly inside a sealed Terrarium.
+	Verify []string `json:"verify,omitempty"`
 	// MaxIterations bounds how many build/verify passes the loop may take. The
 	// default applies when zero; a request above the maximum is capped.
 	MaxIterations int `json:"maxIterations,omitempty"`
@@ -352,7 +352,8 @@ func (s *Service) WithSeedLifecycleReporter(report func(SeedLifecycleReport)) *S
 // SeedGrowResult is the reviewable outcome of a grown Seed — the Fruit the
 // Pollinator inspects. It is presented for review; nothing is merged.
 type SeedGrowResult struct {
-	// Status is satisfied, exhausted, withered, or fruit-publication-failed.
+	// Status is a lifecycle fact: running, settling, or settled. Historical
+	// terminal values remain readable for compatibility.
 	Status string `json:"status"`
 	// ExecutionOutcome and VerificationOutcome are independent deterministic
 	// facts. Empty means existing evidence cannot truthfully establish them.
@@ -490,9 +491,14 @@ func (s *Service) GrowPreparedSeed(ctx context.Context, growth SeedGrowth) (Seed
 	}
 	result, err := s.seed.Run(ctx, spec, lifecycle)
 	result.PhytomerID = spec.PhytomerID
+	if SeedStatusIsTerminal(result.Status) {
+		// A SeedOperations implementation may still return a historical terminal
+		// status. New settlement writes use only the neutral lifecycle value.
+		result.Status = SeedStatusSettled
+	}
 	publicationFailed := err != nil && result.PublicationDiagnostic != nil && result.PublicationDiagnostic.FailureCategory == SeedFailureCategoryFruitPublication
 	if publicationFailed {
-		result.Status = SeedStatusFruitPublicationFailed
+		result.Status = SeedStatusSettled
 		result.Branch = ""
 		result.Commit = ""
 		result.Repository = ""
@@ -510,9 +516,10 @@ func (s *Service) finalizeOpenedSeed(ctx context.Context, lifecycle *SeedContinu
 	persistCtx, cancel := seedFinalizationContext(ctx)
 	defer cancel()
 	settled := composeOpenedSeedSettlement(spec, pollen, handle, started, result, runErr, publicationFailed)
-	if runErr == nil && !publicationFailed && result.Status == SeedStatusSatisfied {
+	executionFailed := result.ExecutionOutcome != "" && result.ExecutionOutcome != SeedExecutionOutcomeCompleted
+	if runErr == nil && !publicationFailed && !executionFailed && result.Status == SeedStatusSettled {
 		if err := lifecycle.CompleteSuccessfulSettlement(persistCtx, settled); err != nil {
-			result.Status = SeedStatusWithered
+			result.Status = SeedStatusSettling
 			s.noteSeedAccountingIncomplete(lifecycle.Target())
 			return result, fmt.Errorf("%w: %w", ErrSeedAccountingIncomplete, err)
 		}
@@ -520,11 +527,11 @@ func (s *Service) finalizeOpenedSeed(ctx context.Context, lifecycle *SeedContinu
 	}
 	account, err := lifecycle.AccountTerminalFailure(persistCtx, settled)
 	if err != nil {
+		result.Status = SeedStatusSettling
 		s.noteSeedAccountingIncomplete(lifecycle.Target())
 		return result, fmt.Errorf("%w: %w", ErrSeedAccountingIncomplete, err)
 	}
 	if account.UnresolvedFailed > 0 {
-		result.Status = SeedStatusWithered
 		return result, ErrContinuationUndeliverable
 	}
 	return result, runErr
@@ -547,7 +554,7 @@ func composeOpenedSeedSettlement(spec SeedSpec, pollen, handle string, started t
 		VerificationDiagnostics: CopySeedVerificationDiagnostics(result.VerificationDiagnostics),
 	}
 	if publicationFailed {
-		settled.Status = SeedStatusFruitPublicationFailed
+		settled.Status = SeedStatusSettled
 		settled.Branch = ""
 		settled.Commit = ""
 		settled.Repository = ""
@@ -560,7 +567,7 @@ func composeOpenedSeedSettlement(spec SeedSpec, pollen, handle string, started t
 		return settled
 	}
 	if runErr != nil {
-		settled.Status = SeedStatusWithered
+		settled.Status = SeedStatusSettled
 		if errors.Is(runErr, ErrContinuationUndeliverable) {
 			settled.Error = ErrContinuationUndeliverable.Error()
 		} else {
@@ -874,8 +881,8 @@ func resolveSeedSpec(in SeedGrowInput) (SeedSpec, error) {
 	// Argument tokens pass through verbatim (a token may legitimately carry
 	// whitespace); only the executable token must be non-blank.
 	verify := append([]string(nil), in.Verify...)
-	if len(verify) == 0 || strings.TrimSpace(verify[0]) == "" {
-		return SeedSpec{}, fmt.Errorf("verify is required (an argv vector whose exit-0 defines success)")
+	if len(verify) > 0 && strings.TrimSpace(verify[0]) == "" {
+		return SeedSpec{}, fmt.Errorf("verify executable must not be blank")
 	}
 	if in.MaxIterations < 0 {
 		return SeedSpec{}, fmt.Errorf("maxIterations must not be negative")
@@ -1131,21 +1138,21 @@ func (s *Service) seedCapabilities() []Capability {
 	return []Capability{
 		{
 			Name:        CapSeedGrow,
-			Description: "Grow a Seed: build toward a goal and iterate until a verify command exits 0, within iteration/time bounds, inside a network-sealed terrarium (external reach only via a delegation grant's egress allow-list). Returns the Fruit for review; nothing is merged.",
+			Description: "Grow a Seed toward a goal within iteration/time bounds, optionally using an explicit command-verification gate. Reports execution and verification facts independently and returns Fruit for review; nothing is merged.",
 			InputSchema: schemaObject(map[string]any{
 				"substrate": stringProp("The absolute path or named substrate key for the target repository workspace."),
 				"goal":      stringProp("The intent handed to the builder — what the Seed must accomplish."),
 				"verify": map[string]any{
 					"type":        "array",
 					"items":       map[string]any{"type": "string"},
-					"description": "The argv vector whose exit-0 defines success; run directly (never through a shell) inside the sealed terrarium.",
+					"description": "Optional argv vector used as an explicit convergence gate; run directly (never through a shell) inside the sealed terrarium.",
 				},
 				"maxIterations":  map[string]any{"type": "integer", "description": "Maximum build/verify passes (default 3, maximum 10)."},
 				"timeoutSeconds": map[string]any{"type": "integer", "description": "Whole-growth wall-clock bound in seconds (default 900, maximum 3600)."},
 				"origin":         stringProp("Interaction origin recorded on the run (cli, mcp, rest)."),
 				"detached":       map[string]any{"type": "boolean", "description": "When true, return the active handle and Phytomer identity after durable opening and grow in the background. Requires idempotencyKey. Default false: block until the Seed is terminal."},
 				"idempotencyKey": stringProp("Caller retry identity for detached Seed opens. Required when detached is true; reuse the same key to recover the accepted handle and Phytomer."),
-			}, []string{"substrate", "goal", "verify"}),
+			}, []string{"substrate", "goal"}),
 			Invoke: func(ctx context.Context, input map[string]any) (any, error) {
 				var in SeedGrowInput
 				if err := decodeInput(input, &in); err != nil {

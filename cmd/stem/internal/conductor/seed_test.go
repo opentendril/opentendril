@@ -124,7 +124,7 @@ func TestRunSeedSatisfiedOnFirstVerify(t *testing.T) {
 	if err != nil {
 		t.Fatalf("RunSeed: %v", err)
 	}
-	if res.Status != SeedStatusSatisfied {
+	if res.Status != SeedStatusSettled {
 		t.Fatalf("status = %q, want satisfied. log:\n%s", res.Status, res.Logs)
 	}
 	if res.Iterations != 1 {
@@ -163,7 +163,7 @@ func TestRunSeedExhaustedThreadsFeedback(t *testing.T) {
 	if err != nil {
 		t.Fatalf("RunSeed: %v", err)
 	}
-	if res.Status != SeedStatusExhausted {
+	if res.Status != SeedStatusSettled {
 		t.Fatalf("status = %q, want exhausted", res.Status)
 	}
 	if res.Iterations != 3 {
@@ -199,22 +199,18 @@ func TestRunSeedSilentVerificationThreadsExitFeedback(t *testing.T) {
 	if err != nil {
 		t.Fatalf("RunSeed: %v", err)
 	}
-	if res.Status != SeedStatusExhausted {
+	if res.Status != SeedStatusSettled {
 		t.Fatalf("status = %q, want exhausted", res.Status)
 	}
-	if len(prompts) != 2 {
-		t.Fatalf("build ran %d time(s), want 2", len(prompts))
+	if len(prompts) != 1 {
+		t.Fatalf("build ran %d time(s), want 1 for a non-repairable exit", len(prompts))
 	}
-	if !strings.Contains(prompts[1], "Verification failed: command exited 2.") {
-		t.Fatalf("silent verification failure was not fed back with its exit code: %q", prompts[1])
+	if len(res.VerificationDiagnostics) != 1 {
+		t.Fatalf("verification diagnostics = %+v, want one diagnostic", res.VerificationDiagnostics)
 	}
-	if len(res.VerificationDiagnostics) != 2 {
-		t.Fatalf("verification diagnostics = %+v, want one per failed iteration", res.VerificationDiagnostics)
-	}
-	for _, diagnostic := range res.VerificationDiagnostics {
-		if diagnostic.Outcome != core.SeedVerificationOutcomePredicateFailed || diagnostic.ExitCode == nil || *diagnostic.ExitCode != 2 || diagnostic.TimedOut {
-			t.Fatalf("silent verification diagnostic = %+v, want predicate failure with exit 2", diagnostic)
-		}
+	diagnostic := res.VerificationDiagnostics[0]
+	if diagnostic.Outcome != core.SeedVerificationOutcomeConfigurationInvalid || diagnostic.ExitCode == nil || *diagnostic.ExitCode != 2 || diagnostic.TimedOut {
+		t.Fatalf("silent verification diagnostic = %+v, want configuration-invalid with exit 2", diagnostic)
 	}
 }
 
@@ -223,11 +219,8 @@ func TestSeedVerificationFeedbackTimeoutIsExplicitAndBounded(t *testing.T) {
 		Output:   strings.Repeat("timeout output ", seedVerifyFeedbackBound),
 		TimedOut: true,
 	})
-	if !strings.Contains(feedback, "Verification failed: command timed out.") {
-		t.Fatalf("timeout feedback omitted its deterministic diagnostic: %q", feedback)
-	}
-	if len(feedback) > seedVerifyFeedbackBound {
-		t.Fatalf("timeout feedback length = %d, want <= %d", len(feedback), seedVerifyFeedbackBound)
+	if feedback != "" {
+		t.Fatalf("timeout produced repair feedback: %q", feedback)
 	}
 
 	if got := seedVerificationFeedback(seedVerifyReport{Err: fmt.Errorf("private infrastructure detail")}); got != "" {
@@ -300,7 +293,7 @@ func TestRunSeedCandidateEvidenceFailurePreservesLifecycle(t *testing.T) {
 	if diffCalls != 1 {
 		t.Fatalf("candidate diff calls = %d, want one retry-evidence attempt", diffCalls)
 	}
-	if res.Status != SeedStatusExhausted || res.Iterations != 2 {
+	if res.Status != SeedStatusSettled || res.Iterations != 2 {
 		t.Fatalf("status/iterations = %q/%d, want exhausted/2", res.Status, res.Iterations)
 	}
 	if len(res.VerificationDiagnostics) != 2 {
@@ -331,7 +324,7 @@ func TestRunSeedWitheredOnBuildError(t *testing.T) {
 	if err != nil {
 		t.Fatalf("RunSeed: %v", err)
 	}
-	if res.Status != SeedStatusWithered {
+	if res.Status != SeedStatusSettled {
 		t.Fatalf("status = %q, want withered", res.Status)
 	}
 	if res.Iterations != 1 {
@@ -358,7 +351,7 @@ func TestRunSeedWitheredOnVerifyInfraError(t *testing.T) {
 	if err != nil {
 		t.Fatalf("RunSeed: %v", err)
 	}
-	if res.Status != SeedStatusWithered {
+	if res.Status != SeedStatusSettled {
 		t.Fatalf("status = %q, want withered", res.Status)
 	}
 }
@@ -380,7 +373,7 @@ func TestRunSeedExhaustedCandidateIsNotFruit(t *testing.T) {
 	if err != nil {
 		t.Fatalf("RunSeed: %v", err)
 	}
-	if res.Status != SeedStatusExhausted {
+	if res.Status != SeedStatusSettled {
 		t.Fatalf("status = %q, want exhausted; logs: %s", res.Status, res.Logs)
 	}
 	assertSeedCandidateIsNotFruit(t, res, repo, seedBranch)
@@ -409,7 +402,7 @@ func TestRunSeedWitheredCandidateIsNotFruit(t *testing.T) {
 	if err != nil {
 		t.Fatalf("RunSeed: %v", err)
 	}
-	if res.Status != SeedStatusWithered {
+	if res.Status != SeedStatusSettled {
 		t.Fatalf("status = %q, want withered", res.Status)
 	}
 	assertSeedCandidateIsNotFruit(t, res, repo, seedBranch)
@@ -482,7 +475,7 @@ func TestRunSeedSalvagesCheckpointedRecoverableSproutFailure(t *testing.T) {
 	if err != nil {
 		t.Fatalf("RunSeed: %v", err)
 	}
-	if res.Status != SeedStatusSatisfied {
+	if res.Status != SeedStatusSettled {
 		t.Fatalf("status = %q, want satisfied; logs:\n%s", res.Status, res.Logs)
 	}
 	if res.Iterations != 2 || buildCount != 2 || len(prompts) != 2 {
@@ -549,7 +542,7 @@ func TestRunSeedDoesNotSalvageRecoverableFailureWithoutCheckpoint(t *testing.T) 
 	if err != nil {
 		t.Fatalf("RunSeed: %v", err)
 	}
-	if res.Status != SeedStatusWithered {
+	if res.Status != SeedStatusSettled {
 		t.Fatalf("status = %q, want withered", res.Status)
 	}
 	if res.Iterations != 1 {
@@ -580,7 +573,7 @@ func TestRunSeedDoesNotSalvageJoinedTurnLimitFailure(t *testing.T) {
 	if err != nil {
 		t.Fatalf("RunSeed: %v", err)
 	}
-	if res.Status != SeedStatusWithered || res.Iterations != 1 {
+	if res.Status != SeedStatusSettled || res.Iterations != 1 {
 		t.Fatalf("status/iterations = %q/%d, want withered/1", res.Status, res.Iterations)
 	}
 	if verifyCalled {
@@ -727,7 +720,7 @@ func TestTwoSeedsUseDistinctPhytomers(t *testing.T) {
 	if err != nil {
 		t.Fatalf("second: %v", err)
 	}
-	if first.Status != SeedStatusSatisfied || second.Status != SeedStatusSatisfied {
+	if first.Status != SeedStatusSettled || second.Status != SeedStatusSettled {
 		t.Fatalf("statuses = %q / %q", first.Status, second.Status)
 	}
 }
@@ -940,7 +933,7 @@ func TestRunSeedManagedAPIFruit(t *testing.T) {
 	if err != nil {
 		t.Fatalf("RunSeed: %v", err)
 	}
-	if res.Status != SeedStatusSatisfied {
+	if res.Status != SeedStatusSettled {
 		t.Fatalf("status = %q, want satisfied, logs: %s", res.Status, res.Logs)
 	}
 	if res.Iterations != 2 {
@@ -1008,7 +1001,7 @@ func TestRunSeedExhaustedManagedAPIFruitIsNotPublished(t *testing.T) {
 	if err != nil {
 		t.Fatalf("RunSeed: %v", err)
 	}
-	if res.Status != SeedStatusExhausted {
+	if res.Status != SeedStatusSettled {
 		t.Fatalf("status = %q, want exhausted; logs: %s", res.Status, res.Logs)
 	}
 	if res.Branch != "" || res.Commit != "" {

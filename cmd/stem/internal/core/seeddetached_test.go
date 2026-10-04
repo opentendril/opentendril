@@ -66,7 +66,7 @@ func TestSeedGrowSynchronousRemainsTerminal(t *testing.T) {
 	if err != nil {
 		t.Fatalf("sync grow: %v", err)
 	}
-	if result.Status != SeedStatusSatisfied || result.Handle != "" {
+	if result.Status != SeedStatusSettled || result.Handle != "" {
 		t.Fatalf("sync result = %+v", result)
 	}
 	if captured.PhytomerID == "" {
@@ -670,6 +670,7 @@ func TestSeedGrowDetachedSemanticConflictFields(t *testing.T) {
 	}{
 		{name: "substrate", change: func(in *SeedGrowInput) { in.Substrate = "other" }},
 		{name: "goal", change: func(in *SeedGrowInput) { in.Goal = "different goal" }},
+		{name: "omitted verification", change: func(in *SeedGrowInput) { in.Verify = nil }},
 		{name: "verify argv", change: func(in *SeedGrowInput) { in.Verify = []string{"go", "test", "./cmd/stem"} }},
 		{name: "verify argv token bytes", change: func(in *SeedGrowInput) { in.Verify[2] = " ./..." }},
 		{name: "effective iterations", change: func(in *SeedGrowInput) { in.MaxIterations = 4 }},
