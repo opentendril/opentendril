@@ -408,6 +408,9 @@ func RunSeed(ctx context.Context, execution SeedExecution) (SeedRunResult, error
 		}
 		return out, nil
 	}
+	if executionOutcome != core.SeedExecutionOutcomeCompleted {
+		return result("", ""), terminalError
+	}
 	if len(execution.Verify) > 0 && verificationOutcome != core.SeedVerificationOutcomePassed {
 		return result("", ""), terminalError
 	}

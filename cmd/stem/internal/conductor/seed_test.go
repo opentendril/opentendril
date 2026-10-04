@@ -1167,3 +1167,110 @@ func TestRunSeedPublicationPlanFailureReportsNoFruit(t *testing.T) {
 		t.Fatalf("local Seed branch %q was not preserved", seedBranch)
 	}
 }
+
+func TestRunSeedNonCompletedNoVerifierCheckpointIsNotFruitOrPublished(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	managedRoot := t.TempDir()
+	t.Setenv("TENDRIL_MANAGED_CHECKOUT_ROOT", managedRoot)
+	chdirToTempDir(t)
+	restoreSeeds(t)
+
+	repo := newSeedRepo(t)
+	keyPath := writeSeedTestAppKey(t)
+	const substratePrefix = "seed-api-non-completed-"
+	var substrateConfig strings.Builder
+	substrateConfig.WriteString("substrates:\n")
+	for _, name := range []string{"sprout-failed", "infrastructure-failed"} {
+		fmt.Fprintf(&substrateConfig, "  %s%s:\n    url: %s\n    branch: main\n    checkout:\n      mode: managed\n    commit: api\n    auth:\n      method: app\n      appId: \"1234\"\n      privateKeyPath: %s\n", substratePrefix, name, repo, keyPath)
+	}
+	writeSubstratesYAML(t, filepath.Join(mustGetwd(), "substrates.yaml"), substrateConfig.String())
+
+	origMaterialize := materializeManagedCheckoutFn
+	t.Cleanup(func() { materializeManagedCheckoutFn = origMaterialize })
+	materializeManagedCheckoutFn = func(_ string, dest, url, _ string, _ ResolvedCredential, _ []string) error {
+		if err := os.MkdirAll(filepath.Dir(dest), 0o755); err != nil {
+			return err
+		}
+		if _, err := runGitCommand(context.Background(), filepath.Dir(dest), "clone", "-q", url, dest); err != nil {
+			return err
+		}
+		for _, args := range [][]string{
+			{"config", "user.email", "seed@example.com"},
+			{"config", "user.name", "Seed Tester"},
+		} {
+			if _, err := runGitCommand(context.Background(), dest, args...); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
+
+	fake := startAPIFruitFake(t, http.StatusCreated, "unexpected-fruit-commit")
+	cases := []struct {
+		name            string
+		failureCategory core.FailureCategory
+		wantOutcome     string
+	}{
+		{name: "sprout-failed", failureCategory: core.FailureCategoryExecutionFailed, wantOutcome: core.SeedExecutionOutcomeSproutFailed},
+		{name: "infrastructure-failed", failureCategory: core.FailureCategoryTerrariumRuntime, wantOutcome: core.SeedExecutionOutcomeInfrastructureFailed},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			substrate := substratePrefix + tc.name
+			dest := filepath.Join(managedRoot, substrate)
+			if err := materializeManagedCheckoutFn(substrate, dest, repo, "main", ResolvedCredential{}, nil); err != nil {
+				t.Fatalf("materialize test repo: %v", err)
+			}
+			var seedBranch string
+			providerErr := errors.New("non-recoverable Sprout failure")
+			seedBuildFn = func(ctx context.Context, orch *DockerOrchestrator, _ string) (SproutRunReport, error) {
+				seedBranch = orch.SubstrateBranch
+				if _, err := runGitCommand(ctx, dest, "checkout", "-b", seedBranch, orch.SeedStartRevision); err != nil {
+					return SproutRunReport{}, err
+				}
+				if err := os.WriteFile(filepath.Join(dest, "fruit.txt"), []byte("internal checkpoint\n"), 0o644); err != nil {
+					return SproutRunReport{}, err
+				}
+				for _, args := range [][]string{{"add", "fruit.txt"}, {"commit", "-m", "integrated Seed checkpoint"}, {"checkout", "main"}} {
+					if _, err := runGitCommand(ctx, dest, args...); err != nil {
+						return SproutRunReport{}, err
+					}
+				}
+				candidate, err := runGitCommand(ctx, dest, "rev-parse", seedBranch)
+				if err != nil {
+					return SproutRunReport{}, err
+				}
+				return SproutRunReport{
+					Outcome:             SproutOutcomeFailed,
+					FailureCategory:     string(tc.failureCategory),
+					RequestsMade:        true,
+					seedCandidateCommit: strings.TrimSpace(candidate),
+				}, providerErr
+			}
+			seedVerifyFn = func(context.Context, string, string, []string, []string) seedVerifyReport {
+				t.Fatal("no-verifier Seed invoked Stoma")
+				return seedVerifyReport{}
+			}
+
+			result, err := RunSeed(context.Background(), SeedExecution{
+				Substrate: substrate, Goal: "create a candidate", MaxIterations: 1, SessionID: "seed-" + tc.name,
+			})
+			if err != nil {
+				t.Fatalf("RunSeed: %v", err)
+			}
+			if result.Status != SeedStatusSettled || result.ExecutionOutcome != tc.wantOutcome || result.VerificationOutcome != core.SeedVerificationOutcomeNotRequested {
+				t.Fatalf("status/outcomes = %q/%q/%q, want settled/%s/not-requested", result.Status, result.ExecutionOutcome, result.VerificationOutcome, tc.wantOutcome)
+			}
+			assertSeedCandidateIsNotFruit(t, result, dest, seedBranch)
+			if result.Repository != "" || result.Workspace != "" || result.PublicationState != "" || !result.CreatedAt.IsZero() {
+				t.Fatalf("non-completed execution retained Fruit provenance: %+v", result)
+			}
+			if !strings.Contains(result.Logs, "non-recoverable Sprout failure") {
+				t.Fatalf("bounded execution evidence omitted the Sprout failure: %q", result.Logs)
+			}
+			if fake.installCalled != 0 || fake.tokenCalled != 0 || fake.createRefCalled != 0 || fake.graphQLCalled != 0 {
+				t.Fatalf("managed API publication was attempted: install=%d token=%d ref=%d graphql=%d", fake.installCalled, fake.tokenCalled, fake.createRefCalled, fake.graphQLCalled)
+			}
+		})
+	}
+}
