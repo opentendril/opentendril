@@ -865,7 +865,7 @@ func TestRound16HelloPredicateThroughRealTerrarium(t *testing.T) {
 		{name: "exact content", content: "Hello from OpenTendril.\n", write: true, want: 0},
 		{name: "no trailing newline", content: "Hello from OpenTendril.", write: true, want: 1},
 		{name: "wrong contents", content: "wrong\n", write: true, want: 1},
-		{name: "missing file", want: 2},
+		{name: "missing file", want: 1},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {

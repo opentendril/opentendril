@@ -16,15 +16,15 @@ import (
 
 // The seed/grow capability family: grow a Seed — a bounded, well-specified
 // intent — to Fruit. Where stoma.pass runs ONE command and sprout.grow
-// runs an open-ended transcript, seed.grow hands the Stem a bounded unit of work
-// — a goal, an optional explicit verification predicate, and iteration/time
-// bounds — and asks it to build toward the goal, optionally iterating on
+// runs an open-ended transcript, seed.grow hands the Stem a bounded unit of work:
+// a goal, an optional explicit verification predicate, and iteration/time
+// bounds. Seed then builds toward the goal, optionally iterating on
 // predicate failures until the predicate passes or the bounds are spent. It is the
 // "run + fix the failing tests" / "regenerate fixtures" shape.
 //
 // The Core owns only the contract and its validation. Execution — the sprout
 // builder loop, the optional sealed-Terrarium verifier, and worktree
-// reconciliation — is
+// reconciliation is
 // injected as a transport-free port (WithSeed), so the Core never imports the
 // conductor (see internal/core/boundary_test.go). Until that port is wired the
 // capability reports that it is not wired rather than acting.
