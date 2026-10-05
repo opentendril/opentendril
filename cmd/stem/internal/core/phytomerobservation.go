@@ -313,7 +313,7 @@ func knownContinuationDeliveryState(state string) bool {
 // state. Unknown or empty status is not terminal.
 func SeedStatusIsTerminal(status string) bool {
 	switch strings.TrimSpace(status) {
-	case SeedStatusSatisfied, SeedStatusExhausted, SeedStatusWithered, SeedStatusFruitPublicationFailed:
+	case SeedStatusSettled, SeedStatusSatisfied, SeedStatusExhausted, SeedStatusWithered, SeedStatusFruitPublicationFailed:
 		return true
 	default:
 		return false

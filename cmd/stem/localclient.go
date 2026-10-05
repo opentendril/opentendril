@@ -117,13 +117,15 @@ type SeedDispatchResult struct {
 // SeedCollectResult is the decoded Fruit from a /v1/seeds/runs/{handle}
 // response. It maps the public Fruit fields returned by tendril seed collect.
 type SeedCollectResult struct {
-	Status     string `json:"status"`
-	Iterations int    `json:"iterations"`
-	PhytomerID string `json:"phytomerId"`
-	Branch     string `json:"branch"`
-	Commit     string `json:"commit"`
-	Diff       string `json:"diff"`
-	Logs       string `json:"logs"`
+	Status              string `json:"status"`
+	ExecutionOutcome    string `json:"executionOutcome"`
+	VerificationOutcome string `json:"verificationOutcome"`
+	Iterations          int    `json:"iterations"`
+	PhytomerID          string `json:"phytomerId"`
+	Branch              string `json:"branch"`
+	Commit              string `json:"commit"`
+	Diff                string `json:"diff"`
+	Logs                string `json:"logs"`
 }
 
 // DispatchSeed posts a detached canonical Seed-grow request to

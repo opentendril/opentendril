@@ -114,7 +114,7 @@ func TestRunSeedRound19SalvagesAndRepairsPartialCandidateAfterTurnLimit(t *testi
 	if err != nil {
 		t.Fatalf("RunSeed: %v", err)
 	}
-	if result.Status != SeedStatusSatisfied || result.Iterations != 2 {
+	if result.Status != SeedStatusSettled || result.Iterations != 2 {
 		t.Fatalf("result = %+v, want satisfied after exactly two iterations", result)
 	}
 	if iteration != 2 || len(prompts) != 2 || len(verifiedCandidates) != 2 || len(reports) != 2 || len(startRevisions) != 2 || len(sessions) != 2 || len(clients) != 2 || len(sprouts) != 2 {

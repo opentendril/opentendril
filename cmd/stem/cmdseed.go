@@ -20,8 +20,8 @@ import (
 // runSeedCmd is the CLI adapter for the governed seed/grow capability family —
 // grow a Seed (a bounded intent) to Fruit: a thin projection of the same
 // transport-free core.Core the REST and MCP surfaces use. `tendril seed grow`
-// hands off a Seed — build toward a goal and iterate until a verify command
-// exits 0 — and prints the reviewable Fruit.
+// hands off a Seed and builds toward its goal, with optional command verification.
+// and prints the reviewable Fruit.
 //
 // A CLI invocation is never delegated (there is no Pollen), so its egress
 // allow-list is always empty: deny-all, the secure default. Only a delegated
@@ -90,7 +90,13 @@ func runSeedCmd(ctx context.Context, args []string) {
 		fmt.Fprintf(os.Stderr, " on branch %s", growResult.Branch)
 	}
 	fmt.Fprintln(os.Stderr)
-	if growResult.Status != core.SeedStatusSatisfied {
+	if growResult.ExecutionOutcome != "" {
+		fmt.Fprintf(os.Stderr, "Execution outcome: %s\n", growResult.ExecutionOutcome)
+	}
+	if growResult.VerificationOutcome != "" {
+		fmt.Fprintf(os.Stderr, "Verification outcome: %s\n", growResult.VerificationOutcome)
+	}
+	if !seedCommandResultAcceptable(growResult.ExecutionOutcome, growResult.VerificationOutcome) {
 		os.Exit(1)
 	}
 }
@@ -216,9 +222,12 @@ func seedOperations(history *historydb.Store, ambientBus *eventbus.Bus) core.See
 				}
 			}
 			result, err := conductor.RunSeed(ctx, execution)
-			sproutFailure := result.Status == conductor.SeedStatusWithered && len(result.VerificationDiagnostics) < result.Iterations &&
+			sproutFailure := len(result.VerificationDiagnostics) < result.Iterations &&
 				seedSproutFailureEstablished(context.WithoutCancel(ctx), history, spec.PhytomerID, result.Iterations)
 			executionOutcome, verificationOutcome := seedOutcomeFacts(result, err, ctx.Err(), spec.MaxIterations, sproutFailure)
+			if len(spec.Verify) == 0 && verificationOutcome == "" {
+				verificationOutcome = core.SeedVerificationOutcomeNotRequested
+			}
 			translated := core.SeedGrowResult{
 				Status:                  result.Status,
 				ExecutionOutcome:        executionOutcome,
@@ -246,32 +255,47 @@ func seedOperations(history *historydb.Store, ambientBus *eventbus.Bus) core.See
 // paths empty instead of turning a combined terminal status into an execution
 // or verification claim.
 func seedOutcomeFacts(result conductor.SeedRunResult, runErr, contextErr error, maxIterations int, sproutFailure bool) (string, string) {
-	verificationOutcome := ""
+	verificationOutcome := result.VerificationOutcome
+	if core.ValidSeedVerificationOutcome(verificationOutcome) && verificationOutcome != "" {
+		// Use the executor's deterministic classification; diagnostics remain
+		// supporting evidence rather than an adapter-side policy source.
+	} else {
+		verificationOutcome = ""
+	}
 	if len(result.VerificationDiagnostics) > 0 {
 		last := result.VerificationDiagnostics[len(result.VerificationDiagnostics)-1]
-		switch {
-		case last.TimedOut:
-			verificationOutcome = core.SeedVerificationOutcomeTimedOut
-		case core.ValidSeedVerificationOutcome(last.Outcome):
+		if verificationOutcome == "" && core.ValidSeedVerificationOutcome(last.Outcome) {
 			verificationOutcome = last.Outcome
 		}
 	}
 
-	executionOutcome := ""
+	executionOutcome := result.ExecutionOutcome
+	if core.ValidSeedExecutionOutcome(executionOutcome) && executionOutcome != "" {
+		return executionOutcome, verificationOutcome
+	}
 	switch {
 	case errors.Is(runErr, core.ErrContinuationUndeliverable):
 		executionOutcome = core.SeedExecutionOutcomeBoundaryRefused
-	case result.Status == conductor.SeedStatusSatisfied && verificationOutcome == core.SeedVerificationOutcomePassed:
-		executionOutcome = core.SeedExecutionOutcomeCompleted
 	case errors.Is(contextErr, context.DeadlineExceeded):
 		executionOutcome = core.SeedExecutionOutcomeTimedOut
 	case sproutFailure:
 		executionOutcome = core.SeedExecutionOutcomeSproutFailed
-	case result.Status == conductor.SeedStatusExhausted && maxIterations > 0 &&
+	case errors.Is(runErr, context.DeadlineExceeded):
+		executionOutcome = core.SeedExecutionOutcomeTimedOut
+	case runErr != nil:
+		executionOutcome = core.SeedExecutionOutcomeInfrastructureFailed
+	case maxIterations > 0 &&
 		result.Iterations >= maxIterations && verificationOutcome == core.SeedVerificationOutcomePredicateFailed:
 		executionOutcome = core.SeedExecutionOutcomeBoundsExhausted
 	}
 	return executionOutcome, verificationOutcome
+}
+
+func seedCommandResultAcceptable(executionOutcome, verificationOutcome string) bool {
+	if executionOutcome != core.SeedExecutionOutcomeCompleted {
+		return false
+	}
+	return verificationOutcome == core.SeedVerificationOutcomeNotRequested || verificationOutcome == core.SeedVerificationOutcomePassed
 }
 
 // seedSproutFailureEstablished requires the exact final iteration's persisted
@@ -301,7 +325,9 @@ func seedSproutFailureEstablished(ctx context.Context, history *historydb.Store,
 			continue
 		}
 		matched++
-		failed = strings.TrimSpace(run.Status) == "withered"
+		category := core.FailureCategory(strings.TrimSpace(run.FailureCategory))
+		failed = strings.TrimSpace(run.Status) == "withered" &&
+			(category == core.FailureCategoryExecutionFailed || category == core.FailureCategoryNoEngagement)
 	}
 	return matched == 1 && failed
 }
@@ -493,13 +519,10 @@ func parseSeedArgs(capName string, args []string) (map[string]any, error) {
 		input["verify"] = tokens
 	}
 	if substrate, _ := input["substrate"].(string); strings.TrimSpace(substrate) == "" {
-		return nil, fmt.Errorf("missing substrate. Usage: tendril seed grow --substrate <path|name> --goal <goal> -- <verify command...>")
+		return nil, fmt.Errorf("missing substrate. Usage: tendril seed grow --substrate <path|name> --goal <goal> [-- <verify command...>]")
 	}
 	if goal, _ := input["goal"].(string); strings.TrimSpace(goal) == "" {
-		return nil, fmt.Errorf("missing goal. Usage: tendril seed grow --substrate <path|name> --goal <goal> -- <verify command...>")
-	}
-	if _, ok := input["verify"]; !ok {
-		return nil, fmt.Errorf("missing verify command. Usage: tendril seed grow --substrate <path|name> --goal <goal> -- <verify command...>")
+		return nil, fmt.Errorf("missing goal. Usage: tendril seed grow --substrate <path|name> --goal <goal> [-- <verify command...>]")
 	}
 	return input, nil
 }
@@ -621,19 +644,25 @@ func runSeedCollect(ctx context.Context, args []string) {
 		fmt.Fprintf(os.Stderr, " at %s", run.Commit)
 	}
 	fmt.Fprintln(os.Stderr)
+	if run.ExecutionOutcome != "" {
+		fmt.Fprintf(os.Stderr, "Execution outcome: %s\n", run.ExecutionOutcome)
+	}
+	if run.VerificationOutcome != "" {
+		fmt.Fprintf(os.Stderr, "Verification outcome: %s\n", run.VerificationOutcome)
+	}
 
-	// A still-growing Seed is not an error — collect again later. A settled Seed
-	// that did not reach satisfied exits non-zero so scripts can branch on it.
+	// A still-growing Seed is not an error; collect again later. Terminal exit
+	// handling follows the execution/verification facts, not a legacy status.
 	if run.Status == "running" {
 		return
 	}
-	if run.Status != core.SeedStatusSatisfied {
+	if !seedCommandResultAcceptable(run.ExecutionOutcome, run.VerificationOutcome) {
 		os.Exit(1)
 	}
 }
 
 func printSeedUsage() {
-	fmt.Println("Usage: tendril seed grow --substrate <path|name> --goal <goal> [flags] -- <verify command...>")
+	fmt.Println("Usage: tendril seed grow --substrate <path|name> --goal <goal> [flags] [-- <verify command...>]")
 	fmt.Println("       tendril seed collect <handle>")
 	fmt.Println("  --substrate          The absolute path or named substrate key of the target workspace (required)")
 	fmt.Println("  --goal               The intent handed to the builder (required)")
@@ -643,8 +672,8 @@ func printSeedUsage() {
 	fmt.Println("  --idempotency-key K  Caller retry identity for detached Seed dispatch; reuse K to recover an accepted Seed")
 	fmt.Println("  --json '{...}'       Full JSON input (the generic escape hatch)")
 	fmt.Println()
-	fmt.Println("Grows a Seed: builds toward the goal and iterates until the verify command")
-	fmt.Println("exits 0, inside a network-sealed terrarium. The Fruit is returned for review;")
+	fmt.Println("Grows a Seed toward the goal. Optional command verification is an advanced")
+	fmt.Println("convergence gate; without it, the Stem reports execution facts and Fruit for review.")
 	fmt.Println("nothing is merged. Stem-mediated reach requires a delegation grant with an")
 	fmt.Println("egress allow-list (deny-all by default).")
 	fmt.Println()

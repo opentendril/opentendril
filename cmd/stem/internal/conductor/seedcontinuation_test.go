@@ -74,7 +74,7 @@ func TestSeedContinuationPendingBeforeSprout1AppearsInSprout1(t *testing.T) {
 	if err != nil {
 		t.Fatalf("RunSeed: %v", err)
 	}
-	if res.Status != SeedStatusSatisfied || res.Iterations != 1 {
+	if res.Status != SeedStatusSettled || res.Iterations != 1 {
 		t.Fatalf("status/iterations = %q/%d", res.Status, res.Iterations)
 	}
 	if len(prompts) != 1 || !strings.Contains(prompts[0], "keep going") {
@@ -136,7 +136,7 @@ func TestSeedContinuationAcceptedDuringSprout1ReachesOnlySprout2(t *testing.T) {
 	case <-time.After(5 * time.Second):
 		t.Fatal("RunSeed did not finish")
 	}
-	if res.Status != SeedStatusSatisfied || res.Iterations != 2 {
+	if res.Status != SeedStatusSettled || res.Iterations != 2 {
 		t.Fatalf("status/iterations = %q/%d", res.Status, res.Iterations)
 	}
 	if len(prompts) != 2 {
@@ -341,7 +341,7 @@ func TestSeedContinuationPassingVerifyRunsAnotherIterationOnlyWhenOneRemains(t *
 	case <-time.After(5 * time.Second):
 		t.Fatal("RunSeed did not finish")
 	}
-	if res.Status != SeedStatusSatisfied || res.Iterations != 2 {
+	if res.Status != SeedStatusSettled || res.Iterations != 2 {
 		t.Fatalf("status/iterations = %q/%d, want satisfied/2", res.Status, res.Iterations)
 	}
 	if len(prompts) != 2 || strings.Contains(prompts[0], "one more thing") || !strings.Contains(prompts[1], "one more thing") {
@@ -398,11 +398,11 @@ func TestSeedContinuationFinalIterationPendingCannotSatisfy(t *testing.T) {
 	case <-time.After(5 * time.Second):
 		t.Fatal("RunSeed did not finish")
 	}
-	if res.Status == SeedStatusSatisfied {
-		t.Fatal("final-iteration pending continuation reported satisfied")
+	if res.Status != SeedStatusSettled {
+		t.Fatalf("status = %q, want settled", res.Status)
 	}
-	if res.Status != SeedStatusWithered {
-		t.Fatalf("status = %q, want withered", res.Status)
+	if res.ExecutionOutcome != core.SeedExecutionOutcomeBoundaryRefused || res.VerificationOutcome != core.SeedVerificationOutcomePassed {
+		t.Fatalf("orthogonal outcomes = %q/%q", res.ExecutionOutcome, res.VerificationOutcome)
 	}
 	if len(prompts) != 1 {
 		t.Fatalf("widened iterations: %d prompts", len(prompts))
@@ -457,8 +457,8 @@ func TestSeedContinuationTimeoutSproutAndVerifyFailureAccountPending(t *testing.
 		case <-time.After(5 * time.Second):
 			t.Fatal("RunSeed did not finish")
 		}
-		if res.Status == SeedStatusSatisfied {
-			t.Fatal("timeout with pending continuation reported satisfied")
+		if res.Status != SeedStatusSettled || res.ExecutionOutcome != core.SeedExecutionOutcomeBoundaryRefused {
+			t.Fatalf("timeout settlement = %+v, want settled/boundary-refused", res)
 		}
 	})
 
@@ -502,7 +502,7 @@ func TestSeedContinuationTimeoutSproutAndVerifyFailureAccountPending(t *testing.
 		case <-time.After(5 * time.Second):
 			t.Fatal("RunSeed did not finish")
 		}
-		if res.Status != SeedStatusWithered {
+		if res.Status != SeedStatusSettled {
 			t.Fatalf("status = %q", res.Status)
 		}
 	})
@@ -552,8 +552,8 @@ func TestSeedContinuationTimeoutSproutAndVerifyFailureAccountPending(t *testing.
 		case <-time.After(5 * time.Second):
 			t.Fatal("RunSeed did not finish")
 		}
-		if res.Status == SeedStatusSatisfied || res.Status == SeedStatusExhausted {
-			t.Fatalf("status = %q, want accounted withered", res.Status)
+		if res.Status != SeedStatusSettled || res.ExecutionOutcome != core.SeedExecutionOutcomeBoundaryRefused || res.VerificationOutcome != core.SeedVerificationOutcomeConfigurationInvalid {
+			t.Fatalf("status/outcomes = %q/%q/%q, want settled/boundary-refused/configuration-invalid", res.Status, res.ExecutionOutcome, res.VerificationOutcome)
 		}
 	})
 }
@@ -588,8 +588,8 @@ func TestSeedContinuationDoesNotConfirmDeliveryWithoutProviderRequest(t *testing
 	if !errors.Is(err, core.ErrContinuationUndeliverable) {
 		t.Fatalf("err = %v, want undeliverable", err)
 	}
-	if res.Status == SeedStatusSatisfied {
-		t.Fatal("pre-provider failure reported satisfied")
+	if res.Status != SeedStatusSettled || res.ExecutionOutcome != core.SeedExecutionOutcomeBoundaryRefused {
+		t.Fatalf("pre-provider settlement = %+v, want settled/boundary-refused", res)
 	}
 	h.mu.Lock()
 	unresolved := len(h.pending) > 0 || len(h.inFlight) > 0
@@ -627,11 +627,11 @@ func TestSeedContinuationConfirmsDeliveryWhenProviderWasInvoked(t *testing.T) {
 	if err != nil {
 		t.Fatalf("delivered continuation should not become an undeliverable error: %v", err)
 	}
-	if res.Status != SeedStatusWithered {
+	if res.Status != SeedStatusSettled {
 		t.Fatalf("status = %q, want withered", res.Status)
 	}
-	if res.Status == SeedStatusSatisfied {
-		t.Fatal("sprout failure reported satisfied")
+	if res.ExecutionOutcome != core.SeedExecutionOutcomeInfrastructureFailed {
+		t.Fatalf("execution outcome = %q, want typed infrastructure-failed", res.ExecutionOutcome)
 	}
 }
 

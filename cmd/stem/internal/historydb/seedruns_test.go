@@ -244,7 +244,7 @@ func TestPruneOlderThanRetainsOnlyDetachedSeedRetryIdentity(t *testing.T) {
 	}
 	settlement := SeedRun{
 		Handle: "seed-retained", Pollen: "pollen-a", PhytomerID: "tendril-retained",
-		Substrate: "core", Goal: "private goal", Status: "satisfied", Iterations: 4,
+		Substrate: "core", Goal: "private goal", Status: "settled", Iterations: 4,
 		Branch: "tendril/private", Commit: "deadbeef", Diff: "private diff", Logs: "private logs", Error: "private error",
 		PublicationDiagnostic:   &SeedPublicationDiagnostic{FailureCategory: "private diagnostic"},
 		VerificationDiagnostics: []SeedVerificationDiagnostic{{Iteration: 1, Outcome: "failed", Message: "private verification"}},
@@ -261,7 +261,7 @@ func TestPruneOlderThanRetainsOnlyDetachedSeedRetryIdentity(t *testing.T) {
 	if err != nil || !found {
 		t.Fatalf("get settled retry identity: found=%v err=%v", found, err)
 	}
-	if settled.Handle != "seed-retained" || settled.PhytomerID != "tendril-retained" || settled.Substrate != "core" || settled.RequestDigest != "sha256-retained" || settled.Status != "satisfied" || !settled.FinishedAt.Equal(finished) {
+	if settled.Handle != "seed-retained" || settled.PhytomerID != "tendril-retained" || settled.Substrate != "core" || settled.RequestDigest != "sha256-retained" || settled.Status != "settled" || !settled.FinishedAt.Equal(finished) {
 		t.Fatalf("settled retry identity/status = %+v", settled)
 	}
 	if settled.Goal != "" || settled.Diff != "" || settled.Logs != "" || settled.Error != "" ||

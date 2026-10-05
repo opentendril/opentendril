@@ -128,8 +128,8 @@ func decodeSeedRequest(w http.ResponseWriter, r *http.Request) (core.SeedGrowInp
 			return req, false
 		}
 	}
-	if strings.TrimSpace(req.Substrate) == "" || strings.TrimSpace(req.Goal) == "" || len(req.Verify) == 0 {
-		http.Error(w, "substrate, goal and verify are required", http.StatusBadRequest)
+	if strings.TrimSpace(req.Substrate) == "" || strings.TrimSpace(req.Goal) == "" {
+		http.Error(w, "substrate and goal are required", http.StatusBadRequest)
 		return req, false
 	}
 	return req, true

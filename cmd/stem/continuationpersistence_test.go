@@ -305,11 +305,11 @@ func TestProductionAdapterEmptyPollenOpenedSeedLifecycle(t *testing.T) {
 	if err != nil {
 		t.Fatalf("grow: %v", err)
 	}
-	if result.Status != core.SeedStatusSatisfied {
+	if result.Status != core.SeedStatusSettled {
 		t.Fatalf("status = %q", result.Status)
 	}
 	seed, ok, err := store.GetSeedRunByPhytomer(ctx, growth.PhytomerID())
-	if err != nil || !ok || seed.Pollen != "" || seed.Status != core.SeedStatusSatisfied {
+	if err != nil || !ok || seed.Pollen != "" || seed.Status != core.SeedStatusSettled {
 		t.Fatalf("settled = %+v ok=%v err=%v", seed, ok, err)
 	}
 	if seed.ExecutionOutcome != core.SeedExecutionOutcomeCompleted || seed.VerificationOutcome != core.SeedVerificationOutcomePassed {
@@ -367,7 +367,7 @@ func TestProductionAdapterDetachedTerminalSettlementPersistsOutcomeFacts(t *test
 	if err != nil || !found {
 		t.Fatalf("read terminal Seed: found=%v err=%v", found, err)
 	}
-	if seed.ExecutionOutcome != core.SeedExecutionOutcomeBoundsExhausted || seed.VerificationOutcome != core.SeedVerificationOutcomePredicateFailed {
+	if seed.Status != core.SeedStatusSettled || seed.ExecutionOutcome != core.SeedExecutionOutcomeBoundsExhausted || seed.VerificationOutcome != core.SeedVerificationOutcomePredicateFailed {
 		t.Fatalf("terminal outcome facts = %q / %q", seed.ExecutionOutcome, seed.VerificationOutcome)
 	}
 	if len(seed.VerificationDiagnostics) != 1 || seed.VerificationDiagnostics[0].Iteration != 3 ||
@@ -426,11 +426,11 @@ func TestProductionPreProviderFailureFailsContinuationNotDelivered(t *testing.T)
 	if strings.Contains(err.Error(), intent) {
 		t.Fatalf("error leaked continued intent: %v", err)
 	}
-	if result.Status == core.SeedStatusSatisfied {
-		t.Fatal("pre-provider failure reported satisfied")
+	if result.Status != core.SeedStatusSettled {
+		t.Fatalf("pre-provider lifecycle status = %q, want settled", result.Status)
 	}
 	seed, ok, getErr := store.GetSeedRunByPhytomer(ctx, growth.PhytomerID())
-	if getErr != nil || !ok || seed.Status == core.SeedStatusSatisfied {
+	if getErr != nil || !ok || seed.Status != core.SeedStatusSettled {
 		t.Fatalf("seed = %+v ok=%v err=%v", seed, ok, getErr)
 	}
 	got, ok, getErr := store.GetContinuation(ctx, accepted.ContinuationID)

@@ -316,10 +316,11 @@ func renderTerminalSettlement(obs core.PhytomerObservation) {
 	if obs.Commit != "" {
 		fmt.Printf("Commit:     %s\n", obs.Commit)
 	}
-	if obs.Status == core.SeedStatusSatisfied {
-		fmt.Println("✅ Seed satisfied.")
-	} else {
-		fmt.Printf("⚠️  Seed ended with non-success status: %s\n", obs.Status)
+	if obs.ExecutionOutcome != "" {
+		fmt.Printf("Execution:  %s\n", obs.ExecutionOutcome)
+	}
+	if obs.VerificationOutcome != "" {
+		fmt.Printf("Verification: %s\n", obs.VerificationOutcome)
 	}
 }
 

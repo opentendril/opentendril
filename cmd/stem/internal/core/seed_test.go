@@ -46,8 +46,8 @@ func TestSeedGrowValidatesInput(t *testing.T) {
 	if _, err := svc.SeedGrow(ctx, SeedGrowInput{Substrate: "core", Verify: []string{"true"}}); err == nil {
 		t.Fatal("missing goal accepted")
 	}
-	if _, err := svc.SeedGrow(ctx, SeedGrowInput{Substrate: "core", Goal: "g"}); err == nil {
-		t.Fatal("missing verify accepted")
+	if _, err := svc.SeedGrow(ctx, SeedGrowInput{Substrate: "core", Goal: "g"}); err != nil {
+		t.Fatalf("omitted verification rejected: %v", err)
 	}
 	if _, err := svc.SeedGrow(ctx, SeedGrowInput{Substrate: "core", Goal: "g", Verify: []string{"  "}}); err == nil {
 		t.Fatal("blank verify token accepted")
@@ -62,6 +62,26 @@ func TestSeedGrowValidatesInput(t *testing.T) {
 	if _, err := svc.SeedGrow(ctx, in); err == nil {
 		t.Fatal("negative timeout accepted")
 	}
+}
+
+func TestSeedGrowCapabilityDoesNotRequireVerification(t *testing.T) {
+	svc, _ := newSeedService(t)
+	for _, capability := range svc.Capabilities() {
+		if capability.Name != CapSeedGrow {
+			continue
+		}
+		required, ok := capability.InputSchema["required"].([]string)
+		if !ok {
+			t.Fatalf("seed.grow required schema = %#v, want string list", capability.InputSchema["required"])
+		}
+		for _, field := range required {
+			if field == "verify" {
+				t.Fatal("seed.grow schema still requires verify")
+			}
+		}
+		return
+	}
+	t.Fatal("seed.grow capability not found")
 }
 
 func TestSeedGrowNotWired(t *testing.T) {
@@ -602,8 +622,8 @@ func TestGrowPreparedSeedCannotRaceOpeningPersistence(t *testing.T) {
 	if err != nil {
 		t.Fatalf("grow after open: %v", err)
 	}
-	if result.Status != SeedStatusSatisfied || ran.Load() != 1 {
-		t.Fatalf("after open: status=%q runs=%d, want satisfied/1", result.Status, ran.Load())
+	if result.Status != SeedStatusSettled || ran.Load() != 1 {
+		t.Fatalf("after open: status=%q runs=%d, want settled/1", result.Status, ran.Load())
 	}
 
 	if _, err := svc.GrowPreparedSeed(context.Background(), growth); err == nil {
@@ -679,7 +699,7 @@ func TestGrowPreparedSeedPreservesExecutionEvidenceOnFruitPublicationFailure(t *
 	if err == nil {
 		t.Fatal("publication failure was reported as success")
 	}
-	if result.Status != SeedStatusFruitPublicationFailed || result.Branch != "" || result.Commit != "" {
+	if result.Status != SeedStatusSettled || result.Branch != "" || result.Commit != "" {
 		t.Fatalf("returned publication failure result = %+v", result)
 	}
 	if result.Iterations != 3 || result.Diff != "the completed diff" || result.Logs != "the completed logs" {
@@ -688,7 +708,7 @@ func TestGrowPreparedSeedPreservesExecutionEvidenceOnFruitPublicationFailure(t *
 	if result.PublicationDiagnostic == nil || result.PublicationDiagnostic.Outcome != diagnostic.Outcome {
 		t.Fatalf("returned diagnostic = %+v", result.PublicationDiagnostic)
 	}
-	if settled.Status != SeedStatusFruitPublicationFailed || settled.Branch != "" || settled.Commit != "" {
+	if settled.Status != SeedStatusSettled || settled.Branch != "" || settled.Commit != "" {
 		t.Fatalf("settled publication failure = %+v", settled)
 	}
 	if settled.Iterations != 3 || settled.Diff != "the completed diff" || settled.Logs != "the completed logs" {

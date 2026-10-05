@@ -804,7 +804,7 @@ func TestPhytomerWatchDispatchToFruitIntegration(t *testing.T) {
 
 	close(release)
 	terminal := stream.nextObservation(t, 2*time.Second)
-	if terminal.Status != core.SeedStatusSatisfied || terminal.Branch != "tendril/seed-fruit" || terminal.Commit != "cafebabedeadbeef" {
+	if terminal.Status != core.SeedStatusSettled || terminal.Branch != "tendril/seed-fruit" || terminal.Commit != "cafebabedeadbeef" {
 		t.Fatalf("terminal watch = %+v", terminal)
 	}
 	if terminal.Handle != accepted.Handle || terminal.PhytomerID != accepted.PhytomerID {

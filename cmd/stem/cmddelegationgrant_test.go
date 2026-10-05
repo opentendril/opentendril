@@ -758,8 +758,8 @@ func TestFirstUseDelegationGrantHandoff(t *testing.T) {
 
 	close(release)
 	settled := waitForFirstUseSeedRun(t, store, accepted.Handle)
-	if settled.Status != core.SeedStatusSatisfied {
-		t.Fatalf("settled status = %q, want satisfied", settled.Status)
+	if settled.Status != core.SeedStatusSettled {
+		t.Fatalf("settled status = %q, want settled", settled.Status)
 	}
 	if settled.PhytomerID != accepted.PhytomerID || settled.Handle != accepted.Handle {
 		t.Fatalf("settled identities = %+v, dispatch = %+v", settled, accepted)

@@ -90,7 +90,7 @@ func TestReconcileServeSeedWorkBeforeMuxTerminalizesOrphans(t *testing.T) {
 	assertOrphan := func(phytomer, continuationID, wantState string) {
 		t.Helper()
 		seed, ok, err := store.GetSeedRunByPhytomer(ctx, phytomer)
-		if err != nil || !ok || seed.Status != core.SeedStatusWithered || seed.FinishedAt.IsZero() {
+		if err != nil || !ok || seed.Status != core.SeedStatusSettled || seed.FinishedAt.IsZero() {
 			t.Fatalf("%s seed = %+v ok=%v err=%v", phytomer, seed, ok, err)
 		}
 		if seed.Error != core.ErrSeedInterruptedByRestart.Error() {

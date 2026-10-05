@@ -124,8 +124,11 @@ func TestRunSeedSatisfiedOnFirstVerify(t *testing.T) {
 	if err != nil {
 		t.Fatalf("RunSeed: %v", err)
 	}
-	if res.Status != SeedStatusSatisfied {
-		t.Fatalf("status = %q, want satisfied. log:\n%s", res.Status, res.Logs)
+	if res.Status != SeedStatusSettled {
+		t.Fatalf("status = %q, want settled. log:\n%s", res.Status, res.Logs)
+	}
+	if res.ExecutionOutcome != core.SeedExecutionOutcomeCompleted || res.VerificationOutcome != core.SeedVerificationOutcomePassed {
+		t.Fatalf("outcomes = %q/%q, want completed/passed", res.ExecutionOutcome, res.VerificationOutcome)
 	}
 	if res.Iterations != 1 {
 		t.Fatalf("iterations = %d, want 1", res.Iterations)
@@ -163,8 +166,11 @@ func TestRunSeedExhaustedThreadsFeedback(t *testing.T) {
 	if err != nil {
 		t.Fatalf("RunSeed: %v", err)
 	}
-	if res.Status != SeedStatusExhausted {
-		t.Fatalf("status = %q, want exhausted", res.Status)
+	if res.Status != SeedStatusSettled {
+		t.Fatalf("status = %q, want settled", res.Status)
+	}
+	if res.ExecutionOutcome != core.SeedExecutionOutcomeBoundsExhausted || res.VerificationOutcome != core.SeedVerificationOutcomePredicateFailed {
+		t.Fatalf("outcomes = %q/%q, want bounds-exhausted/predicate-failed", res.ExecutionOutcome, res.VerificationOutcome)
 	}
 	if res.Iterations != 3 {
 		t.Fatalf("iterations = %d, want 3", res.Iterations)
@@ -199,22 +205,21 @@ func TestRunSeedSilentVerificationThreadsExitFeedback(t *testing.T) {
 	if err != nil {
 		t.Fatalf("RunSeed: %v", err)
 	}
-	if res.Status != SeedStatusExhausted {
-		t.Fatalf("status = %q, want exhausted", res.Status)
+	if res.Status != SeedStatusSettled {
+		t.Fatalf("status = %q, want settled", res.Status)
 	}
-	if len(prompts) != 2 {
-		t.Fatalf("build ran %d time(s), want 2", len(prompts))
+	if res.ExecutionOutcome != core.SeedExecutionOutcomeCompleted || res.VerificationOutcome != core.SeedVerificationOutcomeConfigurationInvalid {
+		t.Fatalf("outcomes = %q/%q, want completed/configuration-invalid", res.ExecutionOutcome, res.VerificationOutcome)
 	}
-	if !strings.Contains(prompts[1], "Verification failed: command exited 2.") {
-		t.Fatalf("silent verification failure was not fed back with its exit code: %q", prompts[1])
+	if len(prompts) != 1 {
+		t.Fatalf("build ran %d time(s), want 1 for a non-repairable exit", len(prompts))
 	}
-	if len(res.VerificationDiagnostics) != 2 {
-		t.Fatalf("verification diagnostics = %+v, want one per failed iteration", res.VerificationDiagnostics)
+	if len(res.VerificationDiagnostics) != 1 {
+		t.Fatalf("verification diagnostics = %+v, want one diagnostic", res.VerificationDiagnostics)
 	}
-	for _, diagnostic := range res.VerificationDiagnostics {
-		if diagnostic.Outcome != core.SeedVerificationOutcomePredicateFailed || diagnostic.ExitCode == nil || *diagnostic.ExitCode != 2 || diagnostic.TimedOut {
-			t.Fatalf("silent verification diagnostic = %+v, want predicate failure with exit 2", diagnostic)
-		}
+	diagnostic := res.VerificationDiagnostics[0]
+	if diagnostic.Outcome != core.SeedVerificationOutcomeConfigurationInvalid || diagnostic.ExitCode == nil || *diagnostic.ExitCode != 2 || diagnostic.TimedOut {
+		t.Fatalf("silent verification diagnostic = %+v, want configuration-invalid with exit 2", diagnostic)
 	}
 }
 
@@ -223,11 +228,8 @@ func TestSeedVerificationFeedbackTimeoutIsExplicitAndBounded(t *testing.T) {
 		Output:   strings.Repeat("timeout output ", seedVerifyFeedbackBound),
 		TimedOut: true,
 	})
-	if !strings.Contains(feedback, "Verification failed: command timed out.") {
-		t.Fatalf("timeout feedback omitted its deterministic diagnostic: %q", feedback)
-	}
-	if len(feedback) > seedVerifyFeedbackBound {
-		t.Fatalf("timeout feedback length = %d, want <= %d", len(feedback), seedVerifyFeedbackBound)
+	if feedback != "" {
+		t.Fatalf("timeout produced repair feedback: %q", feedback)
 	}
 
 	if got := seedVerificationFeedback(seedVerifyReport{Err: fmt.Errorf("private infrastructure detail")}); got != "" {
@@ -300,7 +302,7 @@ func TestRunSeedCandidateEvidenceFailurePreservesLifecycle(t *testing.T) {
 	if diffCalls != 1 {
 		t.Fatalf("candidate diff calls = %d, want one retry-evidence attempt", diffCalls)
 	}
-	if res.Status != SeedStatusExhausted || res.Iterations != 2 {
+	if res.Status != SeedStatusSettled || res.Iterations != 2 {
 		t.Fatalf("status/iterations = %q/%d, want exhausted/2", res.Status, res.Iterations)
 	}
 	if len(res.VerificationDiagnostics) != 2 {
@@ -331,7 +333,7 @@ func TestRunSeedWitheredOnBuildError(t *testing.T) {
 	if err != nil {
 		t.Fatalf("RunSeed: %v", err)
 	}
-	if res.Status != SeedStatusWithered {
+	if res.Status != SeedStatusSettled {
 		t.Fatalf("status = %q, want withered", res.Status)
 	}
 	if res.Iterations != 1 {
@@ -358,7 +360,7 @@ func TestRunSeedWitheredOnVerifyInfraError(t *testing.T) {
 	if err != nil {
 		t.Fatalf("RunSeed: %v", err)
 	}
-	if res.Status != SeedStatusWithered {
+	if res.Status != SeedStatusSettled {
 		t.Fatalf("status = %q, want withered", res.Status)
 	}
 }
@@ -380,7 +382,7 @@ func TestRunSeedExhaustedCandidateIsNotFruit(t *testing.T) {
 	if err != nil {
 		t.Fatalf("RunSeed: %v", err)
 	}
-	if res.Status != SeedStatusExhausted {
+	if res.Status != SeedStatusSettled {
 		t.Fatalf("status = %q, want exhausted; logs: %s", res.Status, res.Logs)
 	}
 	assertSeedCandidateIsNotFruit(t, res, repo, seedBranch)
@@ -409,7 +411,7 @@ func TestRunSeedWitheredCandidateIsNotFruit(t *testing.T) {
 	if err != nil {
 		t.Fatalf("RunSeed: %v", err)
 	}
-	if res.Status != SeedStatusWithered {
+	if res.Status != SeedStatusSettled {
 		t.Fatalf("status = %q, want withered", res.Status)
 	}
 	assertSeedCandidateIsNotFruit(t, res, repo, seedBranch)
@@ -482,7 +484,7 @@ func TestRunSeedSalvagesCheckpointedRecoverableSproutFailure(t *testing.T) {
 	if err != nil {
 		t.Fatalf("RunSeed: %v", err)
 	}
-	if res.Status != SeedStatusSatisfied {
+	if res.Status != SeedStatusSettled {
 		t.Fatalf("status = %q, want satisfied; logs:\n%s", res.Status, res.Logs)
 	}
 	if res.Iterations != 2 || buildCount != 2 || len(prompts) != 2 {
@@ -549,7 +551,7 @@ func TestRunSeedDoesNotSalvageRecoverableFailureWithoutCheckpoint(t *testing.T) 
 	if err != nil {
 		t.Fatalf("RunSeed: %v", err)
 	}
-	if res.Status != SeedStatusWithered {
+	if res.Status != SeedStatusSettled {
 		t.Fatalf("status = %q, want withered", res.Status)
 	}
 	if res.Iterations != 1 {
@@ -580,7 +582,7 @@ func TestRunSeedDoesNotSalvageJoinedTurnLimitFailure(t *testing.T) {
 	if err != nil {
 		t.Fatalf("RunSeed: %v", err)
 	}
-	if res.Status != SeedStatusWithered || res.Iterations != 1 {
+	if res.Status != SeedStatusSettled || res.Iterations != 1 {
 		t.Fatalf("status/iterations = %q/%d, want withered/1", res.Status, res.Iterations)
 	}
 	if verifyCalled {
@@ -727,7 +729,7 @@ func TestTwoSeedsUseDistinctPhytomers(t *testing.T) {
 	if err != nil {
 		t.Fatalf("second: %v", err)
 	}
-	if first.Status != SeedStatusSatisfied || second.Status != SeedStatusSatisfied {
+	if first.Status != SeedStatusSettled || second.Status != SeedStatusSettled {
 		t.Fatalf("statuses = %q / %q", first.Status, second.Status)
 	}
 }
@@ -940,7 +942,7 @@ func TestRunSeedManagedAPIFruit(t *testing.T) {
 	if err != nil {
 		t.Fatalf("RunSeed: %v", err)
 	}
-	if res.Status != SeedStatusSatisfied {
+	if res.Status != SeedStatusSettled {
 		t.Fatalf("status = %q, want satisfied, logs: %s", res.Status, res.Logs)
 	}
 	if res.Iterations != 2 {
@@ -1008,7 +1010,7 @@ func TestRunSeedExhaustedManagedAPIFruitIsNotPublished(t *testing.T) {
 	if err != nil {
 		t.Fatalf("RunSeed: %v", err)
 	}
-	if res.Status != SeedStatusExhausted {
+	if res.Status != SeedStatusSettled {
 		t.Fatalf("status = %q, want exhausted; logs: %s", res.Status, res.Logs)
 	}
 	if res.Branch != "" || res.Commit != "" {
@@ -1163,5 +1165,112 @@ func TestRunSeedPublicationPlanFailureReportsNoFruit(t *testing.T) {
 	}
 	if seedBranch == "" || !branchExists(t, repo, seedBranch) {
 		t.Fatalf("local Seed branch %q was not preserved", seedBranch)
+	}
+}
+
+func TestRunSeedNonCompletedNoVerifierCheckpointIsNotFruitOrPublished(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	managedRoot := t.TempDir()
+	t.Setenv("TENDRIL_MANAGED_CHECKOUT_ROOT", managedRoot)
+	chdirToTempDir(t)
+	restoreSeeds(t)
+
+	repo := newSeedRepo(t)
+	keyPath := writeSeedTestAppKey(t)
+	const substratePrefix = "seed-api-non-completed-"
+	var substrateConfig strings.Builder
+	substrateConfig.WriteString("substrates:\n")
+	for _, name := range []string{"sprout-failed", "infrastructure-failed"} {
+		fmt.Fprintf(&substrateConfig, "  %s%s:\n    url: %s\n    branch: main\n    checkout:\n      mode: managed\n    commit: api\n    auth:\n      method: app\n      appId: \"1234\"\n      privateKeyPath: %s\n", substratePrefix, name, repo, keyPath)
+	}
+	writeSubstratesYAML(t, filepath.Join(mustGetwd(), "substrates.yaml"), substrateConfig.String())
+
+	origMaterialize := materializeManagedCheckoutFn
+	t.Cleanup(func() { materializeManagedCheckoutFn = origMaterialize })
+	materializeManagedCheckoutFn = func(_ string, dest, url, _ string, _ ResolvedCredential, _ []string) error {
+		if err := os.MkdirAll(filepath.Dir(dest), 0o755); err != nil {
+			return err
+		}
+		if _, err := runGitCommand(context.Background(), filepath.Dir(dest), "clone", "-q", url, dest); err != nil {
+			return err
+		}
+		for _, args := range [][]string{
+			{"config", "user.email", "seed@example.com"},
+			{"config", "user.name", "Seed Tester"},
+		} {
+			if _, err := runGitCommand(context.Background(), dest, args...); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
+
+	fake := startAPIFruitFake(t, http.StatusCreated, "unexpected-fruit-commit")
+	cases := []struct {
+		name            string
+		failureCategory core.FailureCategory
+		wantOutcome     string
+	}{
+		{name: "sprout-failed", failureCategory: core.FailureCategoryExecutionFailed, wantOutcome: core.SeedExecutionOutcomeSproutFailed},
+		{name: "infrastructure-failed", failureCategory: core.FailureCategoryTerrariumRuntime, wantOutcome: core.SeedExecutionOutcomeInfrastructureFailed},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			substrate := substratePrefix + tc.name
+			dest := filepath.Join(managedRoot, substrate)
+			if err := materializeManagedCheckoutFn(substrate, dest, repo, "main", ResolvedCredential{}, nil); err != nil {
+				t.Fatalf("materialize test repo: %v", err)
+			}
+			var seedBranch string
+			providerErr := errors.New("non-recoverable Sprout failure")
+			seedBuildFn = func(ctx context.Context, orch *DockerOrchestrator, _ string) (SproutRunReport, error) {
+				seedBranch = orch.SubstrateBranch
+				if _, err := runGitCommand(ctx, dest, "checkout", "-b", seedBranch, orch.SeedStartRevision); err != nil {
+					return SproutRunReport{}, err
+				}
+				if err := os.WriteFile(filepath.Join(dest, "fruit.txt"), []byte("internal checkpoint\n"), 0o644); err != nil {
+					return SproutRunReport{}, err
+				}
+				for _, args := range [][]string{{"add", "fruit.txt"}, {"commit", "-m", "integrated Seed checkpoint"}, {"checkout", "main"}} {
+					if _, err := runGitCommand(ctx, dest, args...); err != nil {
+						return SproutRunReport{}, err
+					}
+				}
+				candidate, err := runGitCommand(ctx, dest, "rev-parse", seedBranch)
+				if err != nil {
+					return SproutRunReport{}, err
+				}
+				return SproutRunReport{
+					Outcome:             SproutOutcomeFailed,
+					FailureCategory:     string(tc.failureCategory),
+					RequestsMade:        true,
+					seedCandidateCommit: strings.TrimSpace(candidate),
+				}, providerErr
+			}
+			seedVerifyFn = func(context.Context, string, string, []string, []string) seedVerifyReport {
+				t.Fatal("no-verifier Seed invoked Stoma")
+				return seedVerifyReport{}
+			}
+
+			result, err := RunSeed(context.Background(), SeedExecution{
+				Substrate: substrate, Goal: "create a candidate", MaxIterations: 1, SessionID: "seed-" + tc.name,
+			})
+			if err != nil {
+				t.Fatalf("RunSeed: %v", err)
+			}
+			if result.Status != SeedStatusSettled || result.ExecutionOutcome != tc.wantOutcome || result.VerificationOutcome != core.SeedVerificationOutcomeNotRequested {
+				t.Fatalf("status/outcomes = %q/%q/%q, want settled/%s/not-requested", result.Status, result.ExecutionOutcome, result.VerificationOutcome, tc.wantOutcome)
+			}
+			assertSeedCandidateIsNotFruit(t, result, dest, seedBranch)
+			if result.Repository != "" || result.Workspace != "" || result.PublicationState != "" || !result.CreatedAt.IsZero() {
+				t.Fatalf("non-completed execution retained Fruit provenance: %+v", result)
+			}
+			if !strings.Contains(result.Logs, "non-recoverable Sprout failure") {
+				t.Fatalf("bounded execution evidence omitted the Sprout failure: %q", result.Logs)
+			}
+			if fake.installCalled != 0 || fake.tokenCalled != 0 || fake.createRefCalled != 0 || fake.graphQLCalled != 0 {
+				t.Fatalf("managed API publication was attempted: install=%d token=%d ref=%d graphql=%d", fake.installCalled, fake.tokenCalled, fake.createRefCalled, fake.graphQLCalled)
+			}
+		})
 	}
 }

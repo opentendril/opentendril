@@ -430,7 +430,7 @@ func TestSeedGoPreparationFailureWithersWithoutAnotherSprout(t *testing.T) {
 	if builds != 1 {
 		t.Fatalf("Sprout builds = %d, want 1", builds)
 	}
-	if res.Status != SeedStatusWithered {
+	if res.Status != SeedStatusSettled {
 		t.Fatalf("status = %q, want withered", res.Status)
 	}
 	if res.Branch != "" || res.Commit != "" {
@@ -497,7 +497,7 @@ func TestSeedGoOversizeModuleObjectWithersAsInfrastructureFailure(t *testing.T) 
 	if builds != 1 {
 		t.Fatalf("Sprout builds = %d, want 1", builds)
 	}
-	if res.Status != SeedStatusWithered {
+	if res.Status != SeedStatusSettled {
 		t.Fatalf("status = %q, want withered", res.Status)
 	}
 	if res.Branch != "" || res.Commit != "" {
@@ -554,7 +554,7 @@ func TestSeedGoPredicateFailureAfterSuccessfulPreparation(t *testing.T) {
 	if builds != 2 {
 		t.Fatalf("Sprout builds = %d, want 2 after a genuine predicate failure", builds)
 	}
-	if res.Status != SeedStatusExhausted {
+	if res.Status != SeedStatusSettled {
 		t.Fatalf("status = %q, want exhausted", res.Status)
 	}
 	if len(res.VerificationDiagnostics) != 2 {
@@ -839,7 +839,7 @@ func TestSeedGoWorkIsUnsupportedInfrastructure(t *testing.T) {
 	if builds != 1 {
 		t.Fatalf("Sprout builds = %d, want 1", builds)
 	}
-	if res.Status != SeedStatusWithered {
+	if res.Status != SeedStatusSettled {
 		t.Fatalf("status = %q, want withered", res.Status)
 	}
 	if res.Branch != "" || res.Commit != "" {

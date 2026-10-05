@@ -3,6 +3,8 @@ package main
 import (
 	"reflect"
 	"testing"
+
+	"github.com/opentendril/opentendril/cmd/stem/internal/core"
 )
 
 func TestExtractSeedAsyncFlag(t *testing.T) {
@@ -57,6 +59,37 @@ func TestParseSeedArgsPreservesIdempotencyKey(t *testing.T) {
 	}
 	if input["idempotencyKey"] != "caller-key" {
 		t.Fatalf("idempotencyKey = %#v, want exact caller key", input["idempotencyKey"])
+	}
+}
+
+func TestParseSeedArgsAllowsOmittedVerification(t *testing.T) {
+	command, _ := lookupSeedCommand("grow")
+	input, err := parseSeedArgs(command.capability, []string{"--substrate", "core", "--goal", "review candidate"})
+	if err != nil {
+		t.Fatalf("parseSeedArgs: %v", err)
+	}
+	if _, present := input["verify"]; present {
+		t.Fatalf("parser synthesized verifier: %#v", input["verify"])
+	}
+}
+
+func TestSeedCommandResultUsesExecutionAndVerificationFacts(t *testing.T) {
+	cases := []struct {
+		execution string
+		verify    string
+		want      bool
+	}{
+		{core.SeedExecutionOutcomeCompleted, core.SeedVerificationOutcomeNotRequested, true},
+		{core.SeedExecutionOutcomeCompleted, core.SeedVerificationOutcomePassed, true},
+		{core.SeedExecutionOutcomeCompleted, core.SeedVerificationOutcomePredicateFailed, false},
+		{core.SeedExecutionOutcomeCompleted, core.SeedVerificationOutcomeConfigurationInvalid, false},
+		{core.SeedExecutionOutcomeInfrastructureFailed, core.SeedVerificationOutcomeNotRequested, false},
+		{"", "", false},
+	}
+	for _, tc := range cases {
+		if got := seedCommandResultAcceptable(tc.execution, tc.verify); got != tc.want {
+			t.Errorf("acceptable(%q, %q) = %v, want %v", tc.execution, tc.verify, got, tc.want)
+		}
 	}
 }
 

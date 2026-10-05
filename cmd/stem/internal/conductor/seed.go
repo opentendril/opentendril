@@ -16,30 +16,31 @@ import (
 )
 
 // Growing a Seed: the bounded-task executor. A Seed is a bounded intent — a
-// goal, a verify predicate, and iteration/time bounds — and growing it means
-// converging on the goal until the predicate holds. It composes two sealed
-// execution paths already in the conductor, changing neither:
+// goal and iteration/time bounds, with an optional explicit verify predicate.
+// It composes the sealed builder path with an optional sealed verifier path:
 //
 //   - The builder is RunSprout with DisableMergeBack: an agentic Sprout builds
 //     toward the goal and commits onto a dedicated seed branch, never touching
 //     the host workspace (the work stays a branch for review — the Phloem).
-//   - The verdict is RunStoma (the stoma.pass executor): the verify command is
-//     run deterministically in a network-sealed Terrarium against the seed
-//     branch. Its exit code — never the Sprout's self-report — is the
-//     authoritative pass/fail. Trust the builder to try; verify the result.
+//   - When requested, RunStoma (the stoma.pass executor) runs the verifier
+//     deterministically in a network-sealed Terrarium against an immutable
+//     candidate. Exit 0 passes, exit 1 is a repairable predicate failure, other
+//     completed non-zero exits are configuration-invalid, and inability or
+//     timeout are non-repairable verification outcomes.
 //
 // Each iteration re-bases on the seed branch (RunSprout's shadow worktree is
 // created from SubstrateBranch), so a second attempt builds on the first and
-// the deterministic verify failure is fed back into the next prompt. A pure,
+// a deterministic predicate failure is fed back into the next prompt. A pure,
 // recoverable protocol failure may still leave an immutable checkpoint for the
-// verifier and next iteration; other Sprout failures wither the Seed.
+// verifier and next iteration; other Sprout failures stop cognitive execution.
 
-// Seed growth terminal statuses. The string values match core.SeedStatus* so
-// the adapter passes the verdict straight through without translation.
+// Seed growth lifecycle statuses. The string values match core.SeedStatus* so
+// the adapter passes them through without translation.
 const (
-	SeedStatusSatisfied = "satisfied"
-	SeedStatusExhausted = "exhausted"
-	SeedStatusWithered  = "withered"
+	SeedStatusSettled   = core.SeedStatusSettled
+	SeedStatusSatisfied = core.SeedStatusSatisfied // historical compatibility
+	SeedStatusExhausted = core.SeedStatusExhausted // historical compatibility
+	SeedStatusWithered  = core.SeedStatusWithered  // historical compatibility
 )
 
 // seedVerifyTimeout bounds a single deterministic verify run. The whole growth
@@ -116,6 +117,8 @@ type SeedContinuationBoundary struct {
 // SeedRunResult is the reviewable outcome of a grown Seed — the Fruit.
 type SeedRunResult struct {
 	Status                  string
+	ExecutionOutcome        string
+	VerificationOutcome     string
 	Iterations              int
 	Branch                  string
 	Commit                  string
@@ -184,17 +187,27 @@ func RunSeed(ctx context.Context, execution SeedExecution) (SeedRunResult, error
 	}
 
 	var logs strings.Builder
-	status := SeedStatusExhausted
+	status := SeedStatusSettled
 	iterations := 0
 	prompt := seedGoalPrompt(execution.Goal, execution.Verify, "")
 	var verificationDiagnostics []core.SeedVerificationDiagnostic
+	executionOutcome := ""
+	verificationOutcome := ""
+	if len(execution.Verify) == 0 {
+		verificationOutcome = core.SeedVerificationOutcomeNotRequested
+	}
 	candidateRevision := base
 	candidateEvidenceRevision := ""
 	candidateEvidence := ""
+	terminalError := error(nil)
+	fenceAcquired := execution.Continuation.AcquireSettlementFence == nil
 
 	for i := 0; i < maxIterations; i++ {
 		if ctx.Err() != nil {
 			fmt.Fprintf(&logs, "\n⏳ Timeout reached before iteration %d.\n", i+1)
+			if errors.Is(ctx.Err(), context.DeadlineExceeded) {
+				executionOutcome = core.SeedExecutionOutcomeTimedOut
+			}
 			break
 		}
 		iterations = i + 1
@@ -241,8 +254,18 @@ func RunSeed(ctx context.Context, execution SeedExecution) (SeedRunResult, error
 		candidateCommit := strings.TrimSpace(buildReport.seedCandidateCommit)
 		salvageableFailure := runErr != nil && isRecoverableSeedSproutFailure(runErr) && candidateCommit != ""
 		if runErr != nil && !salvageableFailure {
-			status = SeedStatusWithered
 			fmt.Fprintf(&logs, "sprout withered: %s\n", boundSeedEvidence(strings.TrimSpace(runErr.Error()), seedVerifyFeedbackBound))
+			executionOutcome = seedBuildExecutionOutcome(buildReport, runErr)
+			fenced, fenceErr := seedAcquireSettlementFence(ctx, execution)
+			if fenceErr != nil {
+				return SeedRunResult{}, fenceErr
+			}
+			fenceAcquired = fenced || execution.Continuation.AcquireSettlementFence == nil
+			if !fenceAcquired {
+				executionOutcome = core.SeedExecutionOutcomeBoundaryRefused
+				terminalError = core.ErrContinuationUndeliverable
+				fmt.Fprintln(&logs, terminalError.Error())
+			}
 			break
 		}
 		if runErr != nil {
@@ -255,59 +278,105 @@ func RunSeed(ctx context.Context, execution SeedExecution) (SeedRunResult, error
 		var candidateErr error
 		candidateRevision, candidateErr = seedCandidateRevision(ctx, sourcePath, currentStartRevision, candidateCommit)
 		if candidateErr != nil {
-			verifyReport := seedVerifyReport{Err: fmt.Errorf("resolve Seed verification candidate: %w", candidateErr)}
-			diagnostic := seedVerificationDiagnostic(iterations, verifyReport)
-			verificationDiagnostics = append(verificationDiagnostics, diagnostic)
-			status = SeedStatusWithered
-			fmt.Fprintf(&logs, "🔬 verify could not run: %v\n", verifyReport.Err)
+			executionOutcome = core.SeedExecutionOutcomeInfrastructureFailed
+			if len(execution.Verify) > 0 {
+				verifyReport := seedVerifyReport{Err: fmt.Errorf("resolve Seed verification candidate: %w", candidateErr)}
+				verificationDiagnostics = append(verificationDiagnostics, seedVerificationDiagnostic(iterations, verifyReport))
+				verificationOutcome = core.SeedVerificationOutcomeInfrastructureFailed
+			}
+			fmt.Fprintf(&logs, "candidate could not be materialized: %v\n", candidateErr)
+			fenced, fenceErr := seedAcquireSettlementFence(ctx, execution)
+			if fenceErr != nil {
+				return SeedRunResult{}, fenceErr
+			}
+			fenceAcquired = fenced || execution.Continuation.AcquireSettlementFence == nil
+			if !fenceAcquired {
+				executionOutcome = core.SeedExecutionOutcomeBoundaryRefused
+				terminalError = core.ErrContinuationUndeliverable
+			}
+			break
+		}
+		executionOutcome = core.SeedExecutionOutcomeCompleted
+
+		if len(execution.Verify) == 0 {
+			fmt.Fprintln(&logs, "🔬 verification not requested")
+			fenced, fenceErr := seedAcquireSettlementFence(ctx, execution)
+			if fenceErr != nil {
+				return SeedRunResult{}, fenceErr
+			}
+			fenceAcquired = fenced || execution.Continuation.AcquireSettlementFence == nil
+			if fenceAcquired {
+				break
+			}
+			if iterations < maxIterations && ctx.Err() == nil {
+				if candidateRevision != candidateEvidenceRevision {
+					candidateEvidence = seedCandidateDiffFn(ctx, sourcePath, base, candidateRevision)
+					candidateEvidenceRevision = candidateRevision
+				}
+				prompt = seedGoalPromptWithCandidateEvidence(execution.Goal, nil, "", candidateEvidence)
+				continue
+			}
+			executionOutcome = core.SeedExecutionOutcomeBoundaryRefused
+			terminalError = core.ErrContinuationUndeliverable
+			fmt.Fprintln(&logs, terminalError.Error())
 			break
 		}
 
 		verifyReport := seedVerifyFn(ctx, sourcePath, candidateRevision, execution.Verify, execution.Egress)
 		diagnostic := seedVerificationDiagnostic(iterations, verifyReport)
 		verificationDiagnostics = append(verificationDiagnostics, diagnostic)
-		if verifyReport.Err != nil || verifyReport.TimedOut {
-			status = SeedStatusWithered
-			if verifyReport.Err != nil {
-				fmt.Fprintf(&logs, "🔬 verify could not run: %v\n", verifyReport.Err)
-			} else {
-				fmt.Fprintln(&logs, "🔬 verify could not run: command timed out")
-			}
-			break
-		}
-		fmt.Fprintf(&logs, "🔬 verify %s\n%s\n", verifyVerdict(verifyReport.Passed), verifyReport.Output)
-		if verifyReport.Passed {
-			if execution.Continuation.AcquireSettlementFence != nil {
-				fenced, fenceErr := execution.Continuation.AcquireSettlementFence(seedBoundaryContext(ctx))
-				if fenceErr != nil {
-					return SeedRunResult{}, fenceErr
-				}
-				if fenced {
-					status = SeedStatusSatisfied
-					break
-				}
-				if iterations < maxIterations && ctx.Err() == nil {
-					if candidateRevision != candidateEvidenceRevision {
-						candidateEvidence = seedCandidateDiffFn(ctx, sourcePath, base, candidateRevision)
-						candidateEvidenceRevision = candidateRevision
-					}
-					prompt = seedGoalPromptWithCandidateEvidence(execution.Goal, execution.Verify, "", candidateEvidence)
-					continue
-				}
-				status = SeedStatusWithered
-				fmt.Fprintln(&logs, core.ErrContinuationUndeliverable.Error())
-				break
-			}
-			status = SeedStatusSatisfied
-			break
-		}
-		if iterations < maxIterations {
+		verificationOutcome = diagnostic.Outcome
+		fmt.Fprintf(&logs, "🔬 verify %s\n%s\n", diagnostic.Outcome, verifyReport.Output)
+		predicateFailed := diagnostic.Outcome == core.SeedVerificationOutcomePredicateFailed
+		if predicateFailed && iterations < maxIterations {
 			if candidateRevision != candidateEvidenceRevision {
 				candidateEvidence = seedCandidateDiffFn(ctx, sourcePath, base, candidateRevision)
 				candidateEvidenceRevision = candidateRevision
 			}
 			prompt = seedGoalPromptWithCandidateEvidence(execution.Goal, execution.Verify, seedVerificationFeedback(verifyReport), candidateEvidence)
+			continue
 		}
+		if predicateFailed {
+			executionOutcome = core.SeedExecutionOutcomeBoundsExhausted
+		}
+		fenced, fenceErr := seedAcquireSettlementFence(ctx, execution)
+		if fenceErr != nil {
+			return SeedRunResult{}, fenceErr
+		}
+		fenceAcquired = fenced || execution.Continuation.AcquireSettlementFence == nil
+		if fenceAcquired {
+			break
+		}
+		if diagnostic.Outcome == core.SeedVerificationOutcomePassed && iterations < maxIterations && ctx.Err() == nil {
+			if candidateRevision != candidateEvidenceRevision {
+				candidateEvidence = seedCandidateDiffFn(ctx, sourcePath, base, candidateRevision)
+				candidateEvidenceRevision = candidateRevision
+			}
+			feedback := ""
+			if predicateFailed {
+				feedback = seedVerificationFeedback(verifyReport)
+			}
+			prompt = seedGoalPromptWithCandidateEvidence(execution.Goal, execution.Verify, feedback, candidateEvidence)
+			continue
+		}
+		executionOutcome = core.SeedExecutionOutcomeBoundaryRefused
+		terminalError = core.ErrContinuationUndeliverable
+		fmt.Fprintln(&logs, terminalError.Error())
+		break
+	}
+	if !fenceAcquired && terminalError == nil && execution.Continuation.AcquireSettlementFence != nil {
+		fenced, fenceErr := seedAcquireSettlementFence(ctx, execution)
+		if fenceErr != nil {
+			return SeedRunResult{}, fenceErr
+		}
+		fenceAcquired = fenced
+		if !fenceAcquired {
+			executionOutcome = core.SeedExecutionOutcomeBoundaryRefused
+			terminalError = core.ErrContinuationUndeliverable
+		}
+	}
+	if executionOutcome == "" && errors.Is(ctx.Err(), context.DeadlineExceeded) {
+		executionOutcome = core.SeedExecutionOutcomeTimedOut
 	}
 
 	branch, diff, commit := seedFruitIdentity(ctx, sourcePath, seedBranch, base)
@@ -315,6 +384,8 @@ func RunSeed(ctx context.Context, execution SeedExecution) (SeedRunResult, error
 	result := func(fruitBranch, fruitCommit string) SeedRunResult {
 		return SeedRunResult{
 			Status:                  status,
+			ExecutionOutcome:        executionOutcome,
+			VerificationOutcome:     verificationOutcome,
 			Iterations:              iterations,
 			Branch:                  fruitBranch,
 			Commit:                  fruitCommit,
@@ -327,14 +398,21 @@ func RunSeed(ctx context.Context, execution SeedExecution) (SeedRunResult, error
 		}
 	}
 
-	if status != SeedStatusSatisfied {
-		unresolvedErr := seedUnresolvedContinuationError(seedBoundaryContext(ctx), execution, status)
+	if !fenceAcquired {
 		out := result("", "")
-		if unresolvedErr != nil {
-			out.Status = SeedStatusWithered
+		if terminalError != nil {
+			return out, terminalError
+		}
+		if unresolvedErr := seedUnresolvedContinuationError(seedBoundaryContext(ctx), execution, status); unresolvedErr != nil {
 			return out, unresolvedErr
 		}
 		return out, nil
+	}
+	if executionOutcome != core.SeedExecutionOutcomeCompleted {
+		return result("", ""), terminalError
+	}
+	if len(execution.Verify) > 0 && verificationOutcome != core.SeedVerificationOutcomePassed {
+		return result("", ""), terminalError
 	}
 
 	if commit != "" && commit != base {
@@ -570,11 +648,11 @@ func isRecoverableSeedSproutFailure(runErr error) bool {
 }
 
 // runSeedVerify runs the verify command deterministically against a throwaway
-// worktree of the exact candidate commit and reports whether it passed. The
-// worktree is rooted in the Stem-owned run-workspace boundary so the Docker
+// worktree of the exact candidate commit and reports its deterministic result.
+// The workspace is read-only and rooted in the Stem-owned run-workspace boundary so the Docker
 // daemon sees the same host path the Stem materialized. A non-nil error is an
-// infrastructure failure (the verdict could not be produced), distinct from a
-// clean non-zero exit (a normal failed verification the loop iterates on).
+// infrastructure failure (the verdict could not be produced), distinct from
+// command exits. Only exit 1 is repairable.
 func runSeedVerify(ctx context.Context, sourcePath, candidateCommit string, verify, egress []string) seedVerifyReport {
 	worktree, err := createSeedVerificationWorktree(ctx, sourcePath, candidateCommit)
 	if err != nil {
@@ -582,10 +660,11 @@ func runSeedVerify(ctx context.Context, sourcePath, candidateCommit string, veri
 	}
 
 	execution := StomaExecution{
-		Workspace: worktree,
-		Command:   verify,
-		Egress:    egress,
-		Timeout:   seedVerifyTimeout,
+		Workspace:         worktree,
+		Command:           verify,
+		Egress:            egress,
+		Timeout:           seedVerifyTimeout,
+		ReadOnlyWorkspace: true,
 	}
 	if err := configureSeedGoVerification(worktree, verify, &execution); err != nil {
 		cleanupErr := removeSeedVerificationWorktree(ctx, sourcePath, worktree)
@@ -603,6 +682,11 @@ func runSeedVerify(ctx context.Context, sourcePath, candidateCommit string, veri
 	}
 
 	result, err := RunStoma(ctx, execution)
+	if result.TimedOut || errors.Is(err, context.DeadlineExceeded) || errors.Is(ctx.Err(), context.DeadlineExceeded) {
+		cleanupErr := removeSeedVerificationWorktree(ctx, sourcePath, worktree)
+		output := strings.TrimSpace(strings.TrimSpace(result.Stdout) + "\n" + strings.TrimSpace(result.Stderr))
+		return seedVerifyReport{Output: output, TimedOut: true, Err: cleanupErr}
+	}
 	if err == nil && execution.SkipHostModuleCache {
 		err = metadata.assertUnchanged(worktree)
 	}
@@ -630,17 +714,33 @@ func seedVerificationDiagnostic(iteration int, report seedVerifyReport) core.See
 		ExitCode:  report.ExitCode,
 	}
 	switch {
+	case report.TimedOut:
+		diagnostic.Outcome = core.SeedVerificationOutcomeTimedOut
+		diagnostic.Message = boundSeedVerifyDiagnostic("verify command timed out")
 	case report.Err != nil:
 		diagnostic.Outcome = core.SeedVerificationOutcomeInfrastructureFailed
 		diagnostic.Message = boundSeedVerifyDiagnostic("verify infrastructure could not execute")
-	case report.TimedOut:
-		diagnostic.Outcome = core.SeedVerificationOutcomeInfrastructureFailed
-		diagnostic.Message = boundSeedVerifyDiagnostic("verify command timed out")
-	case report.Passed:
-		diagnostic.Outcome = core.SeedVerificationOutcomePassed
+	case report.ExitCode != nil:
+		switch {
+		case *report.ExitCode == 0:
+			diagnostic.Outcome = core.SeedVerificationOutcomePassed
+		case *report.ExitCode == 1:
+			diagnostic.Outcome = core.SeedVerificationOutcomePredicateFailed
+			diagnostic.Message = boundSeedVerifyDiagnostic("verify command exited 1")
+		default:
+			diagnostic.Outcome = core.SeedVerificationOutcomeConfigurationInvalid
+			diagnostic.Message = boundSeedVerifyDiagnostic("verify command returned a non-predicate exit")
+		}
 	default:
-		diagnostic.Outcome = core.SeedVerificationOutcomePredicateFailed
-		diagnostic.Message = boundSeedVerifyDiagnostic("verify " + seedVerificationFailureFact(report))
+		// The production Stoma runner always records an exit code for a
+		// completed command. The injected seam may provide only its already
+		// deterministic pass bit; infrastructure failures use Err above.
+		if report.Passed {
+			diagnostic.Outcome = core.SeedVerificationOutcomePassed
+		} else {
+			diagnostic.Outcome = core.SeedVerificationOutcomePredicateFailed
+			diagnostic.Message = boundSeedVerifyDiagnostic("verify command did not pass")
+		}
 	}
 	return diagnostic
 }
@@ -670,11 +770,11 @@ const seedCandidateDiffHeading = "Current candidate diff against the Seed base:"
 const seedEvidenceTruncatedSuffix = "\n…(truncated)"
 
 // seedVerificationFeedback is the single bounded feedback path from a
-// deterministic verifier to the next Sprout prompt. Infrastructure failures
-// are intentionally excluded: they wither the Seed rather than becoming a
-// retry instruction.
+// deterministic verifier to the next Sprout prompt. Only predicate failures
+// are repairable; configuration, infrastructure, and timeout outcomes stop
+// verification-driven convergence.
 func seedVerificationFeedback(report seedVerifyReport) string {
-	if report.Passed || report.Err != nil {
+	if seedVerificationDiagnostic(0, report).Outcome != core.SeedVerificationOutcomePredicateFailed {
 		return ""
 	}
 
@@ -699,7 +799,7 @@ func boundSeedVerifyFeedback(message string) string {
 // immutable identities established by the Seed lifecycle, so this describes
 // base -> current candidate rather than only the latest iteration delta.
 // Auxiliary evidence is best-effort: a Git failure must not replace the
-// authoritative verifier verdict or wither the Seed.
+// authoritative verifier verdict or change the execution outcome.
 func seedCandidateDiff(ctx context.Context, sourcePath, baseRevision, candidateRevision string) string {
 	baseRevision = strings.TrimSpace(baseRevision)
 	candidateRevision = strings.TrimSpace(candidateRevision)
@@ -788,9 +888,13 @@ func seedGoalPrompt(goal string, verify []string, priorFailure string) string {
 
 func seedGoalPromptWithCandidateEvidence(goal string, verify []string, priorFailure, candidateDiff string) string {
 	var b strings.Builder
-	verifyJSON, _ := json.Marshal(verify)
-	fmt.Fprintf(&b, "%s\n\nDeterministic verification configured by the Stem:\n%s\n\nThe Stem will run this after your changes. Do not execute it merely to satisfy the Seed protocol.",
-		strings.TrimSpace(goal), verifyJSON)
+	if len(verify) == 0 {
+		fmt.Fprintf(&b, "%s\n\nNo deterministic verification command was requested. Do not claim that the Stem verified the objective.", strings.TrimSpace(goal))
+	} else {
+		verifyJSON, _ := json.Marshal(verify)
+		fmt.Fprintf(&b, "%s\n\nDeterministic verification configured by the Stem:\n%s\n\nThe Stem will run this after your changes. Do not execute it merely to satisfy the Seed protocol.",
+			strings.TrimSpace(goal), verifyJSON)
+	}
 	if fail := strings.TrimSpace(priorFailure); fail != "" {
 		fail = boundSeedVerifyFeedback(fail)
 		fmt.Fprintf(&b, "\n\nA previous attempt did not pass. The verification command failed with:\n%s\n\nFind and fix the cause, then make it pass.", fail)
@@ -806,4 +910,25 @@ func verifyVerdict(passed bool) string {
 		return "PASSED"
 	}
 	return "FAILED"
+}
+
+func seedAcquireSettlementFence(ctx context.Context, execution SeedExecution) (bool, error) {
+	if execution.Continuation.AcquireSettlementFence == nil {
+		return true, nil
+	}
+	return execution.Continuation.AcquireSettlementFence(seedBoundaryContext(ctx))
+}
+
+func seedBuildExecutionOutcome(report SproutRunReport, runErr error) string {
+	if errors.Is(runErr, context.DeadlineExceeded) || report.Outcome == SproutOutcomeTimedOut {
+		return core.SeedExecutionOutcomeTimedOut
+	}
+	switch core.FailureCategory(report.FailureCategory) {
+	case core.FailureCategoryExecutionFailed, core.FailureCategoryNoEngagement:
+		return core.SeedExecutionOutcomeSproutFailed
+	case core.FailureCategoryTerrariumRuntime, core.FailureCategoryProviderAuthRejected, core.FailureCategoryProviderRequestRejected:
+		return core.SeedExecutionOutcomeInfrastructureFailed
+	default:
+		return core.SeedExecutionOutcomeInfrastructureFailed
+	}
 }

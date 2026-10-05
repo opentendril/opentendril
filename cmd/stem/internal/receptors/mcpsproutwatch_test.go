@@ -370,7 +370,7 @@ func TestMCPSeedGrowContinueWatchSamePhytomer(t *testing.T) {
 	if isError {
 		t.Fatalf("terminal watch: %s", terminal)
 	}
-	if !strings.Contains(terminal, `"status": "satisfied"`) && !strings.Contains(terminal, `"status":"satisfied"`) {
+	if !strings.Contains(terminal, `"status": "settled"`) && !strings.Contains(terminal, `"status":"settled"`) {
 		t.Fatalf("terminal status missing: %s", terminal)
 	}
 	if !strings.Contains(terminal, "abc123def456") {

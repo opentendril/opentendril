@@ -193,13 +193,26 @@ func TestLocalEmptyPollenSeedTargetLifecycle(t *testing.T) {
 		t.Fatalf("fence empty-pollen target: fenced=%v err=%v", fenced, err)
 	}
 	if err := store.CompleteSeedSettlement(ctx, target, SeedRun{
-		Status: seedStatusSatisfied, Iterations: 1, Diff: "diff",
+		Status: seedStatusSettled, Iterations: 1, Diff: "diff",
 	}); err != nil {
 		t.Fatalf("complete empty-pollen settlement: %v", err)
 	}
 	seed, ok, err := store.GetSeedRunByPhytomer(ctx, "tendril-local")
-	if err != nil || !ok || seed.Status != seedStatusSatisfied || seed.Pollen != "" {
+	if err != nil || !ok || seed.Status != seedStatusSettled || seed.Pollen != "" {
 		t.Fatalf("settled local seed = %+v ok=%v err=%v", seed, ok, err)
+	}
+}
+
+func TestSettledAndHistoricalSeedStatusesRemainTerminal(t *testing.T) {
+	for _, status := range []string{seedStatusSettled, seedStatusSatisfied, seedStatusExhausted, seedStatusWithered, seedStatusFruitPublicationFailed} {
+		if !seedStatusIsTerminal(status) {
+			t.Errorf("status %q is not terminal", status)
+		}
+	}
+	for _, status := range []string{"", "running", "settling", "unknown"} {
+		if seedStatusIsTerminal(status) {
+			t.Errorf("status %q unexpectedly terminal", status)
+		}
 	}
 }
 
@@ -230,7 +243,7 @@ func TestEmptyPollenContinuationClaimDeliveryAndFence(t *testing.T) {
 	if err != nil || !fenced {
 		t.Fatalf("fence after empty-pollen delivery: fenced=%v err=%v", fenced, err)
 	}
-	if err := store.CompleteSeedSettlement(ctx, target, SeedRun{Status: seedStatusSatisfied, Iterations: 1}); err != nil {
+	if err := store.CompleteSeedSettlement(ctx, target, SeedRun{Status: seedStatusSettled, Iterations: 1}); err != nil {
 		t.Fatalf("complete: %v", err)
 	}
 }
@@ -391,7 +404,7 @@ func TestCompleteSeedSettlementRequiresSettlingAndNoUnresolved(t *testing.T) {
 	mustRecordRunningSeed(t, store, "seed-1", "tendril-1", "claude", "myrepo")
 	target := SeedTarget{PhytomerID: "tendril-1", Handle: "seed-1", Pollen: "claude", Substrate: "myrepo"}
 
-	err := store.CompleteSeedSettlement(ctx, target, SeedRun{Status: seedStatusSatisfied, Iterations: 1})
+	err := store.CompleteSeedSettlement(ctx, target, SeedRun{Status: seedStatusSettled, Iterations: 1})
 	if !errors.Is(err, ErrSeedSettlementNotFenced) {
 		t.Fatalf("complete while running: %v", err)
 	}
@@ -405,7 +418,7 @@ func TestCompleteSeedSettlementRequiresSettlingAndNoUnresolved(t *testing.T) {
 	if _, err := store.db.ExecContext(ctx, `UPDATE seedruns SET status = ? WHERE handle = ?`, seedStatusSettling, "seed-1"); err != nil {
 		t.Fatalf("force settling: %v", err)
 	}
-	err = store.CompleteSeedSettlement(ctx, target, SeedRun{Status: seedStatusSatisfied, Iterations: 1, Diff: "diff"})
+	err = store.CompleteSeedSettlement(ctx, target, SeedRun{Status: seedStatusSettled, Iterations: 1, Diff: "diff"})
 	if !errors.Is(err, ErrSeedSettlementNotFenced) {
 		t.Fatalf("complete with unresolved: %v", err)
 	}
@@ -421,14 +434,14 @@ func TestCompleteSeedSettlementRequiresSettlingAndNoUnresolved(t *testing.T) {
 	}
 	fruitCreatedAt := time.Date(2026, time.January, 2, 3, 4, 5, 987654321, time.FixedZone("UTC+2", 2*60*60))
 	if err := store.CompleteSeedSettlement(ctx, target2, SeedRun{
-		Status: seedStatusSatisfied, Iterations: 2, Branch: "tendril/seed", Commit: "abc", Diff: "the diff", Logs: "logs",
+		Status: seedStatusSettled, Iterations: 2, Branch: "tendril/seed", Commit: "abc", Diff: "the diff", Logs: "logs",
 		FruitRepository: "opentendril/opentendril", FruitWorkspace: "/private/stem-workspaces/seed-2",
 		FruitPublicationState: FruitPublicationPublished, FruitCreatedAt: fruitCreatedAt,
 	}); err != nil {
 		t.Fatalf("complete: %v", err)
 	}
 	seed, ok, err := store.GetSeedRunByPhytomer(ctx, "tendril-2")
-	if err != nil || !ok || seed.Status != seedStatusSatisfied || seed.Commit != "abc" || seed.Branch != "tendril/seed" || seed.FinishedAt.IsZero() {
+	if err != nil || !ok || seed.Status != seedStatusSettled || seed.Commit != "abc" || seed.Branch != "tendril/seed" || seed.FinishedAt.IsZero() {
 		t.Fatalf("settled = %+v ok=%v err=%v", seed, ok, err)
 	}
 	if seed.FruitRepository != "opentendril/opentendril" {
@@ -487,7 +500,7 @@ func TestAccountSeedTerminalFailureFailsUnresolvedAtomically(t *testing.T) {
 		t.Fatalf("unresolved failed = %d, want 1", account.UnresolvedFailed)
 	}
 	seed, ok, err := store.GetSeedRunByPhytomer(ctx, "tendril-1")
-	if err != nil || !ok || seed.Status != seedStatusWithered || seed.Error != continuationUndeliverableError {
+	if err != nil || !ok || seed.Status != seedStatusSettled || seed.Error != continuationUndeliverableError {
 		t.Fatalf("seed after undelivered accounting = %+v ok=%v err=%v", seed, ok, err)
 	}
 	if seed.ExecutionOutcome != "boundary-refused" || seed.VerificationOutcome != "predicate-failed" ||
@@ -571,7 +584,7 @@ func TestReconcileOrphanedSeedWorkIsAtomicAndIdempotent(t *testing.T) {
 	assertReconciledOrphan := func(phytomerID, continuationID, wantContinuationState string) {
 		t.Helper()
 		seed, ok, err := store.GetSeedRunByPhytomer(ctx, phytomerID)
-		if err != nil || !ok || seed.Status != seedStatusWithered || seed.FinishedAt.IsZero() || seed.Error != seedRestartInterruptedError {
+		if err != nil || !ok || seed.Status != seedStatusSettled || seed.FinishedAt.IsZero() || seed.Error != seedRestartInterruptedError {
 			t.Fatalf("%s seed = %+v ok=%v err=%v", phytomerID, seed, ok, err)
 		}
 		rec, ok, err := store.GetContinuation(ctx, continuationID)
@@ -599,7 +612,7 @@ func TestReconcileOrphanedSeedWorkIsAtomicAndIdempotent(t *testing.T) {
 		t.Fatalf("idempotent reconcile: %v", err)
 	}
 	seed, ok, err := store.GetSeedRunByPhytomer(ctx, "tendril-running-delivered")
-	if err != nil || !ok || seed.Status != seedStatusWithered {
+	if err != nil || !ok || seed.Status != seedStatusSettled {
 		t.Fatalf("idempotent seed = %+v ok=%v err=%v", seed, ok, err)
 	}
 	gotDelivered, ok, err := store.GetContinuation(ctx, delivered.ContinuationID)

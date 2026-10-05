@@ -524,7 +524,7 @@ func TestObservePhytomerNotFoundAndNotWired(t *testing.T) {
 }
 
 func TestSeedStatusIsTerminal(t *testing.T) {
-	for _, status := range []string{core.SeedStatusSatisfied, core.SeedStatusExhausted, core.SeedStatusWithered, core.SeedStatusFruitPublicationFailed} {
+	for _, status := range []string{core.SeedStatusSettled, core.SeedStatusSatisfied, core.SeedStatusExhausted, core.SeedStatusWithered, core.SeedStatusFruitPublicationFailed} {
 		if !core.SeedStatusIsTerminal(status) {
 			t.Fatalf("%q should be terminal", status)
 		}

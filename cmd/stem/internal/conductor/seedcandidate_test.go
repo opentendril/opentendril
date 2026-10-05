@@ -21,7 +21,7 @@ import (
 	"github.com/opentendril/opentendril/roots/llm"
 )
 
-const round16HelloVerify = "printf 'Hello from OpenTendril.\\n' | cmp -s - HELLO.md"
+const round16HelloVerify = "test -f HELLO.md && printf 'Hello from OpenTendril.\\n' | cmp -s - HELLO.md"
 
 func round16HelloVerifyArgv() []string {
 	return []string{"sh", "-c", round16HelloVerify}
@@ -320,7 +320,7 @@ func TestRound19SeedRetryCarriesCandidateEvidenceAndRejectsProviderProse(t *test
 	if err != nil {
 		t.Fatalf("RunSeed: %v", err)
 	}
-	if res.Status != SeedStatusWithered {
+	if res.Status != SeedStatusSettled {
 		t.Fatalf("status = %q, want withered after the bounded provider correction failure", res.Status)
 	}
 	if res.Iterations != 2 || len(prompts) != 2 {
@@ -378,8 +378,11 @@ func TestRunSeedNoChangeVerifiesBaseCandidate(t *testing.T) {
 	if err != nil {
 		t.Fatalf("RunSeed: %v", err)
 	}
-	if res.Status != SeedStatusExhausted {
-		t.Fatalf("status = %q, want exhausted after a normal predicate failure", res.Status)
+	if res.Status != SeedStatusSettled {
+		t.Fatalf("status = %q, want settled after a normal predicate failure", res.Status)
+	}
+	if res.ExecutionOutcome != core.SeedExecutionOutcomeBoundsExhausted || res.VerificationOutcome != core.SeedVerificationOutcomePredicateFailed {
+		t.Fatalf("outcomes = %q/%q, want bounds-exhausted/predicate-failed", res.ExecutionOutcome, res.VerificationOutcome)
 	}
 	if res.Branch != "" {
 		t.Fatalf("no-change Seed created a review branch %q", res.Branch)
@@ -394,8 +397,8 @@ func TestRunSeedNoChangeVerifiesBaseCandidate(t *testing.T) {
 	if diagnostic.Outcome != core.SeedVerificationOutcomePredicateFailed {
 		t.Fatalf("verification outcome = %q, want predicate-failed", diagnostic.Outcome)
 	}
-	if diagnostic.ExitCode == nil || *diagnostic.ExitCode != 2 {
-		t.Fatalf("verification exit = %v, want 2 for a missing HELLO.md", diagnostic.ExitCode)
+	if diagnostic.ExitCode == nil || *diagnostic.ExitCode != 1 {
+		t.Fatalf("verification exit = %v, want predicate exit 1 for a missing HELLO.md", diagnostic.ExitCode)
 	}
 }
 
@@ -418,7 +421,7 @@ func TestRunSeedInvalidCheckpointIsInfrastructureFailure(t *testing.T) {
 	if err != nil {
 		t.Fatalf("RunSeed: %v", err)
 	}
-	if res.Status != SeedStatusWithered {
+	if res.Status != SeedStatusSettled {
 		t.Fatalf("status = %q, want withered", res.Status)
 	}
 	if verified {
@@ -478,7 +481,7 @@ func TestRunSeedNoChangeVerifiesAccumulatedCandidate(t *testing.T) {
 	if err != nil {
 		t.Fatalf("RunSeed: %v", err)
 	}
-	if res.Status != SeedStatusExhausted {
+	if res.Status != SeedStatusSettled {
 		t.Fatalf("status = %q, want exhausted", res.Status)
 	}
 	if len(verifiedCandidates) != 2 {
@@ -527,11 +530,139 @@ func TestRunSeedNoChangeCanSatisfyStartingCandidate(t *testing.T) {
 	if err != nil {
 		t.Fatalf("RunSeed: %v", err)
 	}
-	if res.Status != SeedStatusSatisfied {
+	if res.Status != SeedStatusSettled {
 		t.Fatalf("status = %q, want satisfied", res.Status)
 	}
 	if len(res.VerificationDiagnostics) != 1 || res.VerificationDiagnostics[0].Outcome != core.SeedVerificationOutcomePassed {
 		t.Fatalf("verification diagnostics = %+v, want one passed diagnostic", res.VerificationDiagnostics)
+	}
+}
+
+func TestRunSeedWithoutVerificationSettlesOnceAndReturnsReviewableFruit(t *testing.T) {
+	restoreSeeds(t)
+	repo := newSeedRepo(t)
+	builds, verifies := 0, 0
+	seedBuildFn = func(ctx context.Context, orch *DockerOrchestrator, _ string) (SproutRunReport, error) {
+		builds++
+		if _, err := runGitCommand(ctx, repo, "branch", orch.SubstrateBranch, "HEAD"); err != nil {
+			return SproutRunReport{}, err
+		}
+		if _, err := runGitCommand(ctx, repo, "checkout", orch.SubstrateBranch); err != nil {
+			return SproutRunReport{}, err
+		}
+		if err := os.WriteFile(filepath.Join(repo, "candidate.txt"), []byte("review me\n"), 0o644); err != nil {
+			return SproutRunReport{}, err
+		}
+		if _, err := runGitCommand(ctx, repo, "add", "candidate.txt"); err != nil {
+			return SproutRunReport{}, err
+		}
+		if _, err := runGitCommand(ctx, repo, "commit", "-m", "candidate"); err != nil {
+			return SproutRunReport{}, err
+		}
+		commit, err := runGitCommand(ctx, repo, "rev-parse", "HEAD")
+		if err != nil {
+			return SproutRunReport{}, err
+		}
+		return SproutRunReport{Outcome: SproutOutcomeComplete, seedCandidateCommit: strings.TrimSpace(commit), RequestsMade: true}, nil
+	}
+	seedVerifyFn = func(context.Context, string, string, []string, []string) seedVerifyReport {
+		verifies++
+		t.Fatal("no-verifier Seed invoked Stoma")
+		return seedVerifyReport{}
+	}
+
+	result, err := RunSeed(context.Background(), SeedExecution{
+		Substrate: repo, Goal: "create a reviewable candidate", MaxIterations: 3, SessionID: "seed-no-verifier",
+	})
+	if err != nil {
+		t.Fatalf("RunSeed: %v", err)
+	}
+	if builds != 1 || verifies != 0 {
+		t.Fatalf("build/verify calls = %d/%d, want 1/0", builds, verifies)
+	}
+	if result.Status != SeedStatusSettled || result.ExecutionOutcome != core.SeedExecutionOutcomeCompleted || result.VerificationOutcome != core.SeedVerificationOutcomeNotRequested {
+		t.Fatalf("outcomes = %q/%q/%q", result.Status, result.ExecutionOutcome, result.VerificationOutcome)
+	}
+	if result.Branch == "" || result.Commit == "" || result.Diff == "" || result.Repository == "" || result.Workspace == "" || result.PublicationState == "" || result.CreatedAt.IsZero() {
+		t.Fatalf("reviewable Fruit provenance incomplete: %+v", result)
+	}
+}
+
+func TestRunSeedWithoutVerificationRepeatsOnlyForAcceptedContinuation(t *testing.T) {
+	restoreSeeds(t)
+	repo := newSeedRepo(t)
+	builds, verifies, fences := 0, 0, 0
+	seedBuildFn = func(ctx context.Context, orch *DockerOrchestrator, _ string) (SproutRunReport, error) {
+		builds++
+		if !localBranchExists(orch.Substrate, orch.SubstrateBranch) {
+			if _, err := runGitCommand(ctx, orch.Substrate, "branch", orch.SubstrateBranch, "HEAD"); err != nil {
+				return SproutRunReport{}, err
+			}
+		}
+		return SproutRunReport{Outcome: SproutOutcomeComplete, RequestsMade: true}, nil
+	}
+	seedVerifyFn = func(context.Context, string, string, []string, []string) seedVerifyReport {
+		verifies++
+		t.Fatal("no-verifier Seed invoked Stoma")
+		return seedVerifyReport{}
+	}
+	result, err := RunSeed(context.Background(), SeedExecution{
+		Substrate: repo, Goal: "continue accepted intent", MaxIterations: 3, SessionID: "seed-no-verifier-continuation",
+		Continuation: SeedContinuationBoundary{
+			AcquireSettlementFence: func(context.Context) (bool, error) {
+				fences++
+				return fences > 1, nil
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("RunSeed: %v", err)
+	}
+	if builds != 2 || verifies != 0 || fences != 2 {
+		t.Fatalf("build/verify/fence calls = %d/%d/%d, want 2/0/2", builds, verifies, fences)
+	}
+	if result.Status != SeedStatusSettled || result.VerificationOutcome != core.SeedVerificationOutcomeNotRequested {
+		t.Fatalf("result = %+v", result)
+	}
+}
+
+func TestSeedVerificationMountIsReadOnlyForAllLanguages(t *testing.T) {
+	restoreSeeds(t)
+	repo := newSeedRepo(t)
+	if err := os.WriteFile(filepath.Join(repo, "go.mod"), []byte("module example.test/candidate\n\ngo 1.22\n"), 0o644); err != nil {
+		t.Fatalf("write go.mod: %v", err)
+	}
+	if _, err := runGitCommand(context.Background(), repo, "add", "go.mod"); err != nil {
+		t.Fatalf("git add: %v", err)
+	}
+	if _, err := runGitCommand(context.Background(), repo, "commit", "-m", "add go module"); err != nil {
+		t.Fatalf("git commit: %v", err)
+	}
+	candidate, err := runGitCommand(context.Background(), repo, "rev-parse", "HEAD")
+	if err != nil {
+		t.Fatalf("candidate: %v", err)
+	}
+	original := runStomaCommandFn
+	t.Cleanup(func() { runStomaCommandFn = original })
+	var executions []StomaExecution
+	runStomaCommandFn = func(_ context.Context, execution StomaExecution, _ []terrarium.FilePayload, _ time.Duration) (StomaResult, error) {
+		executions = append(executions, execution)
+		return StomaResult{ExitCode: 0}, nil
+	}
+	for _, command := range [][]string{{"go", "test", "./..."}, {"python", "-m", "pytest"}} {
+		report := runSeedVerify(context.Background(), repo, strings.TrimSpace(candidate), command, nil)
+		if report.Err != nil || !report.Passed {
+			t.Fatalf("runSeedVerify(%v) = %+v", command, report)
+		}
+	}
+	if len(executions) != 2 {
+		t.Fatalf("Stoma executions = %d, want 2", len(executions))
+	}
+	for _, execution := range executions {
+		mounts := stomaBindMounts(execution)
+		if !execution.ReadOnlyWorkspace || len(mounts) == 0 || !mounts[0].ReadOnly {
+			t.Fatalf("command %v verification mounts = %+v, want immutable candidate", execution.Command, mounts)
+		}
 	}
 }
 
@@ -648,8 +779,8 @@ func TestRound16HelloPredicateFailsWhenMissingOrWrong(t *testing.T) {
 	if missing.Passed {
 		t.Fatal("missing HELLO.md was reported as passing")
 	}
-	if missing.ExitCode == nil || *missing.ExitCode != 2 {
-		t.Fatalf("missing HELLO.md exit = %v, want 2 (cmp could not open the file)", missing.ExitCode)
+	if missing.ExitCode == nil || *missing.ExitCode != 1 {
+		t.Fatalf("missing HELLO.md exit = %v, want predicate exit 1", missing.ExitCode)
 	}
 
 	if _, err := runGitCommand(ctx, repo, "checkout", seedBranch); err != nil {
@@ -734,7 +865,7 @@ func TestRound16HelloPredicateThroughRealTerrarium(t *testing.T) {
 		{name: "exact content", content: "Hello from OpenTendril.\n", write: true, want: 0},
 		{name: "no trailing newline", content: "Hello from OpenTendril.", write: true, want: 1},
 		{name: "wrong contents", content: "wrong\n", write: true, want: 1},
-		{name: "missing file", want: 2},
+		{name: "missing file", want: 1},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -1075,6 +1206,9 @@ func TestSeedVerificationDiagnosticsDistinguishOutcomes(t *testing.T) {
 	if failed.VerificationDiagnostics[0].TimedOut {
 		t.Fatal("predicate failure was marked timed out")
 	}
+	if failed.ExecutionOutcome != core.SeedExecutionOutcomeBoundsExhausted || failed.VerificationOutcome != core.SeedVerificationOutcomePredicateFailed {
+		t.Fatalf("predicate outcomes = %q/%q, want bounds-exhausted/predicate-failed", failed.ExecutionOutcome, failed.VerificationOutcome)
+	}
 
 	seedVerifyFn = func(context.Context, string, string, []string, []string) seedVerifyReport {
 		return seedVerifyReport{TimedOut: true, Passed: false}
@@ -1086,11 +1220,14 @@ func TestSeedVerificationDiagnosticsDistinguishOutcomes(t *testing.T) {
 	if err != nil {
 		t.Fatalf("timeout RunSeed: %v", err)
 	}
-	if timedOut.VerificationDiagnostics[0].Outcome != core.SeedVerificationOutcomeInfrastructureFailed || !timedOut.VerificationDiagnostics[0].TimedOut {
+	if timedOut.VerificationDiagnostics[0].Outcome != core.SeedVerificationOutcomeTimedOut || !timedOut.VerificationDiagnostics[0].TimedOut {
 		t.Fatalf("timeout diagnostic = %+v", timedOut.VerificationDiagnostics[0])
 	}
-	if timedOut.Status != SeedStatusWithered || timedOut.Iterations != 1 {
-		t.Fatalf("timeout status/iterations = %q/%d, want withered/1", timedOut.Status, timedOut.Iterations)
+	if timedOut.Status != SeedStatusSettled || timedOut.Iterations != 1 {
+		t.Fatalf("timeout status/iterations = %q/%d, want settled/1", timedOut.Status, timedOut.Iterations)
+	}
+	if timedOut.ExecutionOutcome != core.SeedExecutionOutcomeCompleted || timedOut.VerificationOutcome != core.SeedVerificationOutcomeTimedOut {
+		t.Fatalf("timeout outcomes = %q/%q, want completed/timed-out", timedOut.ExecutionOutcome, timedOut.VerificationOutcome)
 	}
 
 	seedVerifyFn = func(context.Context, string, string, []string, []string) seedVerifyReport {
@@ -1103,8 +1240,11 @@ func TestSeedVerificationDiagnosticsDistinguishOutcomes(t *testing.T) {
 	if err != nil {
 		t.Fatalf("infra RunSeed: %v", err)
 	}
-	if infra.Status != SeedStatusWithered {
-		t.Fatalf("infra status = %q, want withered", infra.Status)
+	if infra.Status != SeedStatusSettled {
+		t.Fatalf("infra status = %q, want settled", infra.Status)
+	}
+	if infra.ExecutionOutcome != core.SeedExecutionOutcomeCompleted || infra.VerificationOutcome != core.SeedVerificationOutcomeInfrastructureFailed {
+		t.Fatalf("infra outcomes = %q/%q, want completed/infrastructure-failed", infra.ExecutionOutcome, infra.VerificationOutcome)
 	}
 	diag := infra.VerificationDiagnostics[0]
 	if diag.Outcome != core.SeedVerificationOutcomeInfrastructureFailed || diag.TimedOut || diag.ExitCode != nil {
@@ -1112,6 +1252,42 @@ func TestSeedVerificationDiagnosticsDistinguishOutcomes(t *testing.T) {
 	}
 	if strings.Contains(diag.Message, "/home/operator") || strings.Contains(diag.Message, "run-workspaces") {
 		t.Fatalf("infrastructure diagnostic leaked a host path: %q", diag.Message)
+	}
+}
+
+func TestSeedNonRepairableVerificationStopsWithoutCognitiveRetry(t *testing.T) {
+	cases := []struct {
+		name   string
+		report seedVerifyReport
+		want   string
+	}{
+		{name: "configuration-invalid", report: seedVerifyReport{ExitCode: intPtr(2)}, want: core.SeedVerificationOutcomeConfigurationInvalid},
+		{name: "infrastructure-failed", report: seedVerifyReport{Err: errors.New("terrarium unavailable")}, want: core.SeedVerificationOutcomeInfrastructureFailed},
+		{name: "timed-out", report: seedVerifyReport{TimedOut: true}, want: core.SeedVerificationOutcomeTimedOut},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			restoreSeeds(t)
+			repo := newSeedRepo(t)
+			var prompts []string
+			seedBuildFn = fakeBuild(&prompts)
+			seedVerifyFn = func(context.Context, string, string, []string, []string) seedVerifyReport { return tc.report }
+			result, err := RunSeed(context.Background(), SeedExecution{
+				Substrate: repo, Goal: "inspect candidate", Verify: []string{"check"}, MaxIterations: 3, SessionID: "seed-no-repair-" + tc.name,
+			})
+			if err != nil {
+				t.Fatalf("RunSeed: %v", err)
+			}
+			if len(prompts) != 1 || result.Iterations != 1 {
+				t.Fatalf("cognitive boundaries/iterations = %d/%d, want 1/1", len(prompts), result.Iterations)
+			}
+			if result.Status != SeedStatusSettled || result.ExecutionOutcome != core.SeedExecutionOutcomeCompleted || result.VerificationOutcome != tc.want {
+				t.Fatalf("status/outcomes = %q/%q/%q, want settled/completed/%s", result.Status, result.ExecutionOutcome, result.VerificationOutcome, tc.want)
+			}
+			if result.Branch != "" || result.Commit != "" {
+				t.Fatalf("non-passing explicit gate exposed Fruit: %+v", result)
+			}
+		})
 	}
 }
 
@@ -1168,11 +1344,14 @@ func TestFailedVerificationPreservesSeedCheckpointForNextIteration(t *testing.T)
 	if err != nil {
 		t.Fatalf("RunSeed: %v", err)
 	}
-	if res.Status != SeedStatusExhausted {
+	if res.Status != SeedStatusSettled {
 		t.Fatalf("status = %q", res.Status)
 	}
 	if len(starts) != 2 {
 		t.Fatalf("starts = %v", starts)
+	}
+	if res.ExecutionOutcome != core.SeedExecutionOutcomeBoundsExhausted || res.VerificationOutcome != core.SeedVerificationOutcomePredicateFailed {
+		t.Fatalf("bounded repair outcomes = %q/%q, want bounds-exhausted/predicate-failed", res.ExecutionOutcome, res.VerificationOutcome)
 	}
 	if starts[0] != base {
 		t.Fatalf("first start = %q, want base %q", starts[0], base)
@@ -1369,7 +1548,7 @@ func TestPassingVerificationMatchesManagedAPIFruitPaths(t *testing.T) {
 	if err != nil {
 		t.Fatalf("RunSeed: %v", err)
 	}
-	if res.Status != SeedStatusSatisfied {
+	if res.Status != SeedStatusSettled {
 		t.Fatalf("status = %q logs=%s", res.Status, res.Logs)
 	}
 	if res.Commit != publishedOID {
@@ -1978,7 +2157,7 @@ func TestPathBackedSeedVerificationSeesCheckpointMutation(t *testing.T) {
 	if err != nil {
 		t.Fatalf("RunSeed: %v", err)
 	}
-	if result.Status != SeedStatusSatisfied {
+	if result.Status != SeedStatusSettled {
 		t.Fatalf("status = %q, want satisfied; logs:\n%s", result.Status, result.Logs)
 	}
 	if len(reports) != 1 || reports[0].seedCandidateCommit == "" {
@@ -2052,7 +2231,7 @@ func TestPathBackedSeedSecondIterationInheritsCheckpoint(t *testing.T) {
 	if err != nil {
 		t.Fatalf("RunSeed: %v", err)
 	}
-	if result.Status != SeedStatusSatisfied || result.Iterations != 2 {
+	if result.Status != SeedStatusSettled || result.Iterations != 2 {
 		t.Fatalf("result = %+v, want satisfied after two iterations; logs:\n%s", result, result.Logs)
 	}
 	if len(runners) != 2 || len(startRevisions) != 2 || len(renderedContexts) != 2 {
@@ -3079,7 +3258,7 @@ func TestRunSeedPathBackedPythonSettlement(t *testing.T) {
 		t.Fatalf("RunSeed failed: %v", err)
 	}
 
-	if res.Status != SeedStatusSatisfied {
+	if res.Status != SeedStatusSettled {
 		t.Fatalf("status = %q, want satisfied. Logs:\n%s", res.Status, res.Logs)
 	}
 
