@@ -184,7 +184,7 @@ export interface HealthReport {
 export interface SeedGrowRequest {
   substrate: string;
   goal: string;
-  verify: string[];
+  verify?: string[];
   maxIterations?: number;
   timeoutSeconds?: number;
   origin: string;
@@ -217,6 +217,24 @@ export interface SeedVerificationDiagnostic {
   message?: string;
 }
 
+export type SeedExecutionOutcome =
+  | "completed"
+  | "sprout-failed"
+  | "infrastructure-failed"
+  | "timed-out"
+  | "bounds-exhausted"
+  | "boundary-refused"
+  | "";
+
+export type SeedVerificationOutcome =
+  | "not-requested"
+  | "passed"
+  | "predicate-failed"
+  | "configuration-invalid"
+  | "infrastructure-failed"
+  | "timed-out"
+  | "";
+
 // GET /v1/seeds/runs/{handle}. Goal on this record is the durable task label.
 export interface SeedRun {
   handle: string;
@@ -225,6 +243,8 @@ export interface SeedRun {
   substrate?: string;
   goal?: string;
   status: string;
+  executionOutcome?: SeedExecutionOutcome;
+  verificationOutcome?: SeedVerificationOutcome;
   iterations: number;
   branch?: string;
   commit?: string;
@@ -268,6 +288,8 @@ export interface PhytomerObservation {
   handle?: string;
   phytomerId?: string;
   status?: string;
+  executionOutcome?: SeedExecutionOutcome;
+  verificationOutcome?: SeedVerificationOutcome;
   iterations: number;
   branch?: string;
   commit?: string;

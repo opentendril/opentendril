@@ -136,7 +136,7 @@ The canonical path is `/v1/phytomers` (a session is a Phytomer). The legacy
 | `GET /v1/phytomers/{id}/sprout-runs` | The canonical per-Phytomer Sprout-run list. Each `SproutRun` carries status plus the structured observation fields: `provider`, `model`, `outcome`, `failureCategory`, `failureStage`, `diagnosticCode`, `providerDiagnostic`, `providerRequestAttempted`, `toolInvocations`, `terrariumProvider`, and the existing usage envelope. `terrariumProvider` is the recorded provider that actually created the Sprout's Terrarium. It is absent for historical runs where that fact was not recorded. |
 | `GET /v1/phytomers/{id}/events` | Persisted EventBus telemetry for garden re-growth and Sprout-run review evidence. |
 | `GET /v1/config/substrates` | Named Substrates from `substrates.yaml`, for the new-work Substrate select. |
-| `POST /v1/seeds/grow` | Detached Seed dispatch for new work. The body carries `substrate`, `goal`, `verify` as an argv array, `detached: true`, `origin` `rest`, and one opaque `idempotencyKey`. A successful response returns `handle`, `phytomerId`, and `status`. Greenhouse does not create a Phytomer before this call. |
+| `POST /v1/seeds/grow` | Detached Seed dispatch for normal work. The body carries `substrate`, `goal`, `detached: true`, `origin` `rest`, and one opaque `idempotencyKey`; normal Greenhouse work omits `verify`. A successful response returns `handle`, `phytomerId`, and `status`. Greenhouse does not create a Phytomer before this call. |
 | `GET /v1/seeds/runs/{handle}` | Durable Seed record used to reconstruct the task. The recognisable label is the record's `goal`. |
 | `GET /v1/phytomers/{id}/watch` | Authenticated Server-Sent Events for one Phytomer. The Botanist bearer stays on the `Authorization` header. Greenhouse applies `observation` frames as current state and surfaces `error` frames. A 404 means the Phytomer is not Seed-owned, and historical Sprout observation stays in place. A response that is not an event stream, and observation data that cannot be read, stay watch errors. The workbench shows that failure. Historical Sprout runs already read from the Stem remain in the run list. |
 | `POST /v1/phytomers/{id}/continue` | Continued intent for that same Phytomer while the Seed status is `running`. A Stem rejection stays a rejection. Greenhouse does not start a replacement Seed. |
@@ -167,22 +167,36 @@ There is no pending-confirmation EventBus event. While Greenhouse is open it rea
 
 Approve and Deny call the Botanist routes above through the same bearer as the rest of the client. The row stays visible until a list read that starts after the POST has settled returns a new list. Greenhouse does not remove a row because the POST succeeded, because the browser clock is past `expiresAt`, or because an EventBus frame arrived. `404` and `409` stay unsuccessful: missing, expired, or no longer open, using the Stem response text when it distinguishes those cases. A POST that succeeds while the following list read fails keeps the previous list and says the action response was received but the list could not be reconciled. A later list read may replace that list. It does not turn an uncertain or failed action into approval or denial. Nothing in this surface calls a resume route or starts a Seed or Sprout.
 
-Normal work selects a configured Substrate, accepts a task and verifier argv,
-and dispatches detached Seed work. The Stem returns the canonical Phytomer and
-Greenhouse follows its current observation. The Botanist uses Botanist
-authority; no Pollinator credential or DelegationGrant is required. The
-Workbench presents the Seed goal, configured Substrate, current Seed status,
-Sprout activity, verification progress, and structured failures. It permits
-continuation while supported and while the Seed remains running, and exposes
-the terminal state. It reads deterministic Fruit inventory and shows repository,
-branch, commit, and review state when supplied by the Stem. Internal identifiers
-remain in technical details. Greenhouse does not run the verifier in the
-browser, infer Fruit from branch names or commit text, or merge Fruit
+Normal work selects a configured Substrate and accepts a task, then dispatches
+detached Seed work without a `verify` field. Greenhouse does not collect a
+verifier executable or argv, synthesize a command, or request command
+verification. The Stem returns the canonical Phytomer and Greenhouse follows
+its current observation. The Botanist uses Botanist authority; no Pollinator
+credential or DelegationGrant is required. The Workbench presents Seed lifecycle
+status, execution outcome, verification outcome, iteration count, latest Sprout
+state, recorded Terrarium provider, per-iteration verification diagnostics,
+structured Sprout failures, publication state and diagnostics, and Fruit
+provenance and review state as separate facts. `not-requested` is shown as a
+verification outcome, not as `passed` or as a judgement about the task. An empty
+outcome on a historical record remains unknown. `settled` is presented as a
+terminal lifecycle status, not as success or failure, and Mycorrhizal output is
+not proof that the task succeeded. The Workbench permits continuation only while
+the Seed remains running. It reads deterministic Fruit inventory and shows the
+reported repository, branch, commit, and review state when available. If the
+Stem reports no Fruit provenance, Greenhouse says so rather than inferring Fruit
+from other evidence. Internal identifiers remain in technical details.
+Greenhouse does not infer Fruit from branch names or commit text, or merge Fruit
 automatically. The default branch remains unchanged until the Botanist separately
 reviews and accepts/merges the Fruit.
 
-Normal work is `new work -> detached Seed -> canonical Phytomer -> current-state watch -> optional continuation -> terminal Seed -> Fruit review`.
-The workbench shows the Seed goal, configured Substrate, Seed status, iteration count, latest Sprout state, the recorded `terrariumProvider` when present, verification progress, and structured failure evidence. Host execution is labeled as bypassing Terrarium isolation because that is the recorded provider contract. An absent `terrariumProvider` stays unknown. Internal ids, provider diagnostics, the unified diff, and Seed logs stay behind technical details.
+Normal work is `Substrate + task -> detached Seed -> canonical Phytomer -> current-state watch -> optional continuation -> terminal Seed -> Fruit review`.
+The workbench shows the Seed goal, configured Substrate, Seed lifecycle status,
+execution outcome, verification outcome, iteration count, latest Sprout state,
+the recorded `terrariumProvider` when present, per-iteration verification
+diagnostics, and structured failure evidence. Host execution is labeled as
+bypassing Terrarium isolation because that is the recorded provider contract.
+An absent `terrariumProvider` stays unknown. Internal ids, provider diagnostics,
+the unified diff, and Seed logs stay behind technical details.
 
 If Seed dispatch has a transport failure, Greenhouse keeps the original request and idempotency key, refreshes Phytomer state from the Stem, and retries only that same request. A malformed successful response also keeps that request. Greenhouse retains one unresolved retry identity in browser session storage and restores it on boot before a new Seed can be dispatched. A valid success clears it and selects the returned canonical Phytomer; an explicit HTTP rejection clears it too. Another transport failure or malformed success leaves it in place. Reload restores the identity but does not resend the Seed request. Seed lifecycle state still comes from Stem observation and the Seed collection.
 

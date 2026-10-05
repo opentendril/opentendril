@@ -1463,19 +1463,15 @@ function phytomerIdFromPath(url: string): string {
   return match ? decodeURIComponent(match[1]) : "";
 }
 
-async function fillVerifier(page: Page, executable: string, args: string[]) {
-  await page.getByLabel("Verifier executable").fill(executable);
-  for (let index = 0; index < args.length; index += 1) {
-    await page.getByRole("button", { name: "Add argument", exact: true }).click();
-    await page.locator(`#work-arg-${index}`).fill(args[index]);
-  }
-}
-
 interface ServedSeed {
   phytomerId: string;
   handle: string;
   goal: string;
   status: string;
+  executionOutcome?: string;
+  verificationOutcome?: string;
+  durableExecutionOutcome?: string;
+  durableVerificationOutcome?: string;
   substrate?: string;
   iterations?: number;
   branch?: string;
@@ -1488,6 +1484,10 @@ interface ServedSeed {
   omitTerrarium?: boolean;
   provider?: string;
   model?: string;
+  failureCategory?: string;
+  failureStage?: string;
+  diagnosticCode?: string;
+  providerDiagnostic?: Record<string, unknown>;
   verificationDiagnostics?: Array<Record<string, unknown>>;
   publicationDiagnostic?: Record<string, unknown>;
   ssePrelude?: string;
@@ -1513,6 +1513,10 @@ async function serveSeed(page: Page, seed: ServedSeed): Promise<{ watches: () =>
         provider: seed.provider ?? "grok",
         model: seed.model ?? "grok-4",
       };
+      if (seed.failureCategory !== undefined) sprout.failureCategory = seed.failureCategory;
+      if (seed.failureStage !== undefined) sprout.failureStage = seed.failureStage;
+      if (seed.diagnosticCode !== undefined) sprout.diagnosticCode = seed.diagnosticCode;
+      if (seed.providerDiagnostic !== undefined) sprout.providerDiagnostic = seed.providerDiagnostic;
       if (!seed.omitTerrarium) sprout.terrariumProvider = seed.terrariumProvider ?? "docker";
       const observation: Record<string, unknown> = {
         handle: seed.handle,
@@ -1524,6 +1528,8 @@ async function serveSeed(page: Page, seed: ServedSeed): Promise<{ watches: () =>
       };
       if (seed.branch) observation.branch = seed.branch;
       if (seed.commit) observation.commit = seed.commit;
+      if (seed.executionOutcome !== undefined) observation.executionOutcome = seed.executionOutcome;
+      if (seed.verificationOutcome !== undefined) observation.verificationOutcome = seed.verificationOutcome;
       if (seed.verificationDiagnostics) {
         observation.verificationDiagnostics = seed.verificationDiagnostics;
       }
@@ -1549,6 +1555,8 @@ async function serveSeed(page: Page, seed: ServedSeed): Promise<{ watches: () =>
           substrate: seed.substrate ?? "opentendril",
           goal: seed.goal,
           status: seed.status,
+          executionOutcome: seed.durableExecutionOutcome ?? seed.executionOutcome,
+          verificationOutcome: seed.durableVerificationOutcome ?? seed.verificationOutcome,
           iterations: seed.iterations ?? 1,
           branch: seed.branch,
           commit: seed.commit,
@@ -1622,7 +1630,7 @@ test.describe("Canonical Seed workbench", () => {
     ]);
   });
 
-  test("dispatches a detached Seed with argv verification and does not call chat completions", async ({
+  test("dispatches normal work without verifier controls and does not call chat completions", async ({
     page,
   }) => {
     const backend = await mockStemBackend(page, { sessions: [] });
@@ -1662,10 +1670,11 @@ test.describe("Canonical Seed workbench", () => {
 
     await completeOnboarding(page, testApiKey);
     await expect(page.getByRole("option", { name: "opentendril" })).toBeAttached();
+    await expect(page.locator(".verifier-fields")).toHaveCount(0);
+    await expect(page.getByRole("button", { name: "Add argument" })).toHaveCount(0);
     await expect(page.getByTestId("seed-bounds")).not.toHaveAttribute("open");
     await page.getByLabel("Substrate").selectOption("opentendril");
     await page.getByLabel("Task").fill("make the tests pass");
-    await fillVerifier(page, "go", ["test", "./...", "hello world", "foo;bar"]);
     await page.getByTestId("seed-bounds").locator("summary").click();
     await page.getByLabel("Max iterations").fill("99");
     await page.getByLabel("Timeout seconds").fill("30");
@@ -1681,16 +1690,16 @@ test.describe("Canonical Seed workbench", () => {
     expect(grows[0]).toMatchObject({
       substrate: "opentendril",
       goal: "make the tests pass",
-      verify: ["go", "test", "./...", "hello world", "foo;bar"],
       detached: true,
       origin: "rest",
       maxIterations: 99,
       timeoutSeconds: 30,
     });
-    expect(grows[0].verify).toEqual(["go", "test", "./...", "hello world", "foo;bar"]);
+    expect(grows[0]).not.toHaveProperty("verify");
     expect(grows[0].idempotencyKey).toEqual(expect.stringMatching(uuidPattern));
     expect(grows[0].idempotencyKey).not.toContain("make the tests pass");
     expect(grows[0].idempotencyKey).not.toContain("opentendril");
+    expect(new Set(grows.map((body) => body.idempotencyKey)).size).toBe(1);
     const watch = surface.watches()[0];
     expect(watch.headers().authorization).toBe(`Bearer ${testApiKey}`);
     expect(watch.url()).not.toContain(testApiKey);
@@ -1779,7 +1788,6 @@ test.describe("Canonical Seed workbench", () => {
     await expect(page.getByRole("option", { name: "opentendril" })).toBeAttached();
     await page.getByLabel("Substrate").selectOption("opentendril");
     await page.getByLabel("Task").fill("first task");
-    await fillVerifier(page, "go", ["test"]);
     await page.getByRole("button", { name: "Start work" }).click();
     await expect(page.getByTestId("seed-goal")).toHaveText("first task");
     await expect.poll(() => watches.filter((watch) => watch.id === "tendril-watch-a").length).toBe(1);
@@ -1792,7 +1800,6 @@ test.describe("Canonical Seed workbench", () => {
     await page.getByRole("button", { name: "New work" }).click();
     await page.getByLabel("Substrate").selectOption("opentendril");
     await page.getByLabel("Task").fill("second task");
-    await fillVerifier(page, "go", ["test"]);
     await page.getByRole("button", { name: "Start work" }).click();
     await expect
       .poll(() => watches.find((watch) => watch.id === "tendril-watch-a")?.request.failure())
@@ -1809,13 +1816,20 @@ test.describe("Canonical Seed workbench", () => {
       phytomerId: "tendril-terminal",
       handle: "seed-terminal",
       goal: "finish the bounded task",
-      status: "satisfied",
+      status: "settled",
+      executionOutcome: "completed",
+      verificationOutcome: "not-requested",
       iterations: 2,
-      verificationDiagnostics: [{ iteration: 2, outcome: "passed", timedOut: false }],
     });
     await completeOnboarding(page, testApiKey);
     await expect(page.getByTestId("seed-goal")).toHaveText("finish the bounded task");
-    await expect(page.getByTestId("seed-status")).toHaveText("satisfied");
+    await expect(page.getByTestId("seed-status")).toHaveText("settled");
+    await expect(page.getByTestId("execution-outcome")).toHaveText("completed");
+    await expect(page.getByTestId("verification-outcome")).toHaveText("not-requested");
+    await expect(page.getByTestId("verification-outcome")).not.toHaveText("passed");
+    await expect(page.getByTestId("verification-diagnostics")).toContainText(
+      "No per-iteration verification diagnostics",
+    );
     await expect(page.getByTestId("continuation-form")).toHaveCount(0);
     await expect(page.getByTestId("fruit-absent")).toBeVisible();
     await stableWatchCount(() => surface.watches().length, 1);
@@ -1959,12 +1973,14 @@ test.describe("Canonical Seed workbench", () => {
 
   test("reconstructs the durable goal and Fruit review state after refresh", async ({ page }) => {
     const session = makeSession({ sessionId: "tendril-refresh", origin: "rest" });
-    await mockStemBackend(page, { sessions: [session] });
+    const backend = await mockStemBackend(page, { sessions: [session] });
     await serveSeed(page, {
       phytomerId: session.sessionId,
       handle: "seed-refresh",
       goal: "refresh the docs",
-      status: "satisfied",
+      status: "settled",
+      executionOutcome: "completed",
+      verificationOutcome: "not-requested",
       substrate: "docs",
       iterations: 2,
       branch: "tendril/seed-refresh",
@@ -1972,8 +1988,7 @@ test.describe("Canonical Seed workbench", () => {
       fruitRepository: "opentendril/opentendril",
       fruitPublicationState: "published",
       diff: "diff --git a/README.md b/README.md\n+reviewed line",
-      logs: "verify ok",
-      verificationDiagnostics: [{ iteration: 2, outcome: "passed", timedOut: false }],
+      logs: "Sprout checkpoint recorded",
     });
     await page.route("**/v1/fruit", async (route) => {
       await route.fulfill({
@@ -2020,13 +2035,21 @@ test.describe("Canonical Seed workbench", () => {
     await completeOnboarding(page, testApiKey);
     await expect(page.getByTestId("seed-goal")).toHaveText("refresh the docs");
     await expect(page.getByTestId("phytomer-label")).toHaveText("refresh the docs");
+    await expect(page.getByTestId("seed-status")).toHaveText("settled");
+    await expect(page.getByTestId("execution-outcome")).toHaveText("completed");
+    await expect(page.getByTestId("verification-outcome")).toHaveText("not-requested");
+    await expect(page.getByTestId("verification-outcome")).not.toHaveText("passed");
     await expect(page.getByTestId("fruit-branch")).toHaveText("tendril/seed-refresh");
     await expect(page.getByTestId("fruit-commit")).toHaveText("abc123def");
     await expect(page.getByTestId("fruit-repository")).toHaveText("opentendril/opentendril");
     await expect(page.getByTestId("fruit-publication-state")).toHaveText("published");
     await expect(page.getByTestId("fruit-review-state")).toHaveText("outstanding");
+    await expect(page.getByTestId("verification-result")).toHaveText("not-requested");
+    await expect(page.getByTestId("verification-result")).not.toHaveText("passed");
     await expect(page.getByTestId("fruit-pull-request")).toHaveText("Pull request 12");
     await expect(page.getByTestId("fruit-result")).not.toContainText("merged");
+    await expect(page.getByTestId("fruit-result")).not.toContainText("main");
+    await expect(page.getByText(/default branch changed/i)).toHaveCount(0);
     await expect(page.getByText("diff --git a/README.md")).toBeHidden();
     await page.getByTestId("seed-diff").locator("summary").click();
     await expect(page.getByText("diff --git a/README.md")).toBeVisible();
@@ -2036,10 +2059,13 @@ test.describe("Canonical Seed workbench", () => {
     await page.reload();
     await expect(page.getByTestId("seed-goal")).toHaveText("refresh the docs", { timeout: 10000 });
     await expect(page.getByTestId("fruit-review-state")).toHaveText("outstanding");
+    const readsBeforeReconnect = backend.sessionListReads();
+    await backend.disconnectSocket();
+    await expect.poll(() => backend.sessionListReads()).toBeGreaterThan(readsBeforeReconnect);
     expect(grows).toEqual([]);
   });
 
-  test("does not invent Fruit when branch and commit provenance are absent", async ({ page }) => {
+  test("keeps historical outcomes unknown and ignores unrelated Fruit inventory", async ({ page }) => {
     const session = makeSession({ sessionId: "tendril-exhausted", origin: "rest" });
     await mockStemBackend(page, { sessions: [session] });
     await serveSeed(page, {
@@ -2048,6 +2074,10 @@ test.describe("Canonical Seed workbench", () => {
       goal: "try until the bounds end",
       status: "exhausted",
       iterations: 3,
+      failureCategory: "provider-request-rejected",
+      failureStage: "provider-preflight",
+      diagnosticCode: "provider-preflight-rejected",
+      providerDiagnostic: { statusCode: 429, message: "provider rate limit" },
       verificationDiagnostics: [
         {
           iteration: 3,
@@ -2065,7 +2095,7 @@ test.describe("Canonical Seed workbench", () => {
           items: [
             {
               producerKind: "seed",
-              producerIdentity: "seed-exhausted",
+              producerIdentity: "seed-unrelated",
               phytomerId: session.sessionId,
               reviewState: "outstanding",
               repository: "opentendril/opentendril",
@@ -2087,13 +2117,130 @@ test.describe("Canonical Seed workbench", () => {
 
     await completeOnboarding(page, testApiKey);
     await expect(page.getByTestId("seed-status")).toHaveText("exhausted");
+    await expect(page.getByTestId("execution-outcome")).toHaveText(
+      "Unknown (historical or not reported)",
+    );
+    await expect(page.getByTestId("verification-outcome")).toHaveText(
+      "Unknown (historical or not reported)",
+    );
+    await expect(page.getByTestId("verification-outcome")).not.toHaveText("not-requested");
+    await expect(page.getByTestId("verification-result")).toHaveText(
+      "Unknown (historical or not reported)",
+    );
     await expect(page.getByTestId("verification-diagnostics")).toContainText("predicate-failed");
     await expect(page.getByTestId("verification-diagnostics")).toContainText("tests failed");
+    await expect(page.getByTestId("sprout-failure")).toContainText("provider-request-rejected");
+    await expect(page.getByTestId("sprout-failure")).toContainText("provider-preflight");
+    await expect(page.getByTestId("sprout-failure")).toContainText("provider-preflight-rejected");
+    await page.getByTestId("technical-details").locator("summary").click();
+    await expect(page.getByTestId("technical-details")).toContainText("provider rate limit");
     await expect(page.getByTestId("fruit-absent")).toBeVisible();
+    await expect(page.getByTestId("fruit-absent")).toHaveText("Stem did not report Fruit provenance.");
     await expect(page.getByTestId("fruit-branch")).toHaveCount(0);
     await expect(page.getByTestId("fruit-review-state")).toHaveCount(0);
     await expect(page.getByTestId("fruit-result")).not.toContainText("outstanding");
     await expect(page.getByTestId("fruit-result")).not.toContainText("tendril/invented");
+  });
+
+  test("uses overall outcomes separately from per-iteration diagnostics", async ({ page }) => {
+    const session = makeSession({ sessionId: "tendril-outcome-evidence", origin: "rest" });
+    await mockStemBackend(page, { sessions: [session] });
+    await serveSeed(page, {
+      phytomerId: session.sessionId,
+      handle: "seed-outcome-evidence",
+      goal: "retain verification evidence",
+      status: "settled",
+      executionOutcome: "completed",
+      durableVerificationOutcome: "passed",
+      durableExecutionOutcome: "sprout-failed",
+      verificationDiagnostics: [
+        {
+          iteration: 1,
+          outcome: "predicate-failed",
+          exitCode: 1,
+          timedOut: false,
+          message: "first candidate did not satisfy the predicate",
+        },
+        { iteration: 2, outcome: "passed", exitCode: 0, timedOut: false },
+      ],
+    });
+
+    await completeOnboarding(page, testApiKey);
+    await expect(page.getByTestId("seed-status")).toHaveText("settled");
+    await expect(page.getByTestId("execution-outcome")).toHaveText("completed");
+    await expect(page.getByTestId("verification-outcome")).toHaveText("passed");
+    await expect(page.getByTestId("fruit-execution-outcome")).toHaveText("completed");
+    await expect(page.getByTestId("verification-result")).toHaveText("passed");
+    await expect(page.getByTestId("verification-diagnostics")).toContainText(
+      "Iteration 1: predicate-failed",
+    );
+    await expect(page.getByTestId("verification-diagnostics")).toContainText(
+      "Iteration 2: passed",
+    );
+    await expect(page.getByTestId("verification-result")).not.toContainText("predicate-failed");
+    await expect(page.getByTestId("fruit-result")).not.toContainText("objective achieved");
+  });
+
+  test("settled no-verifier work reports missing Fruit provenance without an objective judgement", async ({
+    page,
+  }) => {
+    const session = makeSession({ sessionId: "tendril-settled-no-fruit", origin: "rest" });
+    await mockStemBackend(page, { sessions: [session] });
+    await serveSeed(page, {
+      phytomerId: session.sessionId,
+      handle: "seed-settled-no-fruit",
+      goal: "inspect a settled run",
+      status: "settled",
+      executionOutcome: "completed",
+      verificationOutcome: "not-requested",
+      durableVerificationOutcome: "passed",
+    });
+
+    await completeOnboarding(page, testApiKey);
+    await expect(page.getByTestId("seed-status")).toHaveText("settled");
+    await expect(page.getByTestId("execution-outcome")).toHaveText("completed");
+    await expect(page.getByTestId("verification-outcome")).toHaveText("not-requested");
+    await expect(page.getByTestId("fruit-absent")).toHaveText("Stem did not report Fruit provenance.");
+    await expect(page.getByTestId("fruit-result")).not.toContainText("success");
+    await expect(page.getByTestId("fruit-result")).not.toContainText("failure");
+  });
+
+  test("shows Fruit provenance reported by the matching Stem inventory", async ({ page }) => {
+    const session = makeSession({ sessionId: "tendril-inventory-fruit", origin: "rest" });
+    await mockStemBackend(page, { sessions: [session] });
+    await serveSeed(page, {
+      phytomerId: session.sessionId,
+      handle: "seed-inventory-fruit",
+      goal: "review the Stem-reported Fruit",
+      status: "settled",
+      executionOutcome: "completed",
+      verificationOutcome: "not-requested",
+    });
+    await page.route("**/v1/fruit", async (route) => {
+      await route.fulfill({
+        status: 200,
+        json: {
+          items: [
+            {
+              producerKind: "seed",
+              producerIdentity: "seed-inventory-fruit",
+              phytomerId: session.sessionId,
+              reviewState: "outstanding",
+              repository: "opentendril/opentendril",
+              branch: "tendril/seed-inventory-fruit",
+              commit: "f00dbabe",
+            },
+          ],
+          counts: { outstanding: 1, unknown: 0, closedUnmerged: 0, merged: 0, total: 1 },
+        },
+      });
+    });
+
+    await completeOnboarding(page, testApiKey);
+    await expect(page.getByTestId("fruit-repository")).toHaveText("opentendril/opentendril");
+    await expect(page.getByTestId("fruit-branch")).toHaveText("tendril/seed-inventory-fruit");
+    await expect(page.getByTestId("fruit-commit")).toHaveText("f00dbabe");
+    await expect(page.getByTestId("fruit-review-state")).toHaveText("outstanding");
   });
 
   test("shows a publication diagnostic without claiming Fruit was published", async ({ page }) => {
@@ -2118,6 +2265,7 @@ test.describe("Canonical Seed workbench", () => {
     await expect(page.getByTestId("publication-diagnostic")).toContainText(
       "remote rejected the update",
     );
+    await expect(page.getByTestId("sprout-failure")).toHaveCount(0);
     await expect(page.getByTestId("fruit-absent")).toBeVisible();
     await expect(page.getByTestId("fruit-branch")).toHaveCount(0);
     await expect(page.getByTestId("fruit-result")).not.toContainText("published");
@@ -2161,7 +2309,6 @@ test.describe("Canonical Seed workbench", () => {
     await expect(page.getByRole("option", { name: "opentendril" })).toBeAttached();
     await page.getByLabel("Substrate").selectOption("opentendril");
     await page.getByLabel("Task").fill("retry the same seed");
-    await fillVerifier(page, "go", ["test", "./..."]);
     const readsBefore = backend.sessionListReads();
     await page.getByRole("button", { name: "Start work" }).click();
 
@@ -2185,7 +2332,8 @@ test.describe("Canonical Seed workbench", () => {
     expect(posts).toHaveLength(2);
     expect(posts[1].idempotencyKey).toBe(posts[0].idempotencyKey);
     expect(posts[1].goal).toBe(posts[0].goal);
-    expect(posts[1].verify).toEqual(posts[0].verify);
+    expect(posts[1]).toEqual(posts[0]);
+    expect(posts[0]).not.toHaveProperty("verify");
     expect(posts[1].substrate).toBe(posts[0].substrate);
     const keysAfterRetry = await page.evaluate(
       () => (window as Window & { __uuidCount?: number }).__uuidCount,
@@ -2218,7 +2366,6 @@ test.describe("Canonical Seed workbench", () => {
     await expect(page.getByRole("option", { name: "opentendril" })).toBeAttached();
     await page.getByLabel("Substrate").selectOption("docs");
     await page.getByLabel("Task").fill("a rejected task");
-    await fillVerifier(page, "go", ["test"]);
     await page.getByRole("button", { name: "Start work" }).click();
 
     await expect(page.getByTestId("dispatch-rejected")).toContainText(
@@ -2330,7 +2477,6 @@ test.describe("Canonical Seed workbench", () => {
     await expect(page.getByRole("option", { name: "opentendril" })).toBeAttached();
     await page.getByLabel("Substrate").selectOption("opentendril");
     await page.getByLabel("Task").fill(sharedGoal);
-    await fillVerifier(page, "go", ["test", "./..."]);
     await page.getByRole("button", { name: "Start work" }).click();
 
     await expect(page.getByTestId("dispatch-ambiguous")).toContainText(
@@ -2360,7 +2506,8 @@ test.describe("Canonical Seed workbench", () => {
     expect(posts[1].idempotencyKey).toBe(posts[0].idempotencyKey);
     expect(posts[1].goal).toBe(posts[0].goal);
     expect(posts[1].substrate).toBe(posts[0].substrate);
-    expect(posts[1].verify).toEqual(posts[0].verify);
+    expect(posts[1]).toEqual(posts[0]);
+    expect(posts[0]).not.toHaveProperty("verify");
     expect(impostorWatches).toEqual([]);
     expect(impostorCollects).toEqual([]);
     expect(
@@ -2407,7 +2554,6 @@ test.describe("Canonical Seed workbench", () => {
     await expect(page.getByRole("option", { name: "docs" })).toBeAttached();
     await page.getByLabel("Substrate").selectOption("docs");
     await page.getByLabel("Task").fill("survive the reload");
-    await fillVerifier(page, "go", ["test", "./..."]);
     await page.getByRole("button", { name: "Start work" }).click();
     await expect(page.getByTestId("dispatch-ambiguous")).toContainText(
       "The dispatch outcome is uncertain",
@@ -2418,7 +2564,6 @@ test.describe("Canonical Seed workbench", () => {
     expect(beforeReload?.request).toMatchObject({
       substrate: "docs",
       goal: "survive the reload",
-      verify: ["go", "test", "./..."],
       detached: true,
       origin: "rest",
       idempotencyKey: posts[0].idempotencyKey,
@@ -2433,8 +2578,8 @@ test.describe("Canonical Seed workbench", () => {
     expect(afterReload?.request).toMatchObject(beforeReload?.request ?? {});
     await expect(page.getByTestId("dispatch-ambiguous")).toContainText("survive the reload");
     await expect(page.getByTestId("dispatch-ambiguous")).toContainText("docs");
-    await expect(page.getByTestId("dispatch-ambiguous")).toContainText("./...");
     await expect(page.getByTestId("new-work-form")).toHaveCount(0);
+    expect(beforeReload?.request).not.toHaveProperty("verify");
     await expect(page.getByRole("button", { name: "Discard uncertain dispatch" })).toHaveCount(0);
     expect(
       await page.evaluate(() => (window as Window & { __uuidCount?: number }).__uuidCount ?? 0),
@@ -2444,17 +2589,69 @@ test.describe("Canonical Seed workbench", () => {
     await expect(page.getByTestId("seed-goal")).toHaveText("survive the reload");
     await expect(page.locator(".chat-head .mono")).toHaveText("tendril-reloaded");
     expect(posts).toHaveLength(2);
-    expect(posts[1]).toMatchObject({
-      substrate: posts[0].substrate,
-      goal: posts[0].goal,
-      verify: posts[0].verify,
-      idempotencyKey: posts[0].idempotencyKey,
-      detached: true,
-      origin: "rest",
-    });
+    expect(posts[1]).toEqual(posts[0]);
     expect(
       await page.evaluate(() => (window as Window & { __uuidCount?: number }).__uuidCount ?? 0),
     ).toBe(0);
+    expect(await unresolvedRetryEnvelope(page)).toBeNull();
+  });
+
+  test("restores and retries a retained legacy verifier request exactly", async ({ page }) => {
+    const backend = await mockStemBackend(page, { sessions: [] });
+    const legacyRequest = {
+      substrate: "docs",
+      goal: "retry the accepted legacy request",
+      verify: ["go", "test", "./...", "hello world", "foo;bar"],
+      detached: true,
+      origin: "rest",
+      idempotencyKey: "5d487760-7cf5-4c3b-9bbc-56eb68086258",
+    };
+    await page.addInitScript((request: Record<string, unknown>) => {
+      sessionStorage.setItem(
+        "opentendril.unresolvedSeedRetry",
+        JSON.stringify({ request, message: "The dispatch outcome is uncertain." }),
+      );
+    }, legacyRequest);
+    const posts: Array<Record<string, unknown>> = [];
+    await page.route("**/v1/seeds/grow", async (route) => {
+      posts.push(route.request().postDataJSON() as Record<string, unknown>);
+      backend.setSessions([makeSession({ sessionId: "tendril-legacy-retry", origin: "rest" })]);
+      await route.fulfill({
+        status: 202,
+        json: {
+          handle: "seed-legacy-retry",
+          phytomerId: "tendril-legacy-retry",
+          status: "running",
+        },
+      });
+    });
+
+    await completeOnboarding(page, testApiKey);
+    await expect(page.getByTestId("dispatch-ambiguous")).toBeVisible();
+    await expect(page.getByTestId("dispatch-idempotency-key")).toHaveText(
+      legacyRequest.idempotencyKey,
+    );
+    await expect(page.getByTestId("retained-legacy-verifier").locator("li")).toHaveText(
+      legacyRequest.verify,
+    );
+    await expect(page.locator(".verifier-fields")).toHaveCount(0);
+    await expect(page.getByLabel("Verifier executable")).toHaveCount(0);
+    await expect(page.getByTestId("new-work-form")).toHaveCount(0);
+    await expect.poll(() => posts.length).toBe(0);
+
+    await page.reload();
+    await expect(page.getByTestId("dispatch-idempotency-key")).toHaveText(
+      legacyRequest.idempotencyKey,
+      { timeout: 10000 },
+    );
+    await expect.poll(() => posts.length).toBe(0);
+    expect((await unresolvedRetryEnvelope(page))?.request).toEqual(legacyRequest);
+
+    await page.getByRole("button", { name: "Retry dispatch" }).click();
+    await expect.poll(() => unresolvedRetryEnvelope(page)).toBeNull();
+    await expect(page.getByTestId("dispatch-ambiguous")).toHaveCount(0);
+    expect(posts).toHaveLength(1);
+    expect(posts[0]).toEqual(legacyRequest);
     expect(await unresolvedRetryEnvelope(page)).toBeNull();
   });
 
@@ -2488,7 +2685,6 @@ test.describe("Canonical Seed workbench", () => {
     await expect(page.getByRole("option", { name: "opentendril" })).toBeAttached();
     await page.getByLabel("Substrate").selectOption("opentendril");
     await page.getByLabel("Task").fill("repair the response");
-    await fillVerifier(page, "go", ["test"]);
     await page.getByRole("button", { name: "Start work" }).click();
 
     await expect(page.getByTestId("dispatch-ambiguous")).toContainText(
@@ -2507,7 +2703,8 @@ test.describe("Canonical Seed workbench", () => {
     expect(posts).toHaveLength(2);
     expect(posts[1].idempotencyKey).toBe(posts[0].idempotencyKey);
     expect(posts[1].goal).toBe(posts[0].goal);
-    expect(posts[1].verify).toEqual(posts[0].verify);
+    expect(posts[1]).toEqual(posts[0]);
+    expect(posts[0]).not.toHaveProperty("verify");
     expect(await unresolvedRetryEnvelope(page)).toBeNull();
   });
 

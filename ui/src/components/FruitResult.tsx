@@ -1,16 +1,6 @@
-import { matchingSeedFruit, seedReportsFruitProvenance } from "../lib/fruit";
-import type { PhytomerObservation, SeedRun, SeedVerificationDiagnostic } from "../lib/types";
+import { matchingSeedFruit } from "../lib/fruit";
+import type { PhytomerObservation, SeedRun } from "../lib/types";
 import { useStem } from "../state/store";
-
-function diagnosticsFor(
-  run?: SeedRun,
-  observation?: PhytomerObservation,
-): SeedVerificationDiagnostic[] {
-  if (run?.verificationDiagnostics && run.verificationDiagnostics.length > 0) {
-    return run.verificationDiagnostics;
-  }
-  return observation?.verificationDiagnostics ?? [];
-}
 
 export function FruitResult({
   run,
@@ -23,29 +13,36 @@ export function FruitResult({
   const fruitStatus = useStem((s) => s.fruitStatus);
   const fruitError = useStem((s) => s.fruitError);
 
-  const status = run?.status || observation?.status || "";
-  const branch = (run?.branch || observation?.branch || "").trim();
-  const commit = (run?.commit || observation?.commit || "").trim();
-  const hasProvenance = Boolean(branch && commit) || seedReportsFruitProvenance(run);
-  const diagnostics = diagnosticsFor(run, observation);
-  const verification = diagnostics[diagnostics.length - 1];
-  const publication = run?.publicationDiagnostic || observation?.publicationDiagnostic;
-  const match = hasProvenance ? matchingSeedFruit(inventory, run) : null;
+  const status = observation?.status || run?.status || "";
+  const executionOutcome = observation?.executionOutcome ?? run?.executionOutcome ?? "";
+  const verificationOutcome = observation?.verificationOutcome ?? run?.verificationOutcome ?? "";
+  const match = matchingSeedFruit(inventory, run);
+  const branch = (observation?.branch || run?.branch || match?.branch || "").trim();
+  const commit = (observation?.commit || run?.commit || match?.commit || "").trim();
+  const hasProvenance = Boolean(branch && commit);
+  const repository = (run?.fruitRepository || match?.repository || "").trim();
+  const publication = observation?.publicationDiagnostic ?? run?.publicationDiagnostic;
 
   return (
     <section className="fruit-result" data-testid="fruit-result">
-      <h3>Result</h3>
+      <h3>Reported facts</h3>
       <div className="fact-grid">
         <div className="fact">
-          <div className="k">Status</div>
+          <div className="k">Seed lifecycle status</div>
           <div className="v" data-testid="fruit-status">
             {status || "unknown"}
           </div>
         </div>
         <div className="fact">
-          <div className="k">Verification result</div>
+          <div className="k">Execution outcome</div>
+          <div className="v" data-testid="fruit-execution-outcome">
+            {executionOutcome || "Unknown (historical or not reported)"}
+          </div>
+        </div>
+        <div className="fact">
+          <div className="k">Verification outcome</div>
           <div className="v" data-testid="verification-result">
-            {verification ? verification.outcome : "No verification recorded"}
+            {verificationOutcome || "Unknown (historical or not reported)"}
           </div>
         </div>
       </div>
@@ -85,11 +82,11 @@ export function FruitResult({
       {hasProvenance ? (
         <div data-testid="fruit-provenance">
           <div className="fact-grid">
-            {run?.fruitRepository ? (
+            {repository ? (
               <div className="fact">
                 <div className="k">Repository</div>
-                <div className="v" data-testid="fruit-repository" title={run.fruitRepository}>
-                  {run.fruitRepository}
+                <div className="v" data-testid="fruit-repository" title={repository}>
+                  {repository}
                 </div>
               </div>
             ) : null}
@@ -139,7 +136,7 @@ export function FruitResult({
         </div>
       ) : (
         <p data-testid="fruit-absent">
-          Stem did not report Fruit branch and commit provenance.
+          Stem did not report Fruit provenance.
         </p>
       )}
 

@@ -33,14 +33,14 @@ export function ActiveSeedWork() {
   const [draft, setDraft] = useState("");
 
   const status = observation?.status || run?.status || "";
+  const executionOutcome = observation?.executionOutcome ?? run?.executionOutcome ?? "";
+  const verificationOutcome = observation?.verificationOutcome ?? run?.verificationOutcome ?? "";
   const terminal = seedStatusIsTerminal(status);
   const sprouts = observation?.sprouts ?? [];
   const latest = sprouts.length > 0 ? sprouts[sprouts.length - 1] : undefined;
   const terrarium = latest ? terrariumProviderFact(latest.terrariumProvider) : null;
   const diagnostics: SeedVerificationDiagnostic[] =
-    observation?.verificationDiagnostics && observation.verificationDiagnostics.length > 0
-      ? observation.verificationDiagnostics
-      : (run?.verificationDiagnostics ?? []);
+    observation?.verificationDiagnostics ?? run?.verificationDiagnostics ?? [];
   const model = [latest?.provider, latest?.model].filter(Boolean).join(" / ");
   const iterations = observation ? observation.iterations : (run?.iterations ?? 0);
   const substrate = observation?.substrate || run?.substrate || "";
@@ -102,7 +102,19 @@ export function ActiveSeedWork() {
           </div>
         </div>
         <div className="fact">
-          <div className="k">Iterations</div>
+          <div className="k">Execution outcome</div>
+          <div className="v" data-testid="execution-outcome">
+            {executionOutcome || "Unknown (historical or not reported)"}
+          </div>
+        </div>
+        <div className="fact">
+          <div className="k">Verification outcome</div>
+          <div className="v" data-testid="verification-outcome">
+            {verificationOutcome || "Unknown (historical or not reported)"}
+          </div>
+        </div>
+        <div className="fact">
+          <div className="k">Iteration count</div>
           <div className="v" data-testid="seed-iterations">
             {iterations}
           </div>
@@ -137,9 +149,9 @@ export function ActiveSeedWork() {
       </div>
 
       <div data-testid="verification-diagnostics">
-        <h4>Verification</h4>
+        <h4>Per-iteration verification diagnostics</h4>
         {diagnostics.length === 0 ? (
-          <p className="runs-empty">No verification recorded yet.</p>
+          <p className="runs-empty">No per-iteration verification diagnostics recorded.</p>
         ) : (
           <ul className="verification-list">
             {diagnostics.map((item) => (
