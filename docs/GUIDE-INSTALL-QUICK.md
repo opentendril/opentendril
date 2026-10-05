@@ -165,9 +165,11 @@ sudo -u tendril -H cat /home/tendril/.tendril/api-key
 ```
 
 If `BOTANIST_KEY` was configured explicitly, hand off that configured value
-instead. Then select the verified Substrate, enter a meaningful task and
-verifier argv, start work, observe its settlement, and review the reported Git
-Fruit. Follow the ordered [Greenhouse first-use path](./GUIDE-QUICKSTART.md#first-governed-work-through-greenhouse).
+instead. Then select the verified Substrate, enter a meaningful task, start
+work, observe the separate execution and verification outcomes, and review the
+reported Git Fruit. Normal Greenhouse work does not collect a verifier
+executable or argv. Follow the ordered
+[Greenhouse first-use path](./GUIDE-QUICKSTART.md#first-governed-work-through-greenhouse).
 The default branch stays unchanged until the Botanist separately accepts and
 merges the Fruit. Pollinator, REST, and MCP instructions remain available for
 delegated integrations in the detailed guide.

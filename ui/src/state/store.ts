@@ -110,7 +110,6 @@ export interface PendingNotice {
 export interface SeedWorkInput {
   substrate: string;
   goal: string;
-  verify: string[];
   maxIterations?: number;
   timeoutSeconds?: number;
 }
@@ -230,11 +229,18 @@ function isOptionalCount(value: unknown): boolean {
 function isSeedGrowRequest(value: unknown): value is SeedGrowRequest {
   if (!value || typeof value !== "object") return false;
   const request = value as SeedGrowRequest;
+  const rawRequest = value as Record<string, unknown>;
   if (!isNonEmptyString(request.substrate) || !isNonEmptyString(request.goal)) return false;
   if (!isNonEmptyString(request.idempotencyKey)) return false;
   if (request.origin !== "rest" || request.detached !== true) return false;
-  if (!Array.isArray(request.verify) || request.verify.length === 0) return false;
-  if (!request.verify.every((token) => typeof token === "string")) return false;
+  if (
+    Object.prototype.hasOwnProperty.call(rawRequest, "verify") &&
+    (!Array.isArray(rawRequest.verify) ||
+      rawRequest.verify.length === 0 ||
+      !rawRequest.verify.every((token) => typeof token === "string"))
+  ) {
+    return false;
+  }
   return isOptionalCount(request.maxIterations) && isOptionalCount(request.timeoutSeconds);
 }
 
@@ -1135,7 +1141,6 @@ export const useStem = create<StemStore>()((set, get) => {
       const request: SeedGrowRequest = {
         substrate: input.substrate,
         goal: input.goal,
-        verify: [...input.verify],
         origin: "rest",
         detached: true,
         idempotencyKey: newIdempotencyKey(),

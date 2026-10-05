@@ -19,8 +19,6 @@ export function NewWorkForm() {
 
   const [substrate, setSubstrate] = useState("");
   const [goal, setGoal] = useState("");
-  const [executable, setExecutable] = useState("");
-  const [args, setArgs] = useState<string[]>([]);
   const [maxIterations, setMaxIterations] = useState("");
   const [timeoutSeconds, setTimeoutSeconds] = useState("");
   const [formError, setFormError] = useState<string | null>(null);
@@ -38,14 +36,17 @@ export function NewWorkForm() {
         <p className="workbench-retained">
           <span className="k">Task</span> {request.goal}
         </p>
-        <div className="workbench-retained">
-          <span className="k">Verifier argv</span>
-          <ol className="argv-list">
-            {request.verify.map((token, index) => (
-              <li key={index}>{token}</li>
-            ))}
-          </ol>
-        </div>
+        {request.verify ? (
+          <div className="workbench-retained" data-testid="retained-legacy-verifier">
+            <span className="k">Retained legacy verifier argv</span>
+            <ol className="argv-list">
+              {request.verify.map((token, index) => (
+                <li key={index}>{token}</li>
+              ))}
+            </ol>
+            <span className="hint">Retry preserves this accepted request unchanged.</span>
+          </div>
+        ) : null}
         <p className="technical-id">
           Idempotency key{" "}
           <span data-testid="dispatch-idempotency-key">{request.idempotencyKey}</span>
@@ -78,18 +79,13 @@ export function NewWorkForm() {
       setFormError("Describe the task.");
       return;
     }
-    if (!executable.trim()) {
-      setFormError("Enter the verifier executable.");
-      return;
-    }
     const iterations = optionalBound(maxIterations);
     const timeout = optionalBound(timeoutSeconds);
     if (iterations === "invalid" || timeout === "invalid") {
       setFormError("Seed bounds must be whole numbers. Zero or empty uses the Stem default.");
       return;
     }
-    const verify = [executable, ...args.filter((arg) => arg !== "")];
-    const input: SeedWorkInput = { substrate, goal: task, verify };
+    const input: SeedWorkInput = { substrate, goal: task };
     if (iterations !== undefined) input.maxIterations = iterations;
     if (timeout !== undefined) input.timeoutSeconds = timeout;
     setFormError(null);
@@ -99,8 +95,9 @@ export function NewWorkForm() {
   return (
     <form className="new-work" onSubmit={submit} data-testid="new-work-form">
       <p className="workbench-intro">
-        Start work by dispatching a detached Seed. The Stem creates the canonical
-        Phytomer. Greenhouse does not run the verifier.
+        Start work with a configured Substrate and task. Greenhouse does not
+        supply a verifier; the Stem reports execution, verification, publication,
+        and Fruit as separate facts.
       </p>
 
       {dispatch.phase === "rejected" && dispatch.message ? (
@@ -147,56 +144,6 @@ export function NewWorkForm() {
           onChange={(event) => setGoal(event.target.value)}
         />
       </div>
-
-      <fieldset className="verifier-fields" disabled={pending}>
-        <legend>Verification</legend>
-        <div className="field">
-          <label htmlFor="work-executable">Verifier executable</label>
-          <input
-            id="work-executable"
-            value={executable}
-            autoComplete="off"
-            spellCheck={false}
-            onChange={(event) => setExecutable(event.target.value)}
-          />
-        </div>
-        {args.map((arg, index) => (
-          <div className="arg-row" key={index}>
-            <div className="field">
-              <label htmlFor={`work-arg-${index}`}>Argument {index + 1}</label>
-              <input
-                id={`work-arg-${index}`}
-                value={arg}
-                autoComplete="off"
-                spellCheck={false}
-                onChange={(event) => {
-                  const next = [...args];
-                  next[index] = event.target.value;
-                  setArgs(next);
-                }}
-              />
-            </div>
-            <button
-              type="button"
-              className="btn-ghost"
-              aria-label={`Remove argument ${index + 1}`}
-              onClick={() => setArgs(args.filter((_, item) => item !== index))}
-            >
-              Remove
-            </button>
-          </div>
-        ))}
-        <button
-          type="button"
-          className="btn-ghost"
-          onClick={() => setArgs([...args, ""])}
-        >
-          Add argument
-        </button>
-        <span className="hint">
-          Each field is one argv token. Greenhouse does not build a shell command.
-        </span>
-      </fieldset>
 
       <details className="seed-bounds" data-testid="seed-bounds">
         <summary>Advanced Seed bounds</summary>

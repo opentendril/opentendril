@@ -172,29 +172,29 @@ Follow these steps in order. The governed host setup is in
 11. **Enter a meaningful task or goal.** Describe the change or outcome you
     want the Seed to achieve.
 
-12. **Enter verifier argv.** Set the executable and each argument separately.
-    For example, `go`, `test`, and `./...` are three argv entries. Greenhouse
-    does not assemble or run a shell command in the browser.
-
-13. **Start governed work** with the Workbench's **Start work** button. The
+12. **Start governed work** with the Workbench's **Start work** button. The
     Stem dispatches detached Seed work and Greenhouse follows the canonical
-    work context returned by the Stem. The Botanist already holds Botanist
-    authority for this lane. First Greenhouse work requires no Pollinator,
-    Pollen identity, refresh root, access token, token file, DelegationGrant,
-    raw REST orchestration, or MCP.
+    work context returned by the Stem. Normal work sends the Substrate and task
+    without a verifier executable or argv. Advanced Seed bounds may be set
+    separately; Greenhouse does not construct a verification command. The
+    Botanist already holds Botanist authority for this lane. First Greenhouse
+    work requires no Pollinator, Pollen identity, refresh root, access token,
+    token file, DelegationGrant, raw REST orchestration, or MCP.
 
-14. **Observe the work.** Greenhouse presents current Seed and Phytomer state,
-    Sprout activity, verification progress, and structured failures. While
+13. **Observe the work.** Greenhouse presents Seed lifecycle status, execution
+    outcome, verification outcome, iteration count, latest Sprout state, and
+    available verification and failure evidence. `not-requested` is an explicit
+    verification outcome, not a pass or a judgement about the task. While
     supported and still running, use the Workbench continuation control to
     provide more intent for that same work. Watch for its terminal state.
 
-15. **Review the resulting Fruit.** Greenhouse reads the deterministic Fruit
-    inventory and shows the reported repository, branch, commit, and review
-    state when the Stem supplies that provenance. It does not run the verifier
-    in the browser or infer Fruit from branch names or commit text. If the Stem
-    reports no provenance, the UI does not claim Fruit.
+14. **Review the resulting Fruit.** Greenhouse reads the deterministic Fruit
+    inventory and shows the reported repository, branch, commit, publication,
+    and review state when the Stem supplies that evidence. It does not infer
+    Fruit from branch names or commit text. If the Stem reports no Fruit
+    provenance, the UI says so.
 
-16. **Keep the default branch unchanged** until the Botanist separately reviews
+15. **Keep the default branch unchanged** until the Botanist separately reviews
     and accepts/merges the reported Fruit. Greenhouse does not merge Fruit
     automatically.
 
