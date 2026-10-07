@@ -13,26 +13,20 @@ exists to make possible.
 
 ## Current
 
-**A Botanist can use a supported governed OpenTendril installation and Greenhouse as the primary workbench to produce one reviewed Git Fruit, without needing OpenTendril-internal knowledge or separate command-line orchestration for the normal work lifecycle.**
+**A Botanist can let OpenTendril own the complete lifecycle of every Tendril-created workspace, reclaiming terminal workspace state without manual filesystem or Git-worktree cleanup while preserving anything that may still contain reviewable Fruit.**
 
 ## Done when
 
-* Governed installation is reachable from the documented public entrypoint.
-* The security boundary is established before useful work.
-* Required first-use provider, Substrate, Git connection, and other Botanist configuration is explicit and finite.
-* Greenhouse is reachable through the documented installed path.
-* Botanist authentication is understandable without weakening the authority boundary.
-* After setup, the normal governed work lifecycle remains in Greenhouse through task, execution, intervention where required, verification, terminal settlement, and Fruit.
-* Pollinator credentials, DelegationGrants, access-token minting, raw REST calls, and internal identifiers are not required for ordinary first value.
-* Boundary, activity, verification, failures, pending Botanist action, and terminal status remain legible from Stem-owned facts.
-* Successful work exposes repository, Fruit branch, Fruit commit, and verification outcome for Botanist review.
-* The default branch remains unchanged until maintainer review or merge.
-* Browser refresh and supported local restart do not duplicate work.
-* Supported failures identify the failed category and the supported action required next.
-
-This objective does not require public Internet Pollinator ingress, GitHub-native
-Pollinators, automatic merge, removal of administrative CLI authority, a new
-execution engine, or exposure of private Mycorrhizal reasoning.
+- Tendril-owned delegated workspaces and RunWorkspaces have a complete observable lifecycle.
+- Retained workspaces report their ownership, relevant Git state, clean/dirty state, Fruit/review evidence, and deterministic retention reason.
+- Terminal workspace state proven safe to discard is reclaimed automatically.
+- Dirty, ambiguous, unverified, or potentially reviewable work is never destroyed automatically.
+- A Botanist can explicitly abandon retained state through a bounded control-plane action when automatic reclamation is not permitted.
+- Workspace removal, Git worktree metadata, and OpenTendril-owned reference state remain coherent.
+- Reviewable Fruit survives disposal of execution workspace state.
+- Later work does not inherit stale terminal state from unrelated earlier work.
+- No Pollinator receives general workspace deletion authority.
+- Normal recovery requires no direct deletion below .tendril, manual git-worktree surgery, or direct editing of OpenTendril ownership registries.
 
 ---
 
