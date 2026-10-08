@@ -326,6 +326,7 @@ func sproutOperationsWithOneShotHistory(history *historydb.Store, ambientBus *ev
 			orch := newSproutRunOrchestrator(spec, wiring, bus, ambientBus)
 
 			run := openSproutRunRecord(ctx, spec, wiring.Substrate)
+			orch.SproutRunID = run.RunID
 			if err := persistDispatchSproutRun(ctx, history, run); err != nil {
 				return core.SproutRunReport{}, err
 			}

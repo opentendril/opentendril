@@ -21,6 +21,30 @@ func TestParseWorkspaceCommandRequiresExactIdentityAndConfirmation(t *testing.T)
 	}
 }
 
+func TestParseRunWorkspaceCommandsUseExactAllocationIdentity(t *testing.T) {
+	for _, args := range [][]string{
+		{"list"},
+		{"inspect", "--run-id", "allocation-1"},
+		{"reconcile", "--run-id", "allocation-1"},
+		{"abandon", "--run-id", "allocation-1", "--confirm"},
+	} {
+		if _, err := parseWorkspaceCommandArgs(args); err != nil {
+			t.Fatalf("parse %v: %v", args, err)
+		}
+	}
+	for _, args := range [][]string{
+		{"reconcile"},
+		{"inspect", "--run-id", " allocation-1"},
+		{"abandon", "--run-id", "allocation-1"},
+		{"abandon", "--run-id", "allocation-1", "--confirm", "--substrate", "core"},
+		{"list", "--confirm"},
+	} {
+		if _, err := parseWorkspaceCommandArgs(args); err == nil {
+			t.Fatalf("parse %v unexpectedly succeeded", args)
+		}
+	}
+}
+
 func TestWorkspaceCommandRefusesDeclaredPollenBeforeConfigAccess(t *testing.T) {
 	t.Setenv(envPollenCLI, "claude")
 	err := executeWorkspaceCommand(context.Background(), workspaceCommandOptions{
@@ -28,5 +52,15 @@ func TestWorkspaceCommandRefusesDeclaredPollenBeforeConfigAccess(t *testing.T) {
 	})
 	if err == nil || !strings.Contains(err.Error(), "Botanist-only") {
 		t.Fatalf("workspace command error = %v, want Botanist posture refusal before config access", err)
+	}
+}
+
+func TestRunWorkspaceListRefusesDeclaredPollenBeforeHistoryAccess(t *testing.T) {
+	t.Setenv(envPollenCLI, "claude")
+	err := executeWorkspaceCommand(context.Background(), workspaceCommandOptions{
+		operation: "list", dir: "/definitely/not/a/config/path",
+	})
+	if err == nil || !strings.Contains(err.Error(), "Botanist-only") {
+		t.Fatalf("workspace list error = %v, want Botanist posture refusal before state inspection", err)
 	}
 }

@@ -164,6 +164,8 @@ func TestBuildRemoteServeMuxProjectsOnlyPollinatorRoutes(t *testing.T) {
 		{http.MethodPost, "/v1/phytomers"},
 		{http.MethodGet, "/v1/phytomers/phytomer-1"},
 		{http.MethodPost, "/v1/sessions/phytomer-1/continue"},
+		{http.MethodPost, "/v1/workspaces"},
+		{http.MethodDelete, "/v1/workspaces/allocation-1"},
 	}
 	for _, route := range private {
 		t.Run("private "+route.method+" "+route.path, func(t *testing.T) {
@@ -172,6 +174,55 @@ func TestBuildRemoteServeMuxProjectsOnlyPollinatorRoutes(t *testing.T) {
 				t.Fatalf("status = %d, want 404 (%s)", response.Code, response.Body.String())
 			}
 		})
+	}
+}
+
+func TestServeStartupReconcilesOnlyCoreApprovedRunWorkspaces(t *testing.T) {
+	terminal := core.RunWorkspaceAllocation{
+		AllocationRunID: "allocation-terminal", SproutRunID: "history-terminal",
+		StepID: "step-terminal", Repository: "/repo/sample", Path: "/tendril/workspaces/terminal",
+		Branch: "sprout/task-step-terminal", BaseCommit: "base", State: "finalized",
+	}
+	nonterminal := terminal
+	nonterminal.AllocationRunID = "allocation-running"
+	nonterminal.SproutRunID = "history-running"
+	nonterminal.StepID = "step-running"
+	allocations := []core.RunWorkspaceAllocation{terminal, nonterminal}
+	var reconciled []string
+	service := core.NewService(nil).WithRunWorkspace(core.RunWorkspaceOperations{
+		ListAllocations: func(context.Context) ([]core.RunWorkspaceAllocation, error) {
+			return allocations, nil
+		},
+		Inspect: func(_ context.Context, allocation core.RunWorkspaceAllocation) (core.RunWorkspaceEvidence, error) {
+			status := "matured"
+			if allocation.AllocationRunID == nonterminal.AllocationRunID {
+				status = "running"
+			}
+			return core.RunWorkspaceEvidence{
+				Allocation: allocation,
+				History: core.RunWorkspaceHistoryEvidence{
+					State: core.RunWorkspaceHistoryPresent, RunID: allocation.SproutRunID,
+					StepID: allocation.StepID, Status: status,
+				},
+				OwnershipState: core.RunWorkspaceOwnershipMatched,
+				PathState:      core.RunWorkspacePathPresent, PathContained: true,
+				WorktreeState: core.RunWorkspaceWorktreeMatched,
+				CurrentBranch: allocation.Branch, Head: "base", HeadKnown: true,
+				BranchKnown: true, BranchExists: true, BranchHead: "base",
+				UniqueCommitsKnown: true, BaseAncestorKnown: true, BaseIsAncestor: true,
+				CleanKnown: true, Clean: true,
+			}, nil
+		},
+		Reconcile: func(_ context.Context, evidence core.RunWorkspaceEvidence) (core.RunWorkspaceMutation, error) {
+			reconciled = append(reconciled, evidence.Allocation.AllocationRunID)
+			return core.RunWorkspaceMutation{WorkspaceRemoved: true, BranchDeleted: true}, nil
+		},
+	})
+	if err := reconcileServeRunWorkspaces(context.Background(), service); err != nil {
+		t.Fatalf("startup RunWorkspace reconciliation: %v", err)
+	}
+	if len(reconciled) != 1 || reconciled[0] != terminal.AllocationRunID {
+		t.Fatalf("startup reconciled allocations %v, want only terminal %q", reconciled, terminal.AllocationRunID)
 	}
 }
 
