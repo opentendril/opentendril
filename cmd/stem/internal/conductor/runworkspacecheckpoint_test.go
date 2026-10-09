@@ -72,6 +72,59 @@ func TestExecutionCheckpointLedgerRejectsIncompleteRecord(t *testing.T) {
 	}
 }
 
+func TestPrematureManagedCleanupDoesNotRecordExecutionCheckpoint(t *testing.T) {
+	ctx := context.Background()
+	repo, base := prepareRunWorkspaceTest(t)
+	workspace, err := CreateRunWorkspaceWithMetadata(ctx, repo, "premature-cleanup", base, RunWorkspaceMetadata{
+		SproutRunID: "sprout-history-premature",
+	})
+	if err != nil {
+		t.Fatalf("create workspace: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(workspace.Path, "uncommitted.txt"), []byte("still preparing\n"), 0o644); err != nil {
+		t.Fatalf("dirty workspace: %v", err)
+	}
+	err = releaseManagedWorkspace(ctx, workspace, ResolvedCredential{}, false)
+	if err == nil {
+		t.Fatal("dirty early cleanup was reported as success")
+	}
+	allocations, loadErr := LoadRunWorkspaceAllocations()
+	if loadErr != nil || len(allocations) != 1 {
+		t.Fatalf("allocation after premature cleanup = %#v, err %v", allocations, loadErr)
+	}
+	if allocations[0].ExecutionCheckpoint != nil {
+		t.Fatalf("premature cleanup recorded a checkpoint: %#v", allocations[0].ExecutionCheckpoint)
+	}
+	if _, statErr := os.Stat(workspace.Path); statErr != nil {
+		t.Fatalf("early cleanup removed the workspace before execution finished: %v", statErr)
+	}
+}
+
+func TestSettledManagedCleanupRecordsCheckpointBeforeDirtyRetention(t *testing.T) {
+	ctx := context.Background()
+	repo, base := prepareRunWorkspaceTest(t)
+	workspace, err := CreateRunWorkspaceWithMetadata(ctx, repo, "settled-dirty", base, RunWorkspaceMetadata{
+		SproutRunID: "sprout-history-settled",
+	})
+	if err != nil {
+		t.Fatalf("create workspace: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(workspace.Path, "uncommitted.txt"), []byte("after execution\n"), 0o644); err != nil {
+		t.Fatalf("dirty workspace: %v", err)
+	}
+	if err := releaseManagedWorkspace(ctx, workspace, ResolvedCredential{}, true); err == nil {
+		t.Fatal("dirty settled cleanup was reported as success")
+	}
+	allocations, err := LoadRunWorkspaceAllocations()
+	if err != nil || len(allocations) != 1 || allocations[0].ExecutionCheckpoint == nil {
+		t.Fatalf("settled dirty allocation = %#v, err %v", allocations, err)
+	}
+	got := allocations[0].ExecutionCheckpoint
+	if got.State != RunWorkspaceExecutionComplete || got.AllocationRunID != workspace.RunID || got.SproutRunID != workspace.SproutRunID {
+		t.Fatalf("checkpoint = %#v", got)
+	}
+}
+
 func TestCheckpointPersistenceFailureSkipsCleanup(t *testing.T) {
 	ctx := context.Background()
 	repo, base := prepareRunWorkspaceTest(t)
@@ -98,7 +151,7 @@ func TestCheckpointPersistenceFailureSkipsCleanup(t *testing.T) {
 	t.Cleanup(func() {
 		_ = os.RemoveAll(ledgerPath)
 	})
-	err = cleanupManagedWorkspaceAfterCheckpoint(ctx, workspace, ResolvedCredential{})
+	err = releaseManagedWorkspace(ctx, workspace, ResolvedCredential{}, true)
 	if err == nil {
 		t.Fatal("cleanup proceeded after a failed checkpoint save")
 	}

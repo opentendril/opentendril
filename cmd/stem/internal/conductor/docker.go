@@ -649,6 +649,9 @@ func (d *DockerOrchestrator) RunSprout(ctx context.Context, taskPrompt string) (
 	var managedRun bool
 	var managedWorkspace RunWorkspace
 	var managedWorkspaceAllocated bool
+	// Set only after completeRun returns. Teardown before that point still
+	// removes a managed workspace, but it must not record execution completion.
+	var executionSettled bool
 	var generatedState *runWorkspaceGeneratedState
 	var managedCacheStates []runWorkspaceCacheState
 	var isolatedSeedCandidateWorkspace bool
@@ -671,7 +674,7 @@ func (d *DockerOrchestrator) RunSprout(ctx context.Context, taskPrompt string) (
 		}
 		// Terminal publication still happens once, after this teardown
 		// function returns. A failed checkpoint save skips workspace cleanup.
-		if workspaceErr := cleanupManagedWorkspaceAfterCheckpoint(cleanupCtx, managedWorkspace, plan.credential); workspaceErr != nil {
+		if workspaceErr := releaseManagedWorkspace(cleanupCtx, managedWorkspace, plan.credential, executionSettled); workspaceErr != nil {
 			teardownErr = errors.Join(teardownErr, workspaceErr)
 		}
 	}
@@ -1615,6 +1618,7 @@ func (d *DockerOrchestrator) RunSprout(ctx context.Context, taskPrompt string) (
 				runErr := attributeSproutEnding(workCtx, finished.err)
 				detachedReport, detachedChanges, detachedErr := completeRun(finished.result, runErr)
 				releaseWork(nil)
+				executionSettled = true
 				runTeardown()
 				if teardownErr != nil {
 					markFailure(core.FailureStagePostRun, core.DiagnosticCodePostRunFailed)
@@ -1633,6 +1637,7 @@ func (d *DockerOrchestrator) RunSprout(ctx context.Context, taskPrompt string) (
 	}
 
 	report, changes, err = completeRun(turn.result, attributeSproutEnding(workCtx, turn.err))
+	executionSettled = true
 	return report, err
 }
 

@@ -375,15 +375,12 @@ func MarkRunWorkspaceExecutionComplete(allocationRunID, sproutRunID string) erro
 	return fmt.Errorf("finalized RunWorkspace allocation %q is absent", allocationRunID)
 }
 
-// cleanupManagedWorkspaceAfterCheckpoint records execution completion and
-// then tears the workspace down. The checkpoint save is the last step before
-// cleanup. If it fails, the allocation stays and no cleanup is attempted.
-func cleanupManagedWorkspaceAfterCheckpoint(ctx context.Context, workspace RunWorkspace, credential ResolvedCredential) error {
-	// Allocations created without a Sprout history RunID have no execution
-	// identity to checkpoint. Their immediate cleanup stays the in-memory
-	// path. A present RunID must be recorded before cleanup, and a failed
-	// save leaves the workspace in place.
-	if workspace.SproutRunID == "" {
+// releaseManagedWorkspace tears down one managed allocation. The execution
+// checkpoint is written only after completeRun has finished. Earlier cleanup,
+// including generated-state and cache preparation failures, must not create
+// recovery-authorizing evidence.
+func releaseManagedWorkspace(ctx context.Context, workspace RunWorkspace, credential ResolvedCredential, executionSettled bool) error {
+	if !executionSettled || workspace.SproutRunID == "" {
 		return workspace.Cleanup(ctx, credential)
 	}
 	if err := MarkRunWorkspaceExecutionComplete(workspace.RunID, workspace.SproutRunID); err != nil {
