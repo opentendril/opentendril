@@ -15,6 +15,9 @@ func safeRunWorkspaceEvidence() RunWorkspaceEvidence {
 			Repository: "/repo/sample", Path: "/home/botanist/.tendril/run-workspaces/9",
 			Branch: "sprout/task-step-4", BaseCommit: "base-oid", Substrate: "sample",
 			PhytomerID: "phytomer-2", Pollen: "codex", CreatedAt: created, State: "finalized",
+			ExecutionCheckpoint: &RunWorkspaceExecutionCheckpoint{
+				State: RunWorkspaceExecutionComplete, AllocationRunID: "allocation-9", SproutRunID: "history-4",
+			},
 		},
 		History: RunWorkspaceHistoryEvidence{
 			State: RunWorkspaceHistoryPresent, RunID: "history-4", StepID: "step-4",
@@ -35,9 +38,14 @@ func TestClassifyRunWorkspaceRequiresPositiveTerminalEvidence(t *testing.T) {
 		mutate func(*RunWorkspaceEvidence)
 		want   string
 	}{
-		{name: "history missing", mutate: func(e *RunWorkspaceEvidence) { e.History.State = RunWorkspaceHistoryMissing }, want: "history row is missing"},
-		{name: "history unavailable", mutate: func(e *RunWorkspaceEvidence) { e.History.State = RunWorkspaceHistoryUnavailable }, want: "HistoryDB lifecycle evidence is unavailable"},
-		{name: "history nonterminal", mutate: func(e *RunWorkspaceEvidence) { e.History.Status = "running" }, want: "non-terminal"},
+		{name: "checkpoint absent", mutate: func(e *RunWorkspaceEvidence) { e.Allocation.ExecutionCheckpoint = nil }, want: "checkpoint is absent"},
+		{name: "checkpoint incomplete", mutate: func(e *RunWorkspaceEvidence) {
+			e.Allocation.ExecutionCheckpoint.State = "partial"
+		}, want: "checkpoint is incomplete"},
+		{name: "checkpoint identity mismatch", mutate: func(e *RunWorkspaceEvidence) {
+			e.Allocation.ExecutionCheckpoint.SproutRunID = "other-history"
+		}, want: "checkpoint contradicts"},
+		{name: "history malformed", mutate: func(e *RunWorkspaceEvidence) { e.History.State = RunWorkspaceHistoryMalformed }, want: "history evidence is malformed"},
 		{name: "history relation mismatch", mutate: func(e *RunWorkspaceEvidence) { e.History.RunID = "step-4" }, want: "contradicts"},
 		{name: "history session mismatch", mutate: func(e *RunWorkspaceEvidence) { e.History.SessionID = "other-session" }, want: "contradicts"},
 		{name: "missing ownership", mutate: func(e *RunWorkspaceEvidence) { e.OwnershipState = RunWorkspaceOwnershipMissing }, want: "registry is missing"},
@@ -95,6 +103,18 @@ func TestRunWorkspacePendingAllocationIsVisibleButNeedsConfirmedAbandonment(t *t
 	}
 	if !abandoned {
 		t.Fatal("Core did not pass the exact pending allocation to confirmed abandonment")
+	}
+}
+
+func TestClassifyRunWorkspaceRecoversWithoutTerminalHistoryWhenCheckpointMatches(t *testing.T) {
+	for _, state := range []string{RunWorkspaceHistoryMissing, RunWorkspaceHistoryUnavailable, RunWorkspaceHistoryPresent} {
+		evidence := safeRunWorkspaceEvidence()
+		evidence.History.State = state
+		evidence.History.Status = "running"
+		report := ClassifyRunWorkspace(evidence)
+		if !report.AutoReconcileable {
+			t.Fatalf("history %s status %s was retained: %s", state, evidence.History.Status, report.Reason)
+		}
 	}
 }
 

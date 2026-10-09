@@ -159,18 +159,22 @@ tendril workspace abandon --run-id <allocationRunID> --confirm
 ```
 
 Allocation RunIDs identify the workspace allocation and are distinct from the
-Sprout history RunID. Startup reconciliation removes a workspace automatically
-only when its exact history relation is terminal, its ownership and linked
-worktree evidence match, and its files are clean. A committed Fruit branch is
-preserved when its workspace is removed. `reconcile` applies the same checks to
-one allocation. `abandon` requires explicit confirmation and removes that
-allocation's workspace even when it contains local changes; a branch with
-committed Fruit remains available for review. Missing or contradictory identity,
-ownership, filesystem, or Git identity evidence prevents either operation.
-Automatic reconciliation also retains allocations with missing or unavailable
-history. Confirmed `abandon` does not infer a missing history relation, but lets
-the Botanist discard the exact workspace when its allocation and physical
-ownership evidence are still valid; contradictory history prevents it.
+Sprout history RunID. After execution and Fruit settlement, and immediately
+before workspace teardown, the Stem records an execution-complete checkpoint
+on that allocation. The checkpoint is not the Sprout's final outcome. Startup
+reconciliation and `reconcile` remove a workspace automatically only when that
+checkpoint matches the allocation and live ownership, containment, linked
+worktree, base, and cleanliness evidence are positive. History that is still
+running, missing, or unavailable does not block that recovery. A missing,
+incomplete, or mismatched checkpoint does. A committed Fruit branch is
+preserved when its workspace is removed. `abandon` requires explicit
+confirmation and removes that allocation's workspace even when it contains
+local changes; a branch with committed Fruit remains available for review.
+Missing or contradictory identity, ownership, filesystem, or Git identity
+evidence prevents either operation. Confirmed `abandon` does not infer a
+missing history relation, but lets the Botanist discard the exact workspace
+when its allocation and physical ownership evidence are still valid;
+contradictory history prevents it.
 
 These commands are local Botanist controls, not Pollinator capabilities or
 REST/MCP routes. The existing Pollen/Substrate `inspect` and confirmed

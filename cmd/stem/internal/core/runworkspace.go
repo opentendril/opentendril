@@ -31,27 +31,41 @@ const (
 	RunWorkspaceWorktreeAbsent       = "absent"
 	RunWorkspaceWorktreeInconsistent = "inconsistent"
 	RunWorkspaceWorktreeUnknown      = "unknown"
+
+	// RunWorkspaceExecutionComplete is the only recovery checkpoint state.
+	// It is not a Sprout outcome and not a HistoryDB status.
+	RunWorkspaceExecutionComplete = "execution-complete"
 )
+
+// RunWorkspaceExecutionCheckpoint is the allocation-ledger fact that execution
+// and Fruit settlement finished for one exact identity. It carries no outcome,
+// history status, or cleanliness claim.
+type RunWorkspaceExecutionCheckpoint struct {
+	State           string `json:"state,omitempty"`
+	AllocationRunID string `json:"allocationRunId,omitempty"`
+	SproutRunID     string `json:"sproutRunId,omitempty"`
+}
 
 // RunWorkspaceAllocation is a transport-free copy of the Conductor's durable
 // allocation identity. AllocationRunID and SproutRunID are distinct fields.
 type RunWorkspaceAllocation struct {
-	AllocationRunID         string    `json:"allocationRunId,omitempty"`
-	SproutRunID             string    `json:"sproutRunId,omitempty"`
-	StepID                  string    `json:"stepId,omitempty"`
-	Repository              string    `json:"repository"`
-	Path                    string    `json:"path,omitempty"`
-	Branch                  string    `json:"branch"`
-	BaseCommit              string    `json:"baseCommit,omitempty"`
-	Substrate               string    `json:"substrate,omitempty"`
-	PhytomerID              string    `json:"phytomerId,omitempty"`
-	Pollen                  string    `json:"pollen,omitempty"`
-	CreatedAt               time.Time `json:"createdAt,omitempty"`
-	State                   string    `json:"state"`
-	WorkspaceRemovalPending bool      `json:"workspaceRemovalPending,omitempty"`
-	WorkspaceRemoved        bool      `json:"workspaceRemoved,omitempty"`
-	Historical              bool      `json:"historical,omitempty"`
-	OwnedRefRunID           string    `json:"ownedRefRunId,omitempty"`
+	AllocationRunID         string                           `json:"allocationRunId,omitempty"`
+	SproutRunID             string                           `json:"sproutRunId,omitempty"`
+	StepID                  string                           `json:"stepId,omitempty"`
+	Repository              string                           `json:"repository"`
+	Path                    string                           `json:"path,omitempty"`
+	Branch                  string                           `json:"branch"`
+	BaseCommit              string                           `json:"baseCommit,omitempty"`
+	Substrate               string                           `json:"substrate,omitempty"`
+	PhytomerID              string                           `json:"phytomerId,omitempty"`
+	Pollen                  string                           `json:"pollen,omitempty"`
+	CreatedAt               time.Time                        `json:"createdAt,omitempty"`
+	State                   string                           `json:"state"`
+	WorkspaceRemovalPending bool                             `json:"workspaceRemovalPending,omitempty"`
+	WorkspaceRemoved        bool                             `json:"workspaceRemoved,omitempty"`
+	Historical              bool                             `json:"historical,omitempty"`
+	OwnedRefRunID           string                           `json:"ownedRefRunId,omitempty"`
+	ExecutionCheckpoint     *RunWorkspaceExecutionCheckpoint `json:"executionCheckpoint,omitempty"`
 }
 
 // RunWorkspaceHistoryEvidence is the exact HistoryDB row selected by the
@@ -347,8 +361,10 @@ func (s *Service) inspectRunWorkspace(ctx context.Context, allocation RunWorkspa
 }
 
 // ClassifyRunWorkspace is the deterministic lifecycle policy shared by
-// startup reconciliation and Botanist commands. It authorizes only positively
-// proven terminal, clean, exact allocations.
+// startup reconciliation and Botanist commands. Automatic recovery requires
+// an execution-complete checkpoint plus positively proven ownership,
+// containment, worktree, base, and cleanliness evidence. History that is
+// still running, missing, or unavailable does not supply or block that proof.
 func ClassifyRunWorkspace(evidence RunWorkspaceEvidence) RunWorkspaceReport {
 	a := evidence.Allocation
 	r := RunWorkspaceReport{
@@ -386,25 +402,20 @@ func ClassifyRunWorkspace(evidence RunWorkspaceEvidence) RunWorkspaceReport {
 		r.Reason = "allocation has no explicit Sprout history RunID; lifecycle state is unknown and it is retained"
 		return r
 	}
-	if evidence.History.State != RunWorkspaceHistoryPresent {
-		switch evidence.History.State {
-		case RunWorkspaceHistoryMissing:
-			r.Reason = "the explicitly linked Sprout history row is missing; lifecycle state is unknown and it is retained"
-		case RunWorkspaceHistoryMalformed:
-			r.Reason = "the explicitly linked Sprout history evidence is malformed; it is retained"
-		default:
-			r.Reason = "HistoryDB lifecycle evidence is unavailable; the RunWorkspace is retained"
+	if reason, ok := runWorkspaceExecutionCheckpointReason(a); !ok {
+		r.Reason = reason
+		return r
+	}
+	switch evidence.History.State {
+	case RunWorkspaceHistoryPresent:
+		if !runWorkspaceHistoryMatchesAllocation(a, evidence.History) {
+			r.HistoryState = "contradictory"
+			r.Reason = "Sprout history contradicts the durable allocation relation; it is retained"
+			return r
 		}
-		return r
-	}
-	if !runWorkspaceHistoryMatchesAllocation(a, evidence.History) {
-		r.HistoryState = "contradictory"
-		r.Reason = "Sprout history contradicts the durable allocation relation; it is retained"
-		return r
-	}
-	r.HistoryState = "matched"
-	if evidence.History.Status != "matured" && evidence.History.Status != "withered" {
-		r.Reason = "Sprout lifecycle is non-terminal or unknown; the RunWorkspace is retained"
+		r.HistoryState = "matched"
+	case RunWorkspaceHistoryMalformed:
+		r.Reason = "the explicitly linked Sprout history evidence is malformed; it is retained"
 		return r
 	}
 	if evidence.OwnershipState != RunWorkspaceOwnershipMatched {
@@ -478,6 +489,21 @@ func ClassifyRunWorkspace(evidence RunWorkspaceEvidence) RunWorkspaceReport {
 		r.Reason = "RunWorkspace is clean and terminal; the worktree may be removed while its committed Fruit branch is preserved"
 	}
 	return r
+}
+
+func runWorkspaceExecutionCheckpointReason(allocation RunWorkspaceAllocation) (string, bool) {
+	checkpoint := allocation.ExecutionCheckpoint
+	if checkpoint == nil {
+		return "execution-complete checkpoint is absent; automatic recovery is refused", false
+	}
+	if checkpoint.State != RunWorkspaceExecutionComplete ||
+		checkpoint.AllocationRunID == "" || checkpoint.SproutRunID == "" {
+		return "execution-complete checkpoint is incomplete; automatic recovery is refused", false
+	}
+	if checkpoint.AllocationRunID != allocation.AllocationRunID || checkpoint.SproutRunID != allocation.SproutRunID {
+		return "execution-complete checkpoint contradicts the allocation identity; it is retained", false
+	}
+	return "", true
 }
 
 func runWorkspaceHistoryMatchesAllocation(allocation RunWorkspaceAllocation, history RunWorkspaceHistoryEvidence) bool {

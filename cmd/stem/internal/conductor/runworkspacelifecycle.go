@@ -22,6 +22,20 @@ const (
 	RunWorkspaceAllocationFinalized RunWorkspaceAllocationState = "finalized"
 )
 
+// RunWorkspaceExecutionComplete is the only checkpoint state. It records that
+// execution and Fruit settlement finished. It is not a Sprout outcome or a
+// HistoryDB status.
+const RunWorkspaceExecutionComplete = "execution-complete"
+
+// RunWorkspaceExecutionCheckpoint is optional ledger evidence written after
+// Fruit settlement and before workspace teardown. Absence means recovery is
+// not proven. It carries no outcome, history status, or cleanliness claim.
+type RunWorkspaceExecutionCheckpoint struct {
+	State           string `json:"state"`
+	AllocationRunID string `json:"allocationRunId"`
+	SproutRunID     string `json:"sproutRunId"`
+}
+
 // RunWorkspaceMetadata records the explicit relation and caller facts known
 // when a new RunWorkspace is allocated. SproutRunID is deliberately separate
 // from the allocation RunID.
@@ -36,22 +50,23 @@ type RunWorkspaceMetadata struct {
 // AllocationRunID names this filesystem/Git allocation. SproutRunID is an
 // independently recorded HistoryDB key and is never reconstructed later.
 type RunWorkspaceAllocation struct {
-	AllocationRunID         string                      `json:"allocationRunId"`
-	SproutRunID             string                      `json:"sproutRunId,omitempty"`
-	StepID                  string                      `json:"stepId"`
-	Repository              string                      `json:"repository"`
-	Path                    string                      `json:"path"`
-	Branch                  string                      `json:"branch"`
-	BaseCommit              string                      `json:"baseCommit"`
-	Substrate               string                      `json:"substrate,omitempty"`
-	PhytomerID              string                      `json:"phytomerId,omitempty"`
-	Pollen                  string                      `json:"pollen,omitempty"`
-	CreatedAt               time.Time                   `json:"createdAt"`
-	State                   RunWorkspaceAllocationState `json:"state"`
-	WorkspaceRemovalPending bool                        `json:"workspaceRemovalPending,omitempty"`
-	WorkspaceRemoved        bool                        `json:"workspaceRemoved,omitempty"`
-	Historical              bool                        `json:"historical,omitempty"`
-	OwnedRefRunID           string                      `json:"ownedRefRunId,omitempty"`
+	AllocationRunID         string                           `json:"allocationRunId"`
+	SproutRunID             string                           `json:"sproutRunId,omitempty"`
+	StepID                  string                           `json:"stepId"`
+	Repository              string                           `json:"repository"`
+	Path                    string                           `json:"path"`
+	Branch                  string                           `json:"branch"`
+	BaseCommit              string                           `json:"baseCommit"`
+	Substrate               string                           `json:"substrate,omitempty"`
+	PhytomerID              string                           `json:"phytomerId,omitempty"`
+	Pollen                  string                           `json:"pollen,omitempty"`
+	CreatedAt               time.Time                        `json:"createdAt"`
+	State                   RunWorkspaceAllocationState      `json:"state"`
+	WorkspaceRemovalPending bool                             `json:"workspaceRemovalPending,omitempty"`
+	WorkspaceRemoved        bool                             `json:"workspaceRemoved,omitempty"`
+	Historical              bool                             `json:"historical,omitempty"`
+	OwnedRefRunID           string                           `json:"ownedRefRunId,omitempty"`
+	ExecutionCheckpoint     *RunWorkspaceExecutionCheckpoint `json:"executionCheckpoint,omitempty"`
 }
 
 type runWorkspaceAllocationLedger struct {
@@ -103,8 +118,36 @@ func loadRunWorkspaceAllocationsLocked() ([]RunWorkspaceAllocation, error) {
 			return nil, fmt.Errorf("RunWorkspace allocation ledger repeats repository branch %q", allocation.Branch)
 		}
 		seenBranches[branchKey] = struct{}{}
+		if err := executionCheckpointLedgerError(allocation); err != nil {
+			return nil, err
+		}
 	}
 	return ledger.Allocations, nil
+}
+
+func executionCheckpointLedgerError(allocation RunWorkspaceAllocation) error {
+	checkpoint := allocation.ExecutionCheckpoint
+	if checkpoint == nil {
+		return nil
+	}
+	if allocation.State != RunWorkspaceAllocationFinalized ||
+		checkpoint.State != RunWorkspaceExecutionComplete ||
+		checkpoint.AllocationRunID == "" ||
+		checkpoint.AllocationRunID != allocation.AllocationRunID ||
+		checkpoint.SproutRunID == "" ||
+		checkpoint.SproutRunID != allocation.SproutRunID {
+		return fmt.Errorf("RunWorkspace allocation %q has an incomplete or mismatched execution checkpoint", allocation.AllocationRunID)
+	}
+	return nil
+}
+
+func sameExecutionCheckpoint(first, second *RunWorkspaceExecutionCheckpoint) bool {
+	if first == nil || second == nil {
+		return first == nil && second == nil
+	}
+	return first.State == second.State &&
+		first.AllocationRunID == second.AllocationRunID &&
+		first.SproutRunID == second.SproutRunID
 }
 
 func saveRunWorkspaceAllocationsLocked(allocations []RunWorkspaceAllocation) error {
@@ -286,7 +329,67 @@ func sameRunWorkspaceAllocation(first, second RunWorkspaceAllocation) bool {
 		first.Pollen == second.Pollen &&
 		first.CreatedAt.Equal(second.CreatedAt) &&
 		first.Historical == second.Historical &&
-		first.OwnedRefRunID == second.OwnedRefRunID
+		first.OwnedRefRunID == second.OwnedRefRunID &&
+		sameExecutionCheckpoint(first.ExecutionCheckpoint, second.ExecutionCheckpoint)
+}
+
+// MarkRunWorkspaceExecutionComplete durably records that execution and Fruit
+// settlement finished for one exact finalized allocation. A failed save leaves
+// the previous ledger in place and authorizes no cleanup.
+func MarkRunWorkspaceExecutionComplete(allocationRunID, sproutRunID string) error {
+	if allocationRunID == "" || allocationRunID != strings.TrimSpace(allocationRunID) ||
+		sproutRunID == "" || sproutRunID != strings.TrimSpace(sproutRunID) {
+		return fmt.Errorf("execution-complete checkpoint requires exact allocation and Sprout history RunIDs")
+	}
+	runWorkspaceAllocationsMu.Lock()
+	defer runWorkspaceAllocationsMu.Unlock()
+	allocations, err := loadRunWorkspaceAllocationsLocked()
+	if err != nil {
+		return err
+	}
+	for index := range allocations {
+		if allocations[index].AllocationRunID != allocationRunID {
+			continue
+		}
+		allocation := allocations[index]
+		if allocation.State != RunWorkspaceAllocationFinalized || allocation.SproutRunID != sproutRunID {
+			return fmt.Errorf("execution-complete checkpoint does not match finalized allocation %q", allocationRunID)
+		}
+		wanted := &RunWorkspaceExecutionCheckpoint{
+			State:           RunWorkspaceExecutionComplete,
+			AllocationRunID: allocationRunID,
+			SproutRunID:     sproutRunID,
+		}
+		if allocation.ExecutionCheckpoint != nil {
+			if sameExecutionCheckpoint(allocation.ExecutionCheckpoint, wanted) {
+				return nil
+			}
+			return fmt.Errorf("execution-complete checkpoint for allocation %q is already contradictory", allocationRunID)
+		}
+		allocations[index].ExecutionCheckpoint = wanted
+		if err := saveRunWorkspaceAllocationsLocked(allocations); err != nil {
+			return fmt.Errorf("persist execution-complete checkpoint for allocation %q: %w", allocationRunID, err)
+		}
+		return nil
+	}
+	return fmt.Errorf("finalized RunWorkspace allocation %q is absent", allocationRunID)
+}
+
+// cleanupManagedWorkspaceAfterCheckpoint records execution completion and
+// then tears the workspace down. The checkpoint save is the last step before
+// cleanup. If it fails, the allocation stays and no cleanup is attempted.
+func cleanupManagedWorkspaceAfterCheckpoint(ctx context.Context, workspace RunWorkspace, credential ResolvedCredential) error {
+	// Allocations created without a Sprout history RunID have no execution
+	// identity to checkpoint. Their immediate cleanup stays the in-memory
+	// path. A present RunID must be recorded before cleanup, and a failed
+	// save leaves the workspace in place.
+	if workspace.SproutRunID == "" {
+		return workspace.Cleanup(ctx, credential)
+	}
+	if err := MarkRunWorkspaceExecutionComplete(workspace.RunID, workspace.SproutRunID); err != nil {
+		return err
+	}
+	return workspace.Cleanup(ctx, credential)
 }
 
 func LoadRunWorkspaceAllocations() ([]RunWorkspaceAllocation, error) {

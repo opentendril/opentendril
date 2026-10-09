@@ -97,6 +97,16 @@ func toCoreRunWorkspaceAllocation(allocation conductor.RunWorkspaceAllocation) c
 		State: string(allocation.State), WorkspaceRemovalPending: allocation.WorkspaceRemovalPending,
 		WorkspaceRemoved: allocation.WorkspaceRemoved,
 		Historical:       allocation.Historical, OwnedRefRunID: allocation.OwnedRefRunID,
+		ExecutionCheckpoint: executionCheckpointToCore(allocation.ExecutionCheckpoint),
+	}
+}
+
+func executionCheckpointToCore(checkpoint *conductor.RunWorkspaceExecutionCheckpoint) *core.RunWorkspaceExecutionCheckpoint {
+	if checkpoint == nil {
+		return nil
+	}
+	return &core.RunWorkspaceExecutionCheckpoint{
+		State: checkpoint.State, AllocationRunID: checkpoint.AllocationRunID, SproutRunID: checkpoint.SproutRunID,
 	}
 }
 
@@ -109,7 +119,17 @@ func toConductorRunWorkspaceAllocation(allocation core.RunWorkspaceAllocation) c
 		State:                   conductor.RunWorkspaceAllocationState(allocation.State),
 		WorkspaceRemovalPending: allocation.WorkspaceRemovalPending,
 		WorkspaceRemoved:        allocation.WorkspaceRemoved, Historical: allocation.Historical,
-		OwnedRefRunID: allocation.OwnedRefRunID,
+		OwnedRefRunID:       allocation.OwnedRefRunID,
+		ExecutionCheckpoint: executionCheckpointToConductor(allocation.ExecutionCheckpoint),
+	}
+}
+
+func executionCheckpointToConductor(checkpoint *core.RunWorkspaceExecutionCheckpoint) *conductor.RunWorkspaceExecutionCheckpoint {
+	if checkpoint == nil {
+		return nil
+	}
+	return &conductor.RunWorkspaceExecutionCheckpoint{
+		State: checkpoint.State, AllocationRunID: checkpoint.AllocationRunID, SproutRunID: checkpoint.SproutRunID,
 	}
 }
 

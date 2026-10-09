@@ -182,11 +182,15 @@ func TestServeStartupReconcilesOnlyCoreApprovedRunWorkspaces(t *testing.T) {
 		AllocationRunID: "allocation-terminal", SproutRunID: "history-terminal",
 		StepID: "step-terminal", Repository: "/repo/sample", Path: "/tendril/workspaces/terminal",
 		Branch: "sprout/task-step-terminal", BaseCommit: "base", State: "finalized",
+		ExecutionCheckpoint: &core.RunWorkspaceExecutionCheckpoint{
+			State: core.RunWorkspaceExecutionComplete, AllocationRunID: "allocation-terminal", SproutRunID: "history-terminal",
+		},
 	}
 	nonterminal := terminal
 	nonterminal.AllocationRunID = "allocation-running"
 	nonterminal.SproutRunID = "history-running"
 	nonterminal.StepID = "step-running"
+	nonterminal.ExecutionCheckpoint = nil
 	allocations := []core.RunWorkspaceAllocation{terminal, nonterminal}
 	var reconciled []string
 	service := core.NewService(nil).WithRunWorkspace(core.RunWorkspaceOperations{
@@ -194,15 +198,11 @@ func TestServeStartupReconcilesOnlyCoreApprovedRunWorkspaces(t *testing.T) {
 			return allocations, nil
 		},
 		Inspect: func(_ context.Context, allocation core.RunWorkspaceAllocation) (core.RunWorkspaceEvidence, error) {
-			status := "matured"
-			if allocation.AllocationRunID == nonterminal.AllocationRunID {
-				status = "running"
-			}
 			return core.RunWorkspaceEvidence{
 				Allocation: allocation,
 				History: core.RunWorkspaceHistoryEvidence{
 					State: core.RunWorkspaceHistoryPresent, RunID: allocation.SproutRunID,
-					StepID: allocation.StepID, Status: status,
+					StepID: allocation.StepID, Status: "running",
 				},
 				OwnershipState: core.RunWorkspaceOwnershipMatched,
 				PathState:      core.RunWorkspacePathPresent, PathContained: true,

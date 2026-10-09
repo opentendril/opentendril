@@ -669,7 +669,9 @@ func (d *DockerOrchestrator) RunSprout(ctx context.Context, taskPrompt string) (
 				return
 			}
 		}
-		if workspaceErr := managedWorkspace.Cleanup(cleanupCtx, plan.credential); workspaceErr != nil {
+		// Terminal publication still happens once, after this teardown
+		// function returns. A failed checkpoint save skips workspace cleanup.
+		if workspaceErr := cleanupManagedWorkspaceAfterCheckpoint(cleanupCtx, managedWorkspace, plan.credential); workspaceErr != nil {
 			teardownErr = errors.Join(teardownErr, workspaceErr)
 		}
 	}
