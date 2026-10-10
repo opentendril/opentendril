@@ -9,7 +9,7 @@
   },
   "dependencies": {
     "execa": "^9.5.2",
-    "simple-git": "^3.27.0"
+    "simple-git": "^4.0.1"
   },
   "devDependencies": {
     "@types/node": "^22.15.0",
