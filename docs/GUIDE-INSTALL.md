@@ -147,6 +147,39 @@ clone. It gets its own, and **the remote is the only thing the two share**.
 > - Each managed run that produces committed reviewable Fruit retains/publishes its own `sprout/task-<stepID>` Fruit.
 > - The Botanist reviews each Fruit separately.
 
+### Inspecting and reconciling RunWorkspaces
+
+The local Botanist CLI can inspect durable managed RunWorkspace allocations:
+
+```sh
+tendril workspace list
+tendril workspace inspect --run-id <allocationRunID>
+tendril workspace reconcile --run-id <allocationRunID>
+tendril workspace abandon --run-id <allocationRunID> --confirm
+```
+
+Allocation RunIDs identify the workspace allocation and are distinct from the
+Sprout history RunID. After execution and Fruit settlement, and immediately
+before workspace teardown, the Stem records an execution-complete checkpoint
+on that allocation. The checkpoint is not the Sprout's final outcome. Startup
+reconciliation and `reconcile` remove a workspace automatically only when that
+checkpoint matches the allocation and live ownership, containment, linked
+worktree, base, and cleanliness evidence are positive. History that is still
+running, missing, or unavailable does not block that recovery. A missing,
+incomplete, or mismatched checkpoint does. A committed Fruit branch is
+preserved when its workspace is removed. `abandon` requires explicit
+confirmation and removes that allocation's workspace even when it contains
+local changes; a branch with committed Fruit remains available for review.
+Missing or contradictory identity, ownership, filesystem, or Git identity
+evidence prevents either operation. Confirmed `abandon` does not infer a
+missing history relation, but lets the Botanist discard the exact workspace
+when its allocation and physical ownership evidence are still valid;
+contradictory history prevents it.
+
+These commands are local Botanist controls, not Pollinator capabilities or
+REST/MCP routes. The existing Pollen/Substrate `inspect` and confirmed
+`abandon` commands continue to operate on delegated workspaces.
+
 The boundary and the workflow are the same mechanism here - nothing needs to be
 shared between the accounts, because everything already travels through the
 remote.

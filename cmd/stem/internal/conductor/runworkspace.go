@@ -10,7 +10,10 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"time"
 )
+
+type runWorkspaceMetadataContextKey struct{}
 
 // RunWorkspace is the mutable filesystem state for one Sprout run. Its
 // identity is the backing repository plus StepID; it deliberately has no
@@ -30,6 +33,21 @@ type RunWorkspace struct {
 	// RunID distinguishes this allocation from a later run that reuses the same
 	// step-scoped branch after this workspace is reclaimed.
 	RunID string
+	// SproutRunID is the explicit HistoryDB key associated with this allocation.
+	// It is intentionally distinct from RunID, which is the allocation identity.
+	SproutRunID string
+}
+
+// CreateRunWorkspaceWithMetadata records the available lifecycle relation
+// before Git creates the linked worktree. Callers that do not have a durable
+// Sprout history row may keep using CreateRunWorkspace; their relation remains
+// unknown rather than being inferred from StepID.
+func CreateRunWorkspaceWithMetadata(ctx context.Context, repository, stepID, startRevision string, metadata RunWorkspaceMetadata) (RunWorkspace, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	ctx = context.WithValue(ctx, runWorkspaceMetadataContextKey{}, metadata)
+	return createRunWorkspaceFn(ctx, repository, stepID, startRevision)
 }
 
 // ReconcilePublishedFruit synchronizes the local Tendril-owned run workspace to
@@ -176,6 +194,10 @@ func resolvedRunWorkspaceRoot() (string, error) {
 // is required and is resolved to a commit before branch/worktree creation; no
 // implicit HEAD or default-branch choice is made here.
 func CreateRunWorkspace(ctx context.Context, repository, stepID, startRevision string) (RunWorkspace, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	metadata, _ := ctx.Value(runWorkspaceMetadataContextKey{}).(RunWorkspaceMetadata)
 	base, err := absoluteRunWorkspaceRepository(ctx, repository)
 	if err != nil {
 		return RunWorkspace{}, err
@@ -221,6 +243,17 @@ func CreateRunWorkspace(ctx context.Context, repository, stepID, startRevision s
 	unlockGit := lockRunWorkspaceGit(base)
 	defer unlockGit()
 
+	allocations, err := LoadRunWorkspaceAllocations()
+	if err != nil {
+		return RunWorkspace{}, fmt.Errorf("read RunWorkspace allocations before reuse: %w", err)
+	}
+	for _, allocation := range allocations {
+		if !allocation.Historical && filepath.Clean(allocation.Repository) == filepath.Clean(base) &&
+			(allocation.Branch == branch || filepath.Clean(allocation.Path) == filepath.Clean(path)) {
+			return RunWorkspace{}, fmt.Errorf("RunWorkspace allocation %q is still retained; reconcile or abandon it before reusing its branch", allocation.AllocationRunID)
+		}
+	}
+
 	if _, err := os.Lstat(path); err == nil {
 		return RunWorkspace{}, fmt.Errorf("run workspace path %q already exists", path)
 	} else if !os.IsNotExist(err) {
@@ -259,39 +292,68 @@ func CreateRunWorkspace(ctx context.Context, repository, stepID, startRevision s
 		RunID:      runID,
 		Pending:    true,
 	}
-	// Reserve ownership before Git mutation. Pending protects this allocation
-	// window, and rollback/retry reconciles the owned state where it is safe to
-	// do so. Cross-process and crash hardening remain outside this slice.
-	if err := RegisterOwnedRef(owned); err != nil {
-		return RunWorkspace{}, fmt.Errorf("register ownership for run workspace %q: %w", branch, err)
+	allocation := RunWorkspaceAllocation{
+		AllocationRunID: runID,
+		SproutRunID:     strings.TrimSpace(metadata.SproutRunID),
+		StepID:          step,
+		Repository:      base,
+		Path:            path,
+		Branch:          branch,
+		BaseCommit:      resolvedCommit,
+		Substrate:       strings.TrimSpace(metadata.Substrate),
+		PhytomerID:      strings.TrimSpace(metadata.PhytomerID),
+		Pollen:          strings.TrimSpace(metadata.Pollen),
+		CreatedAt:       time.Now().UTC(),
+		State:           RunWorkspaceAllocationPending,
+	}
+	if err := ReserveRunWorkspaceAllocation(allocation); err != nil {
+		return RunWorkspace{}, fmt.Errorf("reserve durable identity for run workspace %q: %w", branch, err)
+	}
+	// Both durable allocation identity and exact pending ownership precede Git
+	// worktree mutation. A failed reservation cannot authorize recovery.
+	if err := reserveRunWorkspaceOwnedRef(owned); err != nil {
+		_ = RetireRunWorkspaceAllocation(allocation)
+		return RunWorkspace{}, fmt.Errorf("reserve ownership for run workspace %q: %w", branch, err)
 	}
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
-		_ = forgetRunWorkspaceOwnedRef(base, branch, runID)
+		_ = forgetRunWorkspaceOwnedRef(base, branch, resolvedCommit, runID)
+		_ = RetireRunWorkspaceAllocation(allocation)
 		return RunWorkspace{}, fmt.Errorf("create run workspace parent: %w", err)
 	}
 	if _, err := runGitCommand(ctx, base, "worktree", "add", "-b", branch, path, resolvedCommit); err != nil {
-		rollbackErr := rollbackRunWorkspaceAllocation(ctx, owned, path)
+		rollbackErr := rollbackRunWorkspaceAllocation(ctx, owned, path, allocation)
 		if rollbackErr != nil {
 			return RunWorkspace{}, fmt.Errorf("create run workspace %q: %v; rollback also failed: %w", branch, err, rollbackErr)
 		}
+		_ = RetireRunWorkspaceAllocation(allocation)
 		return RunWorkspace{}, fmt.Errorf("create run workspace %q: %w", branch, err)
 	}
 	owned.Pending = false
-	if err := RegisterOwnedRef(owned); err != nil {
-		rollbackErr := rollbackRunWorkspaceAllocation(ctx, owned, path)
+	if err := finalizeRunWorkspaceOwnedRef(owned); err != nil {
+		rollbackErr := rollbackRunWorkspaceAllocation(ctx, owned, path, allocation)
 		if rollbackErr != nil {
 			return RunWorkspace{}, fmt.Errorf("finalize ownership for run workspace %q: %v; rollback also failed: %w", branch, err, rollbackErr)
 		}
+		_ = RetireRunWorkspaceAllocation(allocation)
 		return RunWorkspace{}, fmt.Errorf("finalize ownership for run workspace %q: %w", branch, err)
+	}
+	if err := finalizeRunWorkspaceAllocation(allocation); err != nil {
+		rollbackErr := rollbackRunWorkspaceAllocation(ctx, owned, path, allocation)
+		if rollbackErr != nil {
+			return RunWorkspace{}, fmt.Errorf("finalize durable identity for run workspace %q: %v; rollback also failed: %w", branch, err, rollbackErr)
+		}
+		_ = RetireRunWorkspaceAllocation(allocation)
+		return RunWorkspace{}, fmt.Errorf("finalize durable identity for run workspace %q: %w", branch, err)
 	}
 
 	return RunWorkspace{
-		Repository: base,
-		Path:       path,
-		Branch:     branch,
-		StepID:     step,
-		BaseCommit: resolvedCommit,
-		RunID:      runID,
+		Repository:  base,
+		Path:        path,
+		Branch:      branch,
+		StepID:      step,
+		BaseCommit:  resolvedCommit,
+		RunID:       runID,
+		SproutRunID: allocation.SproutRunID,
 	}, nil
 }
 
@@ -325,7 +387,7 @@ func (workspace RunWorkspace) Cleanup(ctx context.Context, _ ResolvedCredential)
 	if !ownedOK {
 		branchExists := runWorkspaceBranchExists(ctx, base, branch)
 		if !pathExists && !branchExists {
-			return nil
+			return retireRunWorkspaceAllocationForHandle(workspace)
 		}
 		return fmt.Errorf("run workspace %q is not recorded as owned by this run", branch)
 	}
@@ -348,6 +410,11 @@ func (workspace RunWorkspace) Cleanup(ctx context.Context, _ ResolvedCredential)
 		if status != "" {
 			return fmt.Errorf("refusing to remove run workspace %q with uncommitted changes", path)
 		}
+	}
+	if err := markRunWorkspaceRemovalPendingForHandle(workspace); err != nil {
+		return fmt.Errorf("record RunWorkspace teardown intent: %w", err)
+	}
+	if pathExists {
 		if _, err := runGitCommand(ctx, base, "worktree", "remove", path); err != nil {
 			return fmt.Errorf("remove run workspace %q: %w", path, err)
 		}
@@ -356,22 +423,25 @@ func (workspace RunWorkspace) Cleanup(ctx context.Context, _ ResolvedCredential)
 			return fmt.Errorf("remove stale run workspace metadata %q: %w", path, err)
 		}
 	}
+	if err := markRunWorkspaceRemovedForHandle(workspace); err != nil {
+		return fmt.Errorf("record completed RunWorkspace teardown: %w", err)
+	}
 
 	if !runWorkspaceBranchExists(ctx, base, branch) {
 		_ = ForgetOwnedRef(base, branch)
-		return nil
+		return retireRunWorkspaceAllocationForHandle(workspace)
 	}
 	// Run-workspace teardown is intentionally narrower than general owned-ref
 	// reclamation: committed Fruit is the run's output and must remain even if
 	// a forge could prove its pull request merged.
 	outcome := ReclaimOwnedRefIfNoWork(ctx, base, owned)
 	if outcome.Reclaimed {
-		return nil
+		return retireRunWorkspaceAllocationForHandle(workspace)
 	}
 	if strings.HasPrefix(outcome.Reason, "reclamation failed:") || strings.Contains(outcome.Reason, "checked out") {
 		return fmt.Errorf("cleanup run workspace branch %q: %s", branch, outcome.Reason)
 	}
-	return nil
+	return retireRunWorkspaceAllocationForHandle(workspace)
 }
 
 func absoluteRunWorkspaceRepository(ctx context.Context, repository string) (string, error) {
@@ -459,15 +529,14 @@ func runWorkspaceOwnedRef(repository, branch, base string) (OwnedRef, bool) {
 	return OwnedRef{}, false
 }
 
-func forgetRunWorkspaceOwnedRef(repository, branch, runID string) error {
-	ref, ok := runWorkspaceOwnedRef(repository, branch, "")
-	if !ok || ref.RunID != runID {
-		return fmt.Errorf("run workspace ownership changed before cleanup")
-	}
-	return ForgetOwnedRef(repository, branch)
+func forgetRunWorkspaceOwnedRef(repository, branch, base, runID string) error {
+	return forgetRunWorkspaceOwnedRefForRollback(OwnedRef{
+		Repository: filepath.Clean(repository), Branch: branch, Base: base,
+		Purpose: PurposeSproutIsolation, RunID: runID,
+	})
 }
 
-func rollbackRunWorkspaceAllocation(ctx context.Context, owned OwnedRef, path string) error {
+func rollbackRunWorkspaceAllocation(ctx context.Context, owned OwnedRef, path string, allocation RunWorkspaceAllocation) error {
 	current, ok := runWorkspaceOwnedRef(owned.Repository, owned.Branch, owned.Base)
 	if !ok || current.RunID != owned.RunID {
 		return fmt.Errorf("run workspace ownership changed before rollback")
@@ -485,8 +554,41 @@ func rollbackRunWorkspaceAllocation(ctx context.Context, owned OwnedRef, path st
 		if status != "" {
 			return fmt.Errorf("partially allocated run workspace has uncommitted changes")
 		}
+		if err := markRunWorkspaceRemovalPending(allocation); err != nil {
+			return fmt.Errorf("record partial RunWorkspace teardown intent: %w", err)
+		}
 		if _, err := runGitCommand(ctx, owned.Repository, "worktree", "remove", "--force", path); err != nil {
 			return fmt.Errorf("remove partially allocated run workspace: %w", err)
+		}
+	}
+
+	_, pathErr := os.Lstat(path)
+	if pathErr != nil && !os.IsNotExist(pathErr) {
+		return fmt.Errorf("inspect rolled-back run workspace path: %w", pathErr)
+	}
+	if pathErr == nil {
+		return fmt.Errorf("partially allocated run workspace path remains after rollback")
+	}
+
+	if runWorkspaceBranchExists(ctx, owned.Repository, owned.Branch) {
+		ownedEvidence := ReadOwnedRefEvidence(owned.Repository, owned.Branch, owned.Base, owned.RunID)
+		if ownedEvidence.State != OwnedRefEvidenceMatched {
+			if err := finalizeRunWorkspaceOwnedRef(owned); err != nil {
+				return fmt.Errorf("finalize exact ownership for rolled-back run workspace: %w", err)
+			}
+		}
+		currentAllocation, err := runWorkspaceAllocationByID(allocation.AllocationRunID)
+		if err != nil {
+			return fmt.Errorf("load rolled-back RunWorkspace allocation: %w", err)
+		}
+		if currentAllocation.State == RunWorkspaceAllocationPending {
+			if err := finalizeRunWorkspaceAllocation(currentAllocation); err != nil {
+				return fmt.Errorf("finalize durable identity for rolled-back RunWorkspace: %w", err)
+			}
+			currentAllocation.State = RunWorkspaceAllocationFinalized
+		}
+		if err := markRunWorkspaceRemoved(currentAllocation); err != nil {
+			return fmt.Errorf("record removed state for rolled-back RunWorkspace: %w", err)
 		}
 	}
 
@@ -495,15 +597,9 @@ func rollbackRunWorkspaceAllocation(ctx context.Context, owned OwnedRef, path st
 		if outcome.Reclaimed {
 			return nil
 		}
-		if outcome.Reason == "carries committed Fruit" {
-			owned.Pending = false
-			if err := RegisterOwnedRef(owned); err != nil {
-				return fmt.Errorf("preserved run workspace branch %q but could not finalize ownership: %w", owned.Branch, err)
-			}
-		}
 		return fmt.Errorf("preserved run workspace branch %q: %s", owned.Branch, outcome.Reason)
 	}
-	return forgetRunWorkspaceOwnedRef(owned.Repository, owned.Branch, owned.RunID)
+	return forgetRunWorkspaceOwnedRef(owned.Repository, owned.Branch, owned.Base, owned.RunID)
 }
 
 func reclaimRunWorkspaceCollision(ctx context.Context, repository, branch string) (string, bool) {

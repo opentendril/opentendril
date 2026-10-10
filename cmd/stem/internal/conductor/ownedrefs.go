@@ -73,6 +73,31 @@ type OwnedRef struct {
 	CreatedAt time.Time `json:"createdAt"`
 }
 
+// OwnedRefEvidenceState is the recovery-only classification of the ownership
+// registry. Ordinary reads intentionally keep their historical tolerant
+// behavior, but recovery must not turn missing or corrupt evidence into
+// permission to remove a workspace.
+type OwnedRefEvidenceState string
+
+const (
+	OwnedRefEvidenceMatched       OwnedRefEvidenceState = "matched"
+	OwnedRefEvidenceAbsent        OwnedRefEvidenceState = "absent"
+	OwnedRefEvidenceMissing       OwnedRefEvidenceState = "missing-registry"
+	OwnedRefEvidenceUnreadable    OwnedRefEvidenceState = "unreadable-registry"
+	OwnedRefEvidenceMalformed     OwnedRefEvidenceState = "malformed-registry"
+	OwnedRefEvidenceContradictory OwnedRefEvidenceState = "contradictory"
+)
+
+// OwnedRefEvidence reports whether one exact allocation still owns its
+// repository branch. Err is present only when the registry could not be
+// classified as a valid document.
+type OwnedRefEvidence struct {
+	State   OwnedRefEvidenceState
+	Ref     OwnedRef
+	Pending bool
+	Err     error
+}
+
 // ownedRefsPath returns the registry path.
 func ownedRefsPath() string {
 	return filepath.Join(expandHome("~/.tendril"), ownedRefsFileName)
@@ -92,6 +117,183 @@ func loadOwnedRefs() []OwnedRef {
 		return nil
 	}
 	return refs
+}
+
+// loadOwnedRefsStrictLocked distinguishes absent, unreadable, and malformed
+// registries. The caller must hold ownedRefsMu.
+func loadOwnedRefsStrictLocked() ([]OwnedRef, OwnedRefEvidenceState, error) {
+	data, err := os.ReadFile(ownedRefsPath())
+	if os.IsNotExist(err) {
+		return nil, OwnedRefEvidenceMissing, nil
+	}
+	if err != nil {
+		return nil, OwnedRefEvidenceUnreadable, err
+	}
+	trimmed := strings.TrimSpace(string(data))
+	if trimmed == "" || !strings.HasPrefix(trimmed, "[") {
+		return nil, OwnedRefEvidenceMalformed, fmt.Errorf("owned-reference registry is not a JSON array")
+	}
+	var refs []OwnedRef
+	if err := json.Unmarshal(data, &refs); err != nil || refs == nil {
+		if err == nil {
+			err = fmt.Errorf("owned-reference registry is not a JSON array")
+		}
+		return nil, OwnedRefEvidenceMalformed, err
+	}
+	return refs, "", nil
+}
+
+// ReadOwnedRefEvidence is the strict recovery-only ownership read. A valid
+// registry with no exact repository/branch record is absence; any record for
+// that same tuple that disagrees about purpose, base, allocation identity, or
+// finalization is contradictory ownership.
+func ReadOwnedRefEvidence(repository, branch, base, runID string) OwnedRefEvidence {
+	repository = filepath.Clean(strings.TrimSpace(repository))
+	branch = strings.TrimSpace(branch)
+	base = strings.TrimSpace(base)
+	runID = strings.TrimSpace(runID)
+	if repository == "." || branch == "" || base == "" || runID == "" {
+		return OwnedRefEvidence{State: OwnedRefEvidenceContradictory, Err: fmt.Errorf("exact repository, branch, base, and allocation RunID are required")}
+	}
+
+	ownedRefsMu.Lock()
+	defer ownedRefsMu.Unlock()
+	refs, state, err := loadOwnedRefsStrictLocked()
+	if err != nil {
+		return OwnedRefEvidence{State: state, Err: err}
+	}
+	if state == OwnedRefEvidenceMissing {
+		return OwnedRefEvidence{State: state}
+	}
+
+	var matching *OwnedRef
+	count := 0
+	for index := range refs {
+		ref := refs[index]
+		if filepath.Clean(ref.Repository) != repository || ref.Branch != branch {
+			continue
+		}
+		count++
+		matching = &ref
+	}
+	if count == 0 {
+		return OwnedRefEvidence{State: OwnedRefEvidenceAbsent}
+	}
+	if count != 1 || matching == nil || matching.Purpose != PurposeSproutIsolation ||
+		matching.Base != base || matching.RunID != runID {
+		return OwnedRefEvidence{State: OwnedRefEvidenceContradictory}
+	}
+	return OwnedRefEvidence{State: OwnedRefEvidenceMatched, Ref: *matching, Pending: matching.Pending}
+}
+
+// reserveRunWorkspaceOwnedRef writes exact pending ownership using a strict
+// read, so a damaged registry cannot be overwritten while a new allocation is
+// being created.
+func reserveRunWorkspaceOwnedRef(ref OwnedRef) error {
+	if strings.TrimSpace(ref.Repository) == "" || ref.Repository != strings.TrimSpace(ref.Repository) ||
+		strings.TrimSpace(ref.Branch) == "" || ref.Branch != strings.TrimSpace(ref.Branch) ||
+		strings.TrimSpace(ref.Base) == "" || ref.Base != strings.TrimSpace(ref.Base) ||
+		strings.TrimSpace(ref.RunID) == "" || ref.RunID != strings.TrimSpace(ref.RunID) ||
+		ref.Purpose != PurposeSproutIsolation || !ref.Pending || strings.TrimSpace(ref.Pollen) != "" {
+		return fmt.Errorf("an exact pending Sprout isolation ownership reservation is required")
+	}
+	ref.Repository = filepath.Clean(ref.Repository)
+	if ref.CreatedAt.IsZero() {
+		ref.CreatedAt = time.Now().UTC()
+	}
+
+	ownedRefsMu.Lock()
+	defer ownedRefsMu.Unlock()
+	refs, state, err := loadOwnedRefsStrictLocked()
+	if err != nil && state != OwnedRefEvidenceMissing {
+		return fmt.Errorf("read owned-reference registry before reservation: %w", err)
+	}
+	for _, existing := range refs {
+		if filepath.Clean(existing.Repository) == ref.Repository && existing.Branch == ref.Branch {
+			return fmt.Errorf("branch %q already has recorded ownership; it will not be transferred", ref.Branch)
+		}
+	}
+	return saveOwnedRefs(append(refs, ref))
+}
+
+// finalizeRunWorkspaceOwnedRef changes only the exact pending allocation into
+// finalized ownership.
+func finalizeRunWorkspaceOwnedRef(ref OwnedRef) error {
+	ref.Pending = false
+	ownedRefsMu.Lock()
+	defer ownedRefsMu.Unlock()
+	refs, state, err := loadOwnedRefsStrictLocked()
+	if err != nil {
+		return fmt.Errorf("read owned-reference registry before finalization: %w", err)
+	}
+	if state == OwnedRefEvidenceMissing {
+		return fmt.Errorf("pending Sprout isolation ownership is absent")
+	}
+	for index, existing := range refs {
+		if filepath.Clean(existing.Repository) != filepath.Clean(ref.Repository) || existing.Branch != ref.Branch {
+			continue
+		}
+		if !existing.Pending || existing.Purpose != PurposeSproutIsolation ||
+			existing.Base != ref.Base || existing.RunID != ref.RunID {
+			return fmt.Errorf("Sprout isolation ownership changed before finalization")
+		}
+		ref.CreatedAt = existing.CreatedAt
+		refs[index] = ref
+		return saveOwnedRefs(refs)
+	}
+	return fmt.Errorf("pending Sprout isolation ownership is absent")
+}
+
+// forgetRunWorkspaceOwnedRefExact drops only the exact finalized allocation.
+// It is used after a compare-and-swap branch deletion has succeeded.
+func forgetRunWorkspaceOwnedRefExact(expected OwnedRef) error {
+	ownedRefsMu.Lock()
+	defer ownedRefsMu.Unlock()
+	refs, state, err := loadOwnedRefsStrictLocked()
+	if err != nil {
+		return fmt.Errorf("read owned-reference registry before retirement: %w", err)
+	}
+	if state == OwnedRefEvidenceMissing {
+		return fmt.Errorf("exact Sprout isolation ownership is absent")
+	}
+	for index, current := range refs {
+		if filepath.Clean(current.Repository) != filepath.Clean(expected.Repository) || current.Branch != expected.Branch {
+			continue
+		}
+		if current.Pending || current.Purpose != PurposeSproutIsolation ||
+			current.Base != expected.Base || current.RunID != expected.RunID {
+			return fmt.Errorf("exact Sprout isolation ownership changed before retirement")
+		}
+		refs = append(refs[:index], refs[index+1:]...)
+		return saveOwnedRefs(refs)
+	}
+	return fmt.Errorf("exact Sprout isolation ownership is absent")
+}
+
+// forgetRunWorkspaceOwnedRefForRollback removes the exact reservation in
+// either pending or finalized form after allocation rollback has proved the
+// corresponding Git state is gone.
+func forgetRunWorkspaceOwnedRefForRollback(expected OwnedRef) error {
+	ownedRefsMu.Lock()
+	defer ownedRefsMu.Unlock()
+	refs, state, err := loadOwnedRefsStrictLocked()
+	if err != nil {
+		return fmt.Errorf("read owned-reference registry before rollback retirement: %w", err)
+	}
+	if state == OwnedRefEvidenceMissing {
+		return fmt.Errorf("exact Sprout isolation ownership is absent")
+	}
+	for index, current := range refs {
+		if filepath.Clean(current.Repository) != filepath.Clean(expected.Repository) || current.Branch != expected.Branch {
+			continue
+		}
+		if current.Purpose != PurposeSproutIsolation || current.Base != expected.Base || current.RunID != expected.RunID {
+			return fmt.Errorf("exact Sprout isolation ownership changed before rollback retirement")
+		}
+		refs = append(refs[:index], refs[index+1:]...)
+		return saveOwnedRefs(refs)
+	}
+	return fmt.Errorf("exact Sprout isolation ownership is absent")
 }
 
 // saveOwnedRefs writes the registry atomically, so an interrupted write cannot

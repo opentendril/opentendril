@@ -65,11 +65,14 @@ func allowHostWorkspace() bool {
 
 // DockerOrchestrator implements the Orchestrator interface using the local Docker daemon.
 type DockerOrchestrator struct {
-	ImageName                 string
-	Substrate                 string
-	SubstrateURL              string
-	SubstrateBranch           string
-	StepID                    string
+	ImageName       string
+	Substrate       string
+	SubstrateURL    string
+	SubstrateBranch string
+	StepID          string
+	// SproutRunID is the explicitly recorded HistoryDB identity for this
+	// Sprout. It is never inferred from StepID or RunWorkspace.RunID.
+	SproutRunID               string
 	StatusPath                string
 	IsCoordinator             bool
 	Tier                      llm.ModelTier
@@ -119,14 +122,17 @@ var (
 	newSproutFn = func(ctx context.Context, workspace string, genotypeRoot string, genotypeName string, client llmCaller, session toolSession, eventBus *eventbus.Bus, stepID string, sessionID string, renderedTaskContext string) (sproutRunner, error) {
 		return newSprout(ctx, workspace, genotypeRoot, genotypeName, client, session, eventBus, stepID, sessionID, renderedTaskContext)
 	}
-	stashHostWorkspaceFn           = stashHostWorkspace
-	restoreHostStashFn             = restoreHostStash
-	createShadowWorktreeFn         = createShadowWorktree
-	createSeedCandidateWorktreeFn  = createSeedCandidateWorktree
-	removeShadowWorktreeFn         = removeShadowWorktree
-	injectMycorrhizalCacheFn       = injectMycorrhizalCache
-	copyMycorrhizalCacheFn         = copyMycorrhizalCache
-	createRunWorkspaceFn           = CreateRunWorkspace
+	stashHostWorkspaceFn             = stashHostWorkspace
+	restoreHostStashFn               = restoreHostStash
+	createShadowWorktreeFn           = createShadowWorktree
+	createSeedCandidateWorktreeFn    = createSeedCandidateWorktree
+	removeShadowWorktreeFn           = removeShadowWorktree
+	injectMycorrhizalCacheFn         = injectMycorrhizalCache
+	copyMycorrhizalCacheFn           = copyMycorrhizalCache
+	createRunWorkspaceFn             = CreateRunWorkspace
+	createRunWorkspaceWithMetadataFn = func(ctx context.Context, repository, stepID, startRevision string, metadata RunWorkspaceMetadata) (RunWorkspace, error) {
+		return CreateRunWorkspaceWithMetadata(ctx, repository, stepID, startRevision, metadata)
+	}
 	terrariumNewProviderFn         = terrarium.NewProvider
 	osGetuidFn                     = os.Getuid
 	osGetgidFn                     = os.Getgid
@@ -643,6 +649,9 @@ func (d *DockerOrchestrator) RunSprout(ctx context.Context, taskPrompt string) (
 	var managedRun bool
 	var managedWorkspace RunWorkspace
 	var managedWorkspaceAllocated bool
+	// Set only after completeRun returns. Teardown before that point still
+	// removes a managed workspace, but it must not record execution completion.
+	var executionSettled bool
 	var generatedState *runWorkspaceGeneratedState
 	var managedCacheStates []runWorkspaceCacheState
 	var isolatedSeedCandidateWorkspace bool
@@ -663,7 +672,9 @@ func (d *DockerOrchestrator) RunSprout(ctx context.Context, taskPrompt string) (
 				return
 			}
 		}
-		if workspaceErr := managedWorkspace.Cleanup(cleanupCtx, plan.credential); workspaceErr != nil {
+		// Terminal publication still happens once, after this teardown
+		// function returns. A failed checkpoint save skips workspace cleanup.
+		if workspaceErr := releaseManagedWorkspace(cleanupCtx, managedWorkspace, plan.credential, executionSettled); workspaceErr != nil {
 			teardownErr = errors.Join(teardownErr, workspaceErr)
 		}
 	}
@@ -694,7 +705,12 @@ func (d *DockerOrchestrator) RunSprout(ctx context.Context, taskPrompt string) (
 				return err
 			}
 		}
-		managedWorkspace, err = createRunWorkspaceFn(ctx, sourcePath, stepID, startCommit)
+		managedWorkspace, err = createRunWorkspaceWithMetadataFn(ctx, sourcePath, stepID, startCommit, RunWorkspaceMetadata{
+			SproutRunID: strings.TrimSpace(d.SproutRunID),
+			Substrate:   strings.TrimSpace(d.Substrate),
+			PhytomerID:  strings.TrimSpace(d.SessionID),
+			Pollen:      core.PollenFromContext(callerCtx),
+		})
 		if err != nil {
 			return err
 		}
@@ -1602,6 +1618,7 @@ func (d *DockerOrchestrator) RunSprout(ctx context.Context, taskPrompt string) (
 				runErr := attributeSproutEnding(workCtx, finished.err)
 				detachedReport, detachedChanges, detachedErr := completeRun(finished.result, runErr)
 				releaseWork(nil)
+				executionSettled = true
 				runTeardown()
 				if teardownErr != nil {
 					markFailure(core.FailureStagePostRun, core.DiagnosticCodePostRunFailed)
@@ -1620,6 +1637,7 @@ func (d *DockerOrchestrator) RunSprout(ctx context.Context, taskPrompt string) (
 	}
 
 	report, changes, err = completeRun(turn.result, attributeSproutEnding(workCtx, turn.err))
+	executionSettled = true
 	return report, err
 }
 

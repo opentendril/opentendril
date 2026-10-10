@@ -216,6 +216,9 @@ func runServeCmd(ctx context.Context, args []string) {
 	if err := reconcileServeSeedWork(ctx, coreSvc, history); err != nil {
 		log.Fatalf("❌ Failed to reconcile orphaned Seed continuation state: %v", err)
 	}
+	if err := reconcileServeRunWorkspaces(ctx, coreSvc); err != nil {
+		log.Printf("⚠️ RunWorkspace startup reconciliation retained state for review: %v", err)
+	}
 
 	meshServer := mesh.NewServer(resolveRepoRoot(""))
 
@@ -797,6 +800,8 @@ func handleChatCompletions(bus *eventbus.Bus, sessions *session.Manager, history
 			SessionID:  sess.ID,
 			StepID:     stepID,
 			Origin:     sess.Origin,
+			Pollen:     core.PollenFromContext(r.Context()),
+			Substrate:  sess.Preferences.Substrate,
 			Model:      model,
 			Genotype:   sess.Preferences.Genotype,
 			Transcript: taskPrompt,
@@ -825,6 +830,7 @@ func handleChatCompletions(bus *eventbus.Bus, sessions *session.Manager, history
 		// Route to external Docker Tendril
 		orch := conductor.NewDockerOrchestrator()
 		orch.StepID = stepID
+		orch.SproutRunID = sproutRun.RunID
 		orch.EventBus = bus
 		orch.SessionID = sess.ID
 		applySessionPreferences(orch, sess.Preferences)
@@ -1016,6 +1022,29 @@ func reconcileServeSeedWork(ctx context.Context, svc *core.Service, history *his
 	return svc.ReconcileOrphanedSeedWork(ctx)
 }
 
+// reconcileServeRunWorkspaces runs after persistent state and Core are
+// constructed, before the serving mux accepts traffic. Only Core-classified
+// clean terminal allocations reach Conductor mutation operations.
+func reconcileServeRunWorkspaces(ctx context.Context, svc *core.Service) error {
+	if svc == nil {
+		return fmt.Errorf("RunWorkspace lifecycle Core is unavailable")
+	}
+	reports, err := svc.ListRunWorkspaces(ctx)
+	if err != nil {
+		return err
+	}
+	var reconciliationErrors []error
+	for _, report := range reports {
+		if !report.AutoReconcileable || report.AllocationRunID == "" {
+			continue
+		}
+		if _, err := svc.ReconcileRunWorkspace(ctx, core.RunWorkspaceInput{AllocationRunID: report.AllocationRunID}); err != nil {
+			reconciliationErrors = append(reconciliationErrors, fmt.Errorf("allocation %s: %w", report.AllocationRunID, err))
+		}
+	}
+	return errors.Join(reconciliationErrors...)
+}
+
 func formatSeedLifecycleReport(report core.SeedLifecycleReport) string {
 	return fmt.Sprintf("Seed lifecycle failure: kind=%s phytomer=%s handle=%s",
 		report.Kind, report.PhytomerID, report.Handle)
@@ -1040,7 +1069,8 @@ func buildServeCore(sessions *session.Manager, tendrilDir string, history *histo
 		WithFruitInventoryObservationSource(fruitInventorySource(history)).
 		WithContinuationPersistence(continuationPersistence(history)).
 		WithSeedLifecycleReporter(serveSeedLifecycleReporter).
-		WithGit(gitOperations())
+		WithGit(gitOperations()).
+		WithRunWorkspace(runWorkspaceLifecycleOperations(history))
 }
 
 type serveDependencies struct {

@@ -398,6 +398,7 @@ func prepareSeedSprout(ctx context.Context, history *historydb.Store, spec core.
 		Transcript: spec.Goal,
 		Substrate:  spec.Substrate,
 	}, spec.Substrate)
+	orch.SproutRunID = opened.RunID
 	if err := persistDispatchSproutRun(ctx, history, opened); err != nil {
 		return err
 	}

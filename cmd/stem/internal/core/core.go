@@ -225,6 +225,7 @@ type Service struct {
 	seed               SeedOperations
 	git                GitOperations
 	delegatedWorkspace DelegatedWorkspaceOperations
+	runWorkspace       RunWorkspaceOperations
 
 	seedPersist    SeedPersistence
 	observation    PhytomerObservationSource

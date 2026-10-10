@@ -181,6 +181,23 @@ type SproutRun struct {
 	FruitCreatedAt        time.Time `json:"fruitCreatedAt,omitempty"`
 }
 
+// SproutLifecycleEvidence is the exact HistoryDB evidence needed to classify a
+// RunWorkspace allocation. It is loaded only by the explicitly recorded
+// SproutRunID and does not alter the sproutruns schema.
+type SproutLifecycleEvidence struct {
+	RunID                 string
+	SessionID             string
+	StepID                string
+	Pollen                string
+	Substrate             string
+	Status                string
+	FruitRepository       string
+	FruitBranch           string
+	FruitCommit           string
+	FruitPublicationState string
+	FruitCreatedAt        time.Time
+}
+
 // ProviderDiagnostic is the durable copy of the Core's safe provider
 // explanation. It is stored as part of the observation envelope.
 type ProviderDiagnostic struct {
@@ -1403,6 +1420,46 @@ LIMIT ?`
 		return nil, fmt.Errorf("iterate sprout runs: %w", err)
 	}
 	return runs, nil
+}
+
+// LoadSproutLifecycleByID performs the exact-key lookup used by RunWorkspace
+// recovery. Missing rows are distinct from an unavailable or malformed store,
+// and no relation is guessed from StepID.
+func (s *Store) LoadSproutLifecycleByID(ctx context.Context, sproutRunID string) (SproutLifecycleEvidence, bool, error) {
+	sproutRunID = strings.TrimSpace(sproutRunID)
+	if sproutRunID == "" {
+		return SproutLifecycleEvidence{}, false, fmt.Errorf("explicit Sprout history RunID is required")
+	}
+	if s == nil || s.db == nil {
+		return SproutLifecycleEvidence{}, false, fmt.Errorf("HistoryDB is unavailable")
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	var evidence SproutLifecycleEvidence
+	var fruitCreatedAt string
+	err := s.db.QueryRowContext(ctx, `
+SELECT runId, sessionId, stepId, pollen, substrate, status, fruitRepository, fruitBranch, fruitCommit, fruitPublicationState, fruitCreatedAt
+FROM sproutruns
+WHERE runId = ?`, sproutRunID).Scan(
+		&evidence.RunID, &evidence.SessionID, &evidence.StepID, &evidence.Pollen,
+		&evidence.Substrate, &evidence.Status, &evidence.FruitRepository,
+		&evidence.FruitBranch, &evidence.FruitCommit, &evidence.FruitPublicationState,
+		&fruitCreatedAt,
+	)
+	if errors.Is(err, sql.ErrNoRows) {
+		return SproutLifecycleEvidence{}, false, nil
+	}
+	if err != nil {
+		return SproutLifecycleEvidence{}, false, fmt.Errorf("load Sprout lifecycle evidence: %w", err)
+	}
+	if fruitCreatedAt != "" {
+		evidence.FruitCreatedAt, err = time.Parse(time.RFC3339Nano, fruitCreatedAt)
+		if err != nil {
+			return SproutLifecycleEvidence{}, false, fmt.Errorf("parse Sprout Fruit createdAt: %w", err)
+		}
+	}
+	return evidence, true, nil
 }
 
 // FruitClaim is the structural evidence for one exact Fruit ref persisted on
