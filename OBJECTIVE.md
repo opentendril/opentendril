@@ -13,20 +13,25 @@ exists to make possible.
 
 ## Current
 
-**A Botanist can let OpenTendril own the complete lifecycle of every Tendril-created workspace, reclaiming terminal workspace state without manual filesystem or Git-worktree cleanup while preserving anything that may still contain reviewable Fruit.**
+**A Botanist can see retained workspaces and Fruit through Greenhouse, understand why each remains, and safely manage their lifecycle without manual filesystem or Git administration.**
 
 ## Done when
 
-- Tendril-owned delegated workspaces and RunWorkspaces have a complete observable lifecycle.
-- Retained workspaces report their ownership, relevant Git state, clean/dirty state, Fruit/review evidence, and deterministic retention reason.
-- Terminal workspace state proven safe to discard is reclaimed automatically.
-- Dirty, ambiguous, unverified, or potentially reviewable work is never destroyed automatically.
-- A Botanist can explicitly abandon retained state through a bounded control-plane action when automatic reclamation is not permitted.
+- Greenhouse shows RunWorkspaces, delegated workspaces, and Fruit as distinct entries.
+- Each entry reports its identity, ownership or evidence-source availability, Git or review evidence, and a deterministic retention reason.
+- A missing or unavailable evidence source stays visible as unavailable. It never appears as an empty inventory or as safe to discard.
+- Workspace inspection, reconciliation, and abandonment use the existing Stem Core lifecycle policy. Greenhouse shows the exact target and its consequences before confirmation, and does not classify the evidence itself.
+- Automatic reclamation removes only workspace state Core has proven disposable. Dirty, ambiguous, unverified, or potentially reviewable work stays retained.
+- A Botanist can abandon one exact retained workspace through Greenhouse. The action is Botanist-only and requires confirmation.
+- Removing an execution workspace leaves its reviewable Fruit available.
 - Workspace removal, Git worktree metadata, and OpenTendril-owned reference state remain coherent.
-- Reviewable Fruit survives disposal of execution workspace state.
-- Later work does not inherit stale terminal state from unrelated earlier work.
-- No Pollinator receives general workspace deletion authority.
-- Normal recovery requires no direct deletion below .tendril, manual git-worktree surgery, or direct editing of OpenTendril ownership registries.
+- Fruit Git review state, Botanist disposition, and inventory visibility stay independent records.
+- Archiving a Fruit claim changes inventory visibility only. The original claim, its evidence, and its audit history remain. No Git ref, commit, workspace, or provenance record is deleted.
+- Unknown or unavailable Fruit leaves the active inventory only after the Botanist acknowledges that its Git disposition is unverified. The unknown review state and its reason remain recorded.
+- Archived Fruit stays discoverable in an archived view.
+- No Pollinator receives workspace or Fruit deletion authority, and neither public REST nor MCP gains any.
+- Workspace reclamation, Fruit inventory archival, and deletion of a Git Fruit ref stay separate operations. This objective does not delete Git Fruit refs.
+- A Botanist can inspect retained state, reclaim proven-disposable workspace state, abandon one exact retained workspace, and archive one exact Fruit claim through Greenhouse, without deleting anything below .tendril, repairing a Git worktree by hand, or editing an ownership registry.
 
 ---
 
