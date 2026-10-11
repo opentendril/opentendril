@@ -8,7 +8,13 @@
 import { test, expect, type Page, type Request, type WebSocketRoute } from "@playwright/test";
 import { readSSEFrames } from "../src/lib/sse";
 import { seedStatusIsTerminal } from "../src/lib/seed";
-import type { EventRecord, PendingConfirmation, Session, SproutRun } from "../src/lib/types";
+import type {
+  EventRecord,
+  LifecycleInventory,
+  PendingConfirmation,
+  Session,
+  SproutRun,
+} from "../src/lib/types";
 
 const testApiKey = "e2e-test-key";
 
@@ -92,6 +98,7 @@ async function mockStemBackend(
     eventsBySession,
     runDelayMs = 0,
     pending = [] as PendingConfirmation[],
+    lifecycle = emptyLifecycleInventory(),
   }: {
     sessions?: Session[];
     sproutRuns?: SproutRun[];
@@ -100,6 +107,7 @@ async function mockStemBackend(
     eventsBySession?: Record<string, EventRecord[]>;
     runDelayMs?: number;
     pending?: PendingConfirmation[];
+    lifecycle?: LifecycleInventory;
   } = {},
 ): Promise<{
   lastSessionsAuthHeader: () => string | undefined;
@@ -292,6 +300,13 @@ async function mockStemBackend(
       await route.fulfill({ status: 404, body: "no seed run for handle" });
     },
   );
+  await page.route("**/v1/lifecycle", async (route) => {
+    if (route.request().method() !== "GET") {
+      await route.fulfill({ status: 405, body: "method not allowed" });
+      return;
+    }
+    await route.fulfill({ status: 200, json: lifecycle });
+  });
   await page.route("**/v1/fruit", async (route) => {
     await route.fulfill({
       status: 200,
@@ -472,6 +487,19 @@ async function mockStemBackend(
       actionHold = promise;
       return release;
     },
+  };
+}
+
+function emptyLifecycleInventory(): LifecycleInventory {
+  return {
+    sources: [
+      { source: "fruit", state: "available", itemCount: 0 },
+      { source: "run-workspace", state: "available", itemCount: 0 },
+      { source: "delegated-workspace", state: "available", itemCount: 0 },
+    ],
+    fruit: [],
+    runWorkspaces: [],
+    delegatedWorkspaces: [],
   };
 }
 
@@ -3320,5 +3348,108 @@ test.describe("Workbench information architecture", () => {
     const restCard = page.getByRole("group", { name: "Phytomer rest-label" });
     await expect(restCard.getByTestId("phytomer-label")).toHaveText("Phytomer");
     await expect(restCard.getByText("rest", { exact: true })).toBeVisible();
+  });
+});
+
+test.describe("lifecycle inventory", () => {
+  test("shows unavailable evidence separately from an observed empty source", async ({ page }) => {
+    const lifecycle = emptyLifecycleInventory();
+    lifecycle.sources = [
+      { source: "fruit", state: "unavailable", reason: "history database unavailable", itemCount: 0 },
+      { source: "run-workspace", state: "available", itemCount: 0 },
+      {
+        source: "delegated-workspace",
+        state: "unavailable",
+        reason: "delegated workspace root is unavailable",
+        itemCount: 0,
+      },
+    ];
+    lifecycle.fruit = null;
+    lifecycle.runWorkspaces = [];
+    lifecycle.delegatedWorkspaces = null;
+    await mockStemBackend(page, { sessions: [], lifecycle });
+    await completeOnboarding(page, testApiKey);
+    await page.getByTestId("lifecycle-toggle").click();
+
+    await expect(page.getByRole("heading", { name: "Fruit" })).toBeVisible();
+    await expect(page.getByRole("heading", { name: "RunWorkspaces" })).toBeVisible();
+    await expect(page.getByRole("heading", { name: "Delegated workspaces" })).toBeVisible();
+    await expect(page.getByTestId("lifecycle-unavailable-fruit")).toContainText(
+      "history database unavailable",
+    );
+    await expect(page.getByTestId("lifecycle-empty-run-workspace")).toHaveText(
+      "No RunWorkspace entries were reported.",
+    );
+    await expect(page.getByTestId("lifecycle-unavailable-delegated-workspace")).toContainText(
+      "delegated workspace root is unavailable",
+    );
+    await expect(page.getByTestId("lifecycle-panel")).not.toContainText(
+      "No Fruit entries were reported.",
+    );
+    await expect(page.getByTestId("lifecycle-panel")).not.toContainText(
+      "No delegated workspace entries were reported.",
+    );
+    await expect(page.getByRole("button", { name: /abandon|reconcile|delete|archive/i })).toHaveCount(0);
+  });
+
+  test("shows an unknown Fruit row beside retained workspaces", async ({ page }) => {
+    const lifecycle = emptyLifecycleInventory();
+    lifecycle.sources = [
+      { source: "fruit", state: "available", itemCount: 1 },
+      { source: "run-workspace", state: "available", itemCount: 1 },
+      { source: "delegated-workspace", state: "available", itemCount: 1 },
+    ];
+    lifecycle.fruit = [
+      {
+        producerKind: "Seed",
+        producerIdentity: "seed-unknown",
+        repository: "owner/repo",
+        branch: "feature/unknown",
+        commit: "abc123",
+        reviewState: "unknown",
+        unknownReason: "repository-unavailable",
+      },
+    ];
+    lifecycle.runWorkspaces = [
+      {
+        allocationRunId: "allocation-retained",
+        repository: "/repo/sample",
+        branch: "sprout/task-retained",
+        ownershipState: "missing-registry",
+        clean: false,
+        cleanKnown: false,
+        autoReconcileable: false,
+        reason: "owned-reference registry is missing; destructive recovery is refused",
+      },
+    ];
+    lifecycle.delegatedWorkspaces = [
+      {
+        pollen: "pollen",
+        substrate: "demo",
+        repository: "/repo/demo",
+        path: "/tmp/workspaces/demo/pollen",
+        currentBranch: "",
+        clean: false,
+        cleanKnown: false,
+        fruitState: "unverified",
+        fruitEvidence: "",
+        workspaceVerified: false,
+        branchOwned: false,
+        autoReclaimable: false,
+        reason: "workspace directory is not an exact configured Substrate; evidence is unavailable and it is retained",
+      },
+    ];
+    await mockStemBackend(page, { sessions: [], lifecycle });
+    await completeOnboarding(page, testApiKey);
+    await page.getByTestId("lifecycle-toggle").click();
+
+    const panel = page.getByTestId("lifecycle-panel");
+    await expect(panel.getByTestId("lifecycle-fruit-row")).toContainText("repository-unavailable");
+    await expect(panel.getByTestId("lifecycle-fruit-row")).toContainText("unknown");
+    await expect(panel.getByTestId("lifecycle-run-workspace-row")).toContainText("allocation-retained");
+    await expect(panel.getByTestId("lifecycle-run-workspace-row")).toContainText("Reported reclaimable");
+    await expect(panel.getByTestId("lifecycle-run-workspace-row")).toContainText("false");
+    await expect(panel.getByTestId("lifecycle-delegated-row")).toContainText("it is retained");
+    await expect(panel.getByRole("button", { name: /abandon|reconcile|delete|archive/i })).toHaveCount(0);
   });
 });

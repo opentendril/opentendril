@@ -64,7 +64,10 @@ type DelegatedWorkspaceAbandonResult struct {
 
 // DelegatedWorkspaceOperations is the local control-plane port. It is not
 // projected into Capabilities and is never exposed to Pollinator transports.
+// List is read-only enumeration. Inspect and Abandon stay exact-identity
+// operations and are not invoked by inventory observation.
 type DelegatedWorkspaceOperations struct {
+	List    func(ctx context.Context) ([]DelegatedWorkspaceReport, error)
 	Inspect func(ctx context.Context, target DelegatedWorkspaceTargetSpec) (DelegatedWorkspaceReport, error)
 	Abandon func(ctx context.Context, target DelegatedWorkspaceTargetSpec, confirm bool) (DelegatedWorkspaceAbandonResult, error)
 }

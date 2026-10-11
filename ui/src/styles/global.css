@@ -243,6 +243,62 @@ input, textarea, select { font: inherit; }
 .pending-technical { font-size: 11px; color: var(--ink-faint); }
 .pending-technical code { font-family: var(--font-mono); font-size: 11px; }
 .pending-expiry-relative { color: var(--ink-faint); margin-left: 6px; }
+
+.lifecycle-attention { position: relative; display: flex; align-items: center; min-width: 0; }
+.lifecycle-toggle {
+  cursor: pointer;
+  border: 1px solid var(--glass-border);
+  background: rgba(7, 11, 8, 0.35);
+  color: var(--ink);
+  border-radius: var(--radius-sm);
+  padding: 5px 10px;
+  font-size: 12px;
+}
+.lifecycle-panel {
+  position: absolute;
+  z-index: 30;
+  top: calc(100% + 8px);
+  left: 0;
+  width: min(460px, 78vw);
+  max-height: min(520px, 68vh);
+  overflow: auto;
+  padding: 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  background: var(--glass-strong);
+  box-shadow: 0 16px 40px rgba(0, 0, 0, 0.35);
+}
+.lifecycle-panel h2 {
+  margin: 0 0 6px;
+  font-size: 12px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--ink-faint);
+}
+.lifecycle-row {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-bottom: 8px;
+  padding: 8px;
+  border: 1px solid var(--glass-border);
+  border-radius: var(--radius-sm);
+}
+.lifecycle-facts {
+  display: grid;
+  grid-template-columns: 108px minmax(0, 1fr);
+  gap: 3px 8px;
+  margin: 0;
+}
+.lifecycle-facts dt {
+  color: var(--ink-faint);
+  font-size: 10px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+.lifecycle-facts dd { margin: 0; overflow-wrap: anywhere; }
+.lifecycle-unavailable { margin: 0; color: var(--scorch); }
 @keyframes pulse-dot {
   0%, 100% { transform: scale(1); }
   50% { transform: scale(1.35); }

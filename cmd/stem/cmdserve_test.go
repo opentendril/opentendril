@@ -160,6 +160,7 @@ func TestBuildRemoteServeMuxProjectsOnlyPollinatorRoutes(t *testing.T) {
 		{http.MethodGet, "/v1/delegation/pending"},
 		{http.MethodPost, "/v1/chat/completions"},
 		{http.MethodGet, "/v1/fruit"},
+		{http.MethodGet, "/v1/lifecycle"},
 		{http.MethodGet, "/ws"},
 		{http.MethodPost, "/v1/phytomers"},
 		{http.MethodGet, "/v1/phytomers/phytomer-1"},

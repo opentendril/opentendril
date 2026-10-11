@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 )
 
@@ -361,4 +362,135 @@ func removeDelegatedWorkspace(ctx context.Context, target DelegatedWorkspaceTarg
 	result.BranchDeleted = true
 	result.BranchReason = deletion.Reason
 	return result, nil
+}
+
+// DelegatedWorkspaceSource is one configured Substrate an enumerator may use
+// to verify a workspace that already exists. It does not create one.
+type DelegatedWorkspaceSource struct {
+	Name             string
+	Repository       string
+	ConfiguredBranch string
+	Credential       ResolvedCredential
+	RepositoryError  string
+}
+
+// EnumerateDelegatedWorkspaces lists delegated workspace directories that
+// already exist and verifies each one with InspectDelegatedWorkspace. It does
+// not create, reclaim, or abandon a workspace. A missing root is an observed
+// empty result. An unreadable root is an error, not an empty list.
+func EnumerateDelegatedWorkspaces(ctx context.Context, sources []DelegatedWorkspaceSource) ([]DelegatedWorkspaceReport, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	root := delegatedWorkspaceRoot()
+	entries, err := os.ReadDir(root)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return []DelegatedWorkspaceReport{}, nil
+		}
+		return nil, fmt.Errorf("delegated workspace root is unavailable: %w", err)
+	}
+
+	byName := make(map[string]DelegatedWorkspaceSource, len(sources))
+	for _, source := range sources {
+		name := source.Name
+		if name == "" || name != strings.TrimSpace(name) || sanitizeWorkspaceComponent(name) != name {
+			continue
+		}
+		if _, exists := byName[name]; exists {
+			return nil, fmt.Errorf("delegated workspace source %q is ambiguous", name)
+		}
+		byName[name] = source
+	}
+
+	names := make([]string, 0, len(entries))
+	for _, entry := range entries {
+		names = append(names, entry.Name())
+	}
+	sort.Strings(names)
+
+	reports := make([]DelegatedWorkspaceReport, 0)
+	for _, name := range names {
+		path := filepath.Join(root, name)
+		info, statErr := os.Lstat(path)
+		if statErr != nil {
+			reports = append(reports, unavailableDelegatedReport("", name, "", path, "delegated workspace directory could not be read: "+statErr.Error()+"; it is retained"))
+			continue
+		}
+		if info.Mode()&os.ModeSymlink != 0 {
+			reports = append(reports, unavailableDelegatedReport("", name, "", path, "delegated workspace directory is a symlink; evidence is unavailable and it is retained"))
+			continue
+		}
+		if !info.IsDir() {
+			continue
+		}
+		source, known := byName[name]
+		children, childErr := os.ReadDir(path)
+		if childErr != nil {
+			reports = append(reports, unavailableDelegatedReport("", name, source.Repository, path, "delegated workspace directory could not be listed: "+childErr.Error()+"; it is retained"))
+			continue
+		}
+		childNames := make([]string, 0, len(children))
+		for _, child := range children {
+			childNames = append(childNames, child.Name())
+		}
+		sort.Strings(childNames)
+		for _, pollen := range childNames {
+			childPath := filepath.Join(path, pollen)
+			childInfo, childStatErr := os.Lstat(childPath)
+			if childStatErr != nil {
+				reports = append(reports, unavailableDelegatedReport(pollen, name, source.Repository, childPath, "delegated workspace path could not be read: "+childStatErr.Error()+"; it is retained"))
+				continue
+			}
+			if childInfo.Mode()&os.ModeSymlink != 0 {
+				reports = append(reports, unavailableDelegatedReport(pollen, name, source.Repository, childPath, "delegated workspace path is a symlink; evidence is unavailable and it is retained"))
+				continue
+			}
+			if !childInfo.IsDir() {
+				continue
+			}
+			if !known {
+				reports = append(reports, unavailableDelegatedReport(pollen, name, "", childPath, "workspace directory is not an exact configured Substrate; evidence is unavailable and it is retained"))
+				continue
+			}
+			if source.RepositoryError != "" {
+				reports = append(reports, unavailableDelegatedReport(pollen, name, "", childPath, "Substrate repository is unavailable: "+source.RepositoryError+"; it is retained"))
+				continue
+			}
+			if sanitizeWorkspaceComponent(pollen) != pollen || pollen != strings.TrimSpace(pollen) {
+				reports = append(reports, unavailableDelegatedReport(pollen, name, source.Repository, childPath, "Pollen path component is not an exact identifier; evidence is unavailable and it is retained"))
+				continue
+			}
+			report, inspectErr := InspectDelegatedWorkspace(ctx, DelegatedWorkspaceTarget{
+				Pollen: pollen, Substrate: source.Name, Repository: source.Repository,
+				ConfiguredBranch: source.ConfiguredBranch, Credential: source.Credential,
+			})
+			if inspectErr != nil {
+				if report.Pollen == "" {
+					report.Pollen = pollen
+				}
+				if report.Substrate == "" {
+					report.Substrate = source.Name
+				}
+				if report.Repository == "" {
+					report.Repository = source.Repository
+				}
+				if report.Path == "" {
+					report.Path = childPath
+				}
+				report.WorkspaceVerified = false
+				report.AutoReclaimable = false
+				report.Reason = "delegated workspace evidence is unavailable: " + inspectErr.Error() + "; it is retained"
+			}
+			reports = append(reports, report)
+		}
+	}
+	return reports, nil
+}
+
+func unavailableDelegatedReport(pollen, substrate, repository, path, reason string) DelegatedWorkspaceReport {
+	return DelegatedWorkspaceReport{
+		Pollen: pollen, Substrate: substrate, Repository: repository, Path: path,
+		Reason: reason,
+	}
 }

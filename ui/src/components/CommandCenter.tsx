@@ -6,6 +6,7 @@ import { GardenCanvas } from "./Garden/GardenCanvas";
 import { EventTicker } from "./EventTicker";
 import { ChatPanel } from "./ChatPanel";
 import { DrilldownDrawer } from "./DrilldownDrawer";
+import { LifecycleInventory } from "./LifecycleInventory";
 import { PendingConfirmations } from "./PendingConfirmations";
 import { TendrilMark } from "./TendrilMark";
 
@@ -50,6 +51,7 @@ export function CommandCenter() {
             </span>
           ) : null}
         </span>
+        <LifecycleInventory />
         <PendingConfirmations />
         <span className="conn-badge">
           {operatorName ? <span>{operatorName}</span> : null}

@@ -9,6 +9,7 @@ import type {
   ContinuationResult,
   EventRecord,
   FruitInventory,
+  LifecycleInventory,
   PendingConfirmation,
   PendingConfirmationActionResult,
   PhytomerObservation,
@@ -192,6 +193,10 @@ export const stemApi = {
 
   fruitInventory(conn: StemConnection) {
     return request<FruitInventory>(conn, "/v1/fruit");
+  },
+
+  lifecycleInventory(conn: StemConnection) {
+    return request<LifecycleInventory>(conn, "/v1/lifecycle");
   },
 
   pendingConfirmations(conn: StemConnection) {

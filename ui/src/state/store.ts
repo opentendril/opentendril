@@ -31,6 +31,7 @@ import type {
   ContinuationRequest,
   EventRecord,
   FruitInventory,
+  LifecycleInventory,
   PendingConfirmation,
   PhytomerObservation,
   Preferences,
@@ -91,6 +92,7 @@ export interface ContinuationState {
 }
 
 export type FruitLoadStatus = "idle" | "loading" | "ready" | "error";
+export type LifecycleLoadStatus = FruitLoadStatus;
 
 export type PendingStatus = "idle" | "loading" | "ready" | "error";
 export type PendingActionKind = "approve" | "deny";
@@ -141,6 +143,9 @@ interface StemStore {
   fruitInventory: FruitInventory | null;
   fruitStatus: FruitLoadStatus;
   fruitError: string | null;
+  lifecycleInventory: LifecycleInventory | null;
+  lifecycleStatus: LifecycleLoadStatus;
+  lifecycleError: string | null;
   // Last successful GET /v1/delegation/pending. Never written from EventBus
   // frames and never stored in browser persistence.
   pendingConfirmations: PendingConfirmation[];
@@ -150,6 +155,7 @@ interface StemStore {
   pendingNotice: PendingNotice | null;
 
   boot: () => void;
+  loadLifecycleInventory: () => Promise<void>;
   shutdown: () => void;
   selectSession: (sessionId: string) => void;
   updatePreferences: (preferences: Preferences) => Promise<void>;
@@ -194,6 +200,7 @@ let watchAbort: AbortController | null = null;
 let watchPhytomerId: string | null = null;
 let watchInFlight = false;
 let fruitRequestId = 0;
+let lifecycleRequestId = 0;
 let pendingLoopStarted = false;
 let pendingTimer: number | null = null;
 let pendingInFlight: Promise<boolean> | null = null;
@@ -541,6 +548,32 @@ export const useStem = create<StemStore>()((set, get) => {
           [phytomerId]: message,
         },
       }));
+    }
+  }
+
+  async function loadLifecycleInventory() {
+    const requestId = ++lifecycleRequestId;
+    set({ lifecycleStatus: "loading", lifecycleError: null });
+    try {
+      const inventory = await stemApi.lifecycleInventory(currentConnection());
+      if (requestId !== lifecycleRequestId) return;
+      set({
+        lifecycleInventory: {
+          sources: inventory.sources ?? [],
+          fruit: inventory.fruit ?? null,
+          runWorkspaces: inventory.runWorkspaces ?? null,
+          delegatedWorkspaces: inventory.delegatedWorkspaces ?? null,
+        },
+        lifecycleStatus: "ready",
+        lifecycleError: null,
+      });
+    } catch (err) {
+      if (requestId !== lifecycleRequestId) return;
+      set({
+        lifecycleStatus: "error",
+        lifecycleError:
+          err instanceof StemApiError ? `${err.status}: ${err.message}` : String(err),
+      });
     }
   }
 
@@ -1057,12 +1090,16 @@ export const useStem = create<StemStore>()((set, get) => {
     fruitInventory: null,
     fruitStatus: "idle",
     fruitError: null,
+    lifecycleInventory: null,
+    lifecycleStatus: "idle",
+    lifecycleError: null,
     pendingConfirmations: [],
     pendingStatus: "idle",
     pendingError: null,
     pendingAction: null,
     pendingNotice: null,
 
+    loadLifecycleInventory,
     boot: () => {
       const unresolved = get().seedDispatch.phase === "pending" ? null : ambiguousFromStorage();
       set({
@@ -1070,6 +1107,7 @@ export const useStem = create<StemStore>()((set, get) => {
         ...(unresolved ? { seedDispatch: unresolved } : {}),
       });
       startPendingObservation();
+      void loadLifecycleInventory();
       socket?.close();
       socket = new StemSocket(websocketUrl(currentConnection()), {
         onEvent: onLiveEvent,
