@@ -1070,7 +1070,8 @@ func buildServeCore(sessions *session.Manager, tendrilDir string, history *histo
 		WithContinuationPersistence(continuationPersistence(history)).
 		WithSeedLifecycleReporter(serveSeedLifecycleReporter).
 		WithGit(gitOperations()).
-		WithRunWorkspace(runWorkspaceLifecycleOperations(history))
+		WithRunWorkspace(runWorkspaceLifecycleOperations(history)).
+		WithDelegatedWorkspace(delegatedWorkspaceObservationOperations())
 }
 
 type serveDependencies struct {
@@ -1194,6 +1195,11 @@ func buildServeMux(deps serveDependencies) *http.ServeMux {
 	// governed capability and is deliberately absent from the public mux.
 	fruitHandler := receptors.NewFruitHandler(deps.CoreService)
 	registerBotanistRoute(mux, deps, "GET /v1/fruit", fruitHandler.Handle)
+
+	// Lifecycle inventory is a Botanist-only read. It is absent from the
+	// public mux, governed capabilities, and MCP.
+	lifecycleHandler := receptors.NewLifecycleHandler(deps.CoreService)
+	registerBotanistRoute(mux, deps, "GET /v1/lifecycle", lifecycleHandler.Handle)
 
 	// Genome REST API (adapter, slice 1).
 	genomeHandler := receptors.NewGenomeHandler(deps.CoreService)

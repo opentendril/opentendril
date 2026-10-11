@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"fmt"
+	"sort"
 
 	"github.com/opentendril/opentendril/cmd/stem/internal/conductor"
 	"github.com/opentendril/opentendril/cmd/stem/internal/core"
@@ -62,6 +63,50 @@ func runWorkspaceLifecycleOperations(history *historydb.Store) core.RunWorkspace
 			}, err
 		},
 	}
+}
+
+// delegatedWorkspaceObservationOperations exposes read-only enumeration to
+// the daemon Core. Inspect and Abandon stay on the Botanist CLI service.
+func delegatedWorkspaceObservationOperations() core.DelegatedWorkspaceOperations {
+	return core.DelegatedWorkspaceOperations{List: listDelegatedWorkspacesForObservation}
+}
+
+func listDelegatedWorkspacesForObservation(ctx context.Context) ([]core.DelegatedWorkspaceReport, error) {
+	config, err := conductor.LoadSubstratesConfig(resolveRepoRoot(""))
+	if err != nil {
+		return nil, err
+	}
+	var sources []conductor.DelegatedWorkspaceSource
+	if config != nil {
+		names := make([]string, 0, len(config.Substrates))
+		for name := range config.Substrates {
+			names = append(names, name)
+		}
+		sort.Strings(names)
+		for _, name := range names {
+			spec := config.Substrates[name]
+			source := conductor.DelegatedWorkspaceSource{Name: name, ConfiguredBranch: spec.Branch}
+			repository, repoErr := conductor.ResolveSubstrateWorkspace(name, &spec)
+			if repoErr != nil {
+				source.RepositoryError = repoErr.Error()
+			} else {
+				source.Repository = repository
+				if credential, credErr := conductor.ResolveSubstrateCredential(spec, config); credErr == nil {
+					source.Credential = credential
+				}
+			}
+			sources = append(sources, source)
+		}
+	}
+	reports, err := conductor.EnumerateDelegatedWorkspaces(ctx, sources)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]core.DelegatedWorkspaceReport, len(reports))
+	for index, report := range reports {
+		out[index] = toCoreDelegatedWorkspaceReport(report)
+	}
+	return out, nil
 }
 
 func loadRunWorkspaceHistory(ctx context.Context, history *historydb.Store, allocation core.RunWorkspaceAllocation) core.RunWorkspaceHistoryEvidence {

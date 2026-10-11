@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -441,4 +442,144 @@ func TestSafeReclamationFailsClosedBeforeRemovalWithoutResolvedDefault(t *testin
 	if !branchExists(t, repository, workspace.Branch) {
 		t.Fatal("branch was deleted before default resolution failed")
 	}
+}
+
+func TestEnumerateDelegatedWorkspacesDoesNotCreateTheRoot(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	reports, err := EnumerateDelegatedWorkspaces(context.Background(), nil)
+	if err != nil {
+		t.Fatalf("enumerate absent root: %v", err)
+	}
+	if len(reports) != 0 {
+		t.Fatalf("reports = %+v, want none", reports)
+	}
+	if _, err := os.Stat(filepath.Join(home, ".tendril", "workspaces")); !os.IsNotExist(err) {
+		t.Fatalf("enumeration created the workspace root: %v", err)
+	}
+}
+
+func TestEnumerateDelegatedWorkspacesReadsExistingWorkspaceWithoutChangingIt(t *testing.T) {
+	repository, path, workspace := newDelegatedWorkspaceLifecycleFixture(t)
+	beforeRefs, err := os.ReadFile(ownedRefsPath())
+	if err != nil {
+		t.Fatalf("read owned refs: %v", err)
+	}
+	beforeEntries := delegatedWorkspaceEntries(t)
+	reports, err := EnumerateDelegatedWorkspaces(context.Background(), []DelegatedWorkspaceSource{{
+		Name: "demo", Repository: repository, ConfiguredBranch: "main",
+	}})
+	if err != nil {
+		t.Fatalf("enumerate: %v", err)
+	}
+	inspected, err := InspectDelegatedWorkspace(context.Background(), DelegatedWorkspaceTarget{
+		Pollen: "pollen", Substrate: "demo", Repository: repository, ConfiguredBranch: "main",
+	})
+	if err != nil {
+		t.Fatalf("inspect: %v", err)
+	}
+	if len(reports) != 1 || reports[0] != inspected {
+		t.Fatalf("enumerated = %+v, inspect = %+v", reports, inspected)
+	}
+	if _, err := os.Stat(path); err != nil {
+		t.Fatalf("enumeration removed the workspace: %v", err)
+	}
+	if !branchExists(t, repository, workspace.Branch) {
+		t.Fatal("enumeration deleted the workspace branch")
+	}
+	afterRefs, err := os.ReadFile(ownedRefsPath())
+	if err != nil {
+		t.Fatalf("reread owned refs: %v", err)
+	}
+	if string(afterRefs) != string(beforeRefs) {
+		t.Fatalf("enumeration changed owned refs\nbefore %s\nafter %s", beforeRefs, afterRefs)
+	}
+	afterEntries := delegatedWorkspaceEntries(t)
+	if len(afterEntries) != len(beforeEntries) {
+		t.Fatalf("workspace entries before %v after %v", beforeEntries, afterEntries)
+	}
+}
+
+func TestEnumerateDelegatedWorkspacesKeepsUnverifiedDirectory(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	path := filepath.Join(home, ".tendril", "workspaces", "stranger", "pollen")
+	if err := os.MkdirAll(path, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	reports, err := EnumerateDelegatedWorkspaces(context.Background(), nil)
+	if err != nil {
+		t.Fatalf("enumerate: %v", err)
+	}
+	if len(reports) != 1 || reports[0].WorkspaceVerified || reports[0].AutoReclaimable || reports[0].Substrate != "stranger" || reports[0].Pollen != "pollen" {
+		t.Fatalf("report = %+v, want one unverified retained directory", reports)
+	}
+	if !strings.Contains(reports[0].Reason, "not an exact configured Substrate") || !strings.Contains(reports[0].Reason, "retained") {
+		t.Fatalf("reason = %q", reports[0].Reason)
+	}
+	if _, err := os.Stat(filepath.Join(path, ".git")); !os.IsNotExist(err) {
+		t.Fatalf("enumeration created Git metadata: %v", err)
+	}
+}
+
+func TestEnumerateDelegatedWorkspacesReportsUnreadableRoot(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root can read a mode 000 directory")
+	}
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	root := filepath.Join(home, ".tendril", "workspaces")
+	if err := os.MkdirAll(root, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(root, 0); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(root, 0o700) })
+	reports, err := EnumerateDelegatedWorkspaces(context.Background(), nil)
+	if err == nil {
+		t.Fatalf("unreadable root returned reports %+v", reports)
+	}
+	if !strings.Contains(err.Error(), "unavailable") {
+		t.Fatalf("error = %v, want unavailable root", err)
+	}
+}
+
+func TestEnumerateDelegatedWorkspacesDoesNotFollowSymlink(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	root := filepath.Join(home, ".tendril", "workspaces")
+	if err := os.MkdirAll(root, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	outside := t.TempDir()
+	if err := os.Symlink(outside, filepath.Join(root, "linked")); err != nil {
+		t.Fatal(err)
+	}
+	reports, err := EnumerateDelegatedWorkspaces(context.Background(), nil)
+	if err != nil {
+		t.Fatalf("enumerate: %v", err)
+	}
+	if len(reports) != 1 || reports[0].WorkspaceVerified || !strings.Contains(reports[0].Reason, "symlink") {
+		t.Fatalf("report = %+v, want one symlink refusal", reports)
+	}
+}
+
+func delegatedWorkspaceEntries(t *testing.T) []string {
+	t.Helper()
+	root := filepath.Join(os.Getenv("HOME"), ".tendril", "workspaces")
+	var names []string
+	err := filepath.WalkDir(root, func(path string, entry os.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if path != root {
+			names = append(names, path)
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("walk workspaces: %v", err)
+	}
+	return names
 }

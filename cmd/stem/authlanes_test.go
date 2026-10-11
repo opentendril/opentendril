@@ -141,6 +141,7 @@ func TestBotanistLaneRefusesPollinatorLaneBearers(t *testing.T) {
 		{"POST", "/v1/delegation/pending/123/approve", http.StatusNotFound},
 		{"POST", "/v1/delegation/pending/123/deny", http.StatusNotFound},
 		{"GET", "/v1/fruit", http.StatusOK},
+		{"GET", "/v1/lifecycle", http.StatusOK},
 	}
 
 	// A route on the Pollinator lane wrapped by guardedAuth. We assert 403 (Forbidden)

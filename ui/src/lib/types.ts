@@ -344,6 +344,53 @@ export interface FruitInventory {
   counts: FruitReviewPressure;
 }
 
+export interface LifecycleSourceStatus {
+  source: string;
+  state: string;
+  reason?: string;
+  itemCount: number;
+}
+
+export interface LifecycleRunWorkspace {
+  allocationRunId?: string;
+  sproutRunId?: string;
+  repository: string;
+  path?: string;
+  branch: string;
+  substrate?: string;
+  phytomerId?: string;
+  pollen?: string;
+  ownershipState: string;
+  clean: boolean;
+  cleanKnown: boolean;
+  autoReconcileable: boolean;
+  reason: string;
+}
+
+export interface LifecycleDelegatedWorkspace {
+  pollen: string;
+  substrate: string;
+  repository: string;
+  path: string;
+  currentBranch?: string;
+  head?: string;
+  clean: boolean;
+  cleanKnown: boolean;
+  fruitState: string;
+  fruitEvidence: string;
+  workspaceVerified: boolean;
+  branchOwned: boolean;
+  autoReclaimable: boolean;
+  reason: string;
+}
+
+export interface LifecycleInventory {
+  sources: LifecycleSourceStatus[];
+  fruit: FruitInventoryItem[] | null;
+  runWorkspaces: LifecycleRunWorkspace[] | null;
+  delegatedWorkspaces: LifecycleDelegatedWorkspace[] | null;
+}
+
 // GET /v1/delegation/pending returns a JSON array of these records.
 // The list is already limited to open, unexpired confirmations.
 export interface PendingConfirmation {
