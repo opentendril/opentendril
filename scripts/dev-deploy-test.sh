@@ -210,6 +210,10 @@ case "$*" in
     printf '4242\n'
     ;;
   "restart tendril.service")
+    if [ -f /tmp/work/mode ] && [ "$(cat /tmp/work/mode)" = stem-no-socket ] && [ ! -f /tmp/work/socket-removed ]; then
+      rm -f /var/lib/opentendril-transport/stem.sock
+      : >/tmp/work/socket-removed
+    fi
     exit 0
     ;;
   *)
@@ -652,6 +656,16 @@ case "$sub" in
         printf 'exited\n' >"$dir/status"
         ;;
       start)
+        if [ -f /tmp/work/fail-start-remaining ]; then
+          left=$(tr -d '[:space:]' </tmp/work/fail-start-remaining)
+          case "$left" in
+            ''|*[!0-9]*) die "bad fail-start-remaining ${left}" ;;
+          esac
+          if [ "$left" -gt 0 ]; then
+            printf '%s\n' "$((left - 1))" >/tmp/work/fail-start-remaining
+            die "injected start failure"
+          fi
+        fi
         dir=$(find_container "$1") || die "start missing $1"
         printf 'running\n' >"$dir/status"
         printf 'healthy\n' >"$dir/health"
@@ -745,6 +759,7 @@ PY
 
 run_deploy() {
   local cmd=$1
+  local sudo_uid=${2-1500}
   local status=0
   set +e
   bwrap \
@@ -773,6 +788,7 @@ run_deploy() {
     -- \
     env \
       SUDO_USER=alice \
+      SUDO_UID="$sudo_uid" \
       DOCKER_HOST=tcp://203.0.113.9:2375 \
       DOCKER_CONTEXT=evil-context \
       STEM_TRANSPORT=tcp \
@@ -824,6 +840,25 @@ require_run_contract() {
   do
     grep -Fx -- "$arg" "${WORK}/run-args" >/dev/null || fail "run is missing ${arg}"
   done
+}
+
+assert_release_preserved() {
+  local name=$1
+  [ -f "${WORK}/docker/containers/${name}/id" ] || fail "release container ${name} is missing"
+  [ "$(tr -d '[:space:]' <"${WORK}/docker/containers/${name}/id")" = "$release_container_id" ] || fail "release container id changed"
+  [ "$(tr -d '[:space:]' <"${WORK}/docker/containers/${name}/image")" = "$release_id" ] || fail "release container image changed"
+  assert_absent "${WORK}/events" "refusing to remove release"
+  assert_absent "${WORK}/events" "refusing to retag"
+  if grep -E 'call (tag|image tag) ' "${WORK}/events" >/dev/null; then
+    fail "a container identity was retagged"
+  fi
+}
+
+assert_running_publisher() {
+  local image=$1
+  [ -f "${WORK}/docker/containers/opentendril-greenhouse/status" ] || fail "active Greenhouse container is missing"
+  [ "$(tr -d '[:space:]' <"${WORK}/docker/containers/opentendril-greenhouse/status")" = running ] || fail "publisher is not running"
+  [ "$(tr -d '[:space:]' <"${WORK}/docker/containers/opentendril-greenhouse/image")" = "$image" ] || fail "publisher image drifted"
 }
 
 refuse_mutation_events() {
@@ -998,6 +1033,89 @@ if grep -E 'call (build|run|rename|tag|container rm) ' "${WORK}/events" >/dev/nu
 fi
 [ "$(tr -d '[:space:]' <"${WORK}/docker/containers/opentendril-greenhouse/image")" = "$release_id" ] || fail "unhealthy Stem changed the release container"
 refuse_mutation_events "stem-unhealthy"
+
+# --- a Stem that never presents the governed socket is restored before Greenhouse starts ---
+
+setup_fixture stem-no-socket "$old_sha"
+stem_before="$(sha256sum "${WORK}/tendril-home/.local/bin/tendril")"
+status="$(run_deploy deploy)"
+[ "$status" -ne 0 ] || fail "Stem without a socket was accepted"
+grep -F -- "previous binary restored" "${WORK}/err" >/dev/null || fail "socketless Stem was not restored"
+[ -f "${WORK}/socket-removed" ] || fail "the governed socket was not removed"
+[ ! -S "${WORK}/transport/stem.sock" ] || fail "the governed socket was recreated by the test shim"
+[ "$(sha256sum "${WORK}/tendril-home/.local/bin/tendril")" = "$stem_before" ] || fail "socketless Stem bytes were not restored"
+restarts=$(grep -c 'systemctl restart tendril.service' "${WORK}/events" || true)
+[ "$restarts" -eq 2 ] || fail "expected one restart of the new Stem and one of the restored Stem, saw ${restarts}"
+if grep -E 'call (build|run|rename|tag|container rm) ' "${WORK}/events" >/dev/null; then
+  fail "socketless Stem continued into Greenhouse replacement"
+fi
+assert_release_preserved opentendril-greenhouse
+refuse_mutation_events "stem-no-socket"
+
+# --- the invoking uid must match the named account before any Docker call ---
+
+setup_fixture happy "$source_sha"
+status="$(run_deploy deploy 1501)"
+[ "$status" -ne 0 ] || fail "a mismatched invoking uid was accepted"
+grep -F -- "does not match the invoking uid" "${WORK}/err" >/dev/null || fail "mismatched uid produced the wrong failure"
+if grep -F -- 'call ' "${WORK}/events" >/dev/null; then
+  fail "mismatched uid reached Docker"
+fi
+
+setup_fixture happy "$source_sha"
+status="$(run_deploy deploy "")"
+[ "$status" -ne 0 ] || fail "a missing invoking uid was accepted"
+grep -F -- "cannot identify the invoking account uid" "${WORK}/err" >/dev/null || fail "missing uid produced the wrong failure"
+if grep -F -- 'call ' "${WORK}/events" >/dev/null; then
+  fail "missing uid reached Docker"
+fi
+
+# --- a failed container start restores the last development publisher ---
+
+setup_fixture happy "$source_sha"
+printf '1\n' >"${WORK}/fail-start-remaining"
+status="$(run_deploy deploy)"
+[ "$status" -ne 0 ] || fail "an interrupted deployment was accepted"
+grep -F -- "deployment failed; restoring a Greenhouse container" "${WORK}/out" >/dev/null || fail "interrupted deployment did not restore a publisher"
+grep -F -- "injected start failure" "${WORK}/err" >/dev/null || fail "interrupted deployment did not fail the injected start"
+assert_running_publisher "$dev_id"
+assert_release_preserved opentendril-greenhouse-release
+if grep -E 'call container rm ' "${WORK}/events" >/dev/null; then
+  fail "interrupted deployment removed a container"
+fi
+
+# --- when that development publisher cannot start, the preserved release container returns ---
+
+setup_fixture happy "$source_sha"
+printf '2\n' >"${WORK}/fail-start-remaining"
+status="$(run_deploy deploy)"
+[ "$status" -ne 0 ] || fail "a deployment with two failed starts was accepted"
+grep -F -- "deployment failed; restoring a Greenhouse container" "${WORK}/out" >/dev/null || fail "second start failure did not restore a publisher"
+assert_running_publisher "$release_id"
+[ "$(tr -d '[:space:]' <"${WORK}/docker/containers/opentendril-greenhouse/id")" = "$release_container_id" ] || fail "restored publisher is not the release container"
+assert_release_preserved opentendril-greenhouse
+[ "$(tr -d '[:space:]' <"${WORK}/docker/containers/opentendril-greenhouse-dev/image")" = "$dev_id" ] || fail "development container was deleted while returning to the release"
+if grep -E 'call container rm ' "${WORK}/events" >/dev/null; then
+  fail "release fallback removed a container"
+fi
+
+# --- an interrupted rollback keeps the release container and returns the development publisher ---
+
+setup_fixture happy "$source_sha"
+status="$(run_deploy deploy)"
+[ "$status" -eq 0 ] || fail "deployment before the interrupted rollback failed"
+printf '1\n' >"${WORK}/fail-start-remaining"
+: >"${WORK}/events"
+wrapper_before="$(sha256sum "${WORK}/sbin/opentendril-greenhouse")"
+status="$(run_deploy rollback)"
+[ "$status" -ne 0 ] || fail "an interrupted rollback was accepted"
+grep -F -- "deployment failed; restoring a Greenhouse container" "${WORK}/out" >/dev/null || fail "interrupted rollback did not restore a publisher"
+assert_running_publisher "$dev_id"
+assert_release_preserved opentendril-greenhouse-release
+[ "$(sha256sum "${WORK}/sbin/opentendril-greenhouse")" = "$wrapper_before" ] || fail "interrupted rollback edited the governed wrapper"
+if grep -E 'call (build|run|tag|container rm) ' "${WORK}/events" >/dev/null; then
+  fail "interrupted rollback built, ran, retagged, or removed a container"
+fi
 
 {
   GIT_OPTIONAL_LOCKS=0 git -C "$repo_root" --no-optional-locks status --porcelain=v1 --untracked-files=all

@@ -54,10 +54,16 @@ DOCKER_BIN=/usr/bin/docker
 log() { printf 'opentendril-dev-deploy: %s\n' "$*"; }
 fail() {
   printf 'opentendril-dev-deploy: FAILED: %s\n' "$*" >&2
-  if [ "${RESTORING:-0}" = 1 ]; then
-    return 1
-  fi
   exit 1
+}
+
+run_restore_attempt() {
+  (
+    trap - EXIT
+    set -euo pipefail
+    RESTORING=1
+    "$@"
+  )
 }
 
 usage() {
@@ -477,6 +483,17 @@ install_mcp() {
   log "MCP client installed at ${MCP_BIN} (${version}, ${sha})"
 }
 
+restore_previous_stem() {
+  [ "${STEM_NEEDS_RESTORE:-0}" = 1 ] || return 0
+  [ -f "${ROLLBACK_DIR}/tendril" ] || return 1
+  log "restoring the previous Stem binary"
+  "$CP_BIN" -a "${ROLLBACK_DIR}/tendril" "$STEM_BIN" || return 1
+  "$CHOWN_BIN" "${STEM_USER}:${STEM_USER}" "$STEM_BIN" || return 1
+  "$CHMOD_BIN" 0750 "$STEM_BIN" || return 1
+  "$SYSTEMCTL_BIN" restart tendril.service || true
+  STEM_NEEDS_RESTORE=0
+}
+
 install_stem_if_needed() {
   local version sha installed_rev running_pid running_exe version_line
   version=$(dev_version)
@@ -503,22 +520,22 @@ install_stem_if_needed() {
     "$CHMOD_BIN" 0750 "${ROLLBACK_DIR}/tendril"
   fi
   log "installing Stem ${version} at ${sha} and restarting tendril.service"
+  STEM_NEEDS_RESTORE=1
   "$INSTALL_BIN" -o "$STEM_USER" -g "$STEM_USER" -m 0750 "${BUILD_DIR}/tendril" "$STEM_BIN" </dev/null
   "$SYSTEMCTL_BIN" restart tendril.service
-  if ! wait_http http://127.0.0.1:8080/health 200; then
-    log "Stem health failed; restoring the previous binary"
-    "$CP_BIN" -a "${ROLLBACK_DIR}/tendril" "$STEM_BIN"
-    "$CHOWN_BIN" "${STEM_USER}:${STEM_USER}" "$STEM_BIN"
-    "$CHMOD_BIN" 0750 "$STEM_BIN"
-    "$SYSTEMCTL_BIN" restart tendril.service || true
+  if ! wait_http http://127.0.0.1:8080/health 200 || [ ! -S "$STEM_SOCKET" ]; then
+    restore_previous_stem || true
     wait_http http://127.0.0.1:8080/health 200 || true
     fail "new Stem did not become healthy; previous binary restored"
   fi
-  [ -S "$STEM_SOCKET" ] || fail "Stem socket did not return after restart"
   assert_binary_revision "$STEM_BIN" tendril "$sha" "$version"
   running_pid=$("$SYSTEMCTL_BIN" show -p MainPID --value tendril.service)
-  running_exe=$("$READLINK_BIN" "/proc/${running_pid}/exe")
-  [ "$running_exe" = "$STEM_BIN" ] || fail "running Stem executable is ${running_exe}"
+  running_exe=$("$READLINK_BIN" "/proc/${running_pid}/exe" || true)
+  if [ "$running_exe" != "$STEM_BIN" ]; then
+    restore_previous_stem || true
+    fail "new Stem did not become healthy; previous binary restored"
+  fi
+  STEM_NEEDS_RESTORE=0
   log "Stem restarted at ${sha}"
 }
 
@@ -596,18 +613,17 @@ restore_greenhouse() {
   [ "${NEED_RESTORE:-0}" = 1 ] || return 0
   [ "${DEV_READY:-0}" = 1 ] && return 0
   [ "${RESTORING:-0}" = 1 ] && return 0
-  RESTORING=1
-  set +e
   log "deployment failed; restoring a Greenhouse container on port 4173"
-  if container_exists "$DEV_HOLD"; then
-    swap_to_dev_hold
-  elif [ -n "${RELEASE_CONTAINER_ID:-}" ] && rootless_docker container inspect "$RELEASE_CONTAINER_ID" >/dev/null 2>&1; then
-    swap_to_release
-  elif container_exists "$ACTIVE"; then
-    start_named "$ACTIVE"
+  if container_exists "$DEV_HOLD" && run_restore_attempt swap_to_dev_hold; then
+    return 0
   fi
-  set -e
-  RESTORING=0
+  if [ -n "${RELEASE_CONTAINER_ID:-}" ] && rootless_docker container inspect "$RELEASE_CONTAINER_ID" >/dev/null 2>&1 \
+    && run_restore_attempt swap_to_release; then
+    return 0
+  fi
+  if container_exists "$ACTIVE"; then
+    run_restore_attempt start_named "$ACTIVE" || true
+  fi
 }
 
 write_state() {
@@ -683,11 +699,17 @@ prepare_host() {
   if [ -z "$pollinator_user" ] || [ "$pollinator_user" = root ]; then
     fail "cannot identify the Pollinator-hosting account. Run sudo make dev-deploy from that account."
   fi
+  case "${SUDO_UID:-}" in
+    ''|*[!0-9]*)
+      fail "cannot identify the invoking account uid. Run sudo make dev-deploy from that account."
+      ;;
+  esac
   require_ordinary_name "$pollinator_user"
   [ "$pollinator_user" != "$STEM_USER" ] || fail "Pollinator-hosting account cannot be ${STEM_USER}"
   read_passwd "$pollinator_user"
   pollinator_uid=$pw_uid
   pollinator_home=$pw_home
+  [ "$pollinator_uid" = "$SUDO_UID" ] || fail "SUDO_USER ${pollinator_user} does not match the invoking uid ${SUDO_UID}"
   [ "$pollinator_uid" -ge 1000 ] || fail "Pollinator-hosting account ${pollinator_user} is a system account"
   require_owned_dir "$pollinator_home" "$pollinator_user"
   [ "$(owner_of "$pollinator_home")" = "$pollinator_user" ] || fail "Pollinator home owner does not match the account"
@@ -793,8 +815,11 @@ cmd_rollback() {
   assert_wrapper_untouched
   [ -S "$STEM_SOCKET" ] || fail "Stem Unix socket is missing: ${STEM_SOCKET}"
   log "restoring release Greenhouse container ${RELEASE_CONTAINER_ID}"
+  NEED_RESTORE=1
+  DEV_READY=0
   swap_to_release
   verify_runtime "$RELEASE_IMAGE_ID"
+  NEED_RESTORE=0
   assert_release_image_untouched
   assert_wrapper_untouched
   log "DONE rollback. Greenhouse is the preserved release container at http://127.0.0.1:4173"
@@ -806,6 +831,7 @@ on_exit() {
   trap - EXIT
   cleanup_stage
   if [ "$status" -ne 0 ]; then
+    restore_previous_stem || true
     restore_greenhouse || true
   fi
   exit "$status"

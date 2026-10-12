@@ -346,11 +346,14 @@ edit the governed wrapper.
 The running release container is renamed to `opentendril-greenhouse-release`
 and kept. `sudo make dev-rollback` starts that preserved container again.
 A failed deployment restores a publisher on `127.0.0.1:4173`.
+If the replacement Stem does not become healthy on the governed Unix
+socket, the previous Stem binary is restored and restarted.
 
 The command discovers the Pollinator-hosting account from `SUDO_USER` and
-the `tendril` account from the system account database. It refuses a system
-account, a home that is not owned by that account, a `tendril` home other
-than `/home/tendril`, an unlocked `tendril` password, a checkout owned by
+requires that account's uid to equal `SUDO_UID`. It reads the `tendril`
+account from the system account database. It refuses a system account, a
+home that is not owned by that account, a `tendril` home other than
+`/home/tendril`, an unlocked `tendril` password, a checkout owned by
 someone else, and a wrapper that is not root-owned mode `0755`. It uses
 tendril's rootless Docker socket and publishes only `127.0.0.1:4173`. It
 does not read the Botanist key and does not change Substrate Git state.
