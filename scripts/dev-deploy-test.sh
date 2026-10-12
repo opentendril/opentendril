@@ -5,6 +5,13 @@
 # socket, and the absolute programs the deployment invokes. Nothing here
 # starts the live Greenhouse or writes the checkout.
 #
+# GitHub-hosted Ubuntu 24.04 keeps
+# kernel.apparmor_restrict_unprivileged_userns=1 and does not attach an
+# AppArmor profile to /usr/bin/bwrap. Unprivileged bubblewrap 0.9 then
+# fails with "setting up uid map: Permission denied". Root can create the
+# mount namespace without a user namespace, so this harness retries through
+# passwordless sudo only after that unprivileged probe fails.
+#
 # Usage:
 #   bash scripts/dev-deploy-test.sh
 
@@ -20,6 +27,36 @@ if [ ! -x /usr/bin/bwrap ]; then
   echo "dev-deploy-test: host is missing /usr/bin/bwrap" >&2
   exit 1
 fi
+
+bwrap_bin=/usr/bin/bwrap
+bwrap_as_root=0
+bwrap_prefix=("$bwrap_bin")
+
+select_bwrap() {
+  local err denied
+  err="$(mktemp)"
+  if "$bwrap_bin" --ro-bind / / --dev /dev --proc /proc --tmpfs /tmp -- /bin/true >/dev/null 2>"$err"; then
+    rm -f "$err"
+    return 0
+  fi
+  denied="$(tr '\n' ' ' <"$err")"
+  if sudo -n -- "$bwrap_bin" --ro-bind / / --dev /dev --proc /proc --tmpfs /tmp -- /bin/true >/dev/null 2>"$err"; then
+    bwrap_as_root=1
+    bwrap_prefix=(sudo -n -- "$bwrap_bin")
+    printf 'dev-deploy-test: unprivileged bubblewrap was denied (%s); using a root mount namespace\n' \
+      "$denied" >&2
+    rm -f "$err"
+    return 0
+  fi
+  printf 'dev-deploy-test: bubblewrap cannot create a mount namespace\n' >&2
+  printf 'dev-deploy-test: unprivileged probe: %s\n' "$denied" >&2
+  printf 'dev-deploy-test: root probe:\n' >&2
+  cat "$err" >&2
+  rm -f "$err"
+  exit 1
+}
+
+select_bwrap
 
 version="$(tr -d '[:space:]' <"${repo_root}/VERSION")"
 release_tag="opentendril-greenhouse:${version}"
@@ -40,7 +77,11 @@ WORK=""
 cleanup() {
   local dir
   for dir in "${works[@]+"${works[@]}"}"; do
-    rm -rf "$dir"
+    if [ "${bwrap_as_root:-0}" -eq 1 ]; then
+      sudo -n -- rm -rf "$dir"
+    else
+      rm -rf "$dir"
+    fi
   done
 }
 trap cleanup EXIT
@@ -762,7 +803,7 @@ run_deploy() {
   local sudo_uid=${2-1500}
   local status=0
   set +e
-  bwrap \
+  "${bwrap_prefix[@]}" \
     --ro-bind / / \
     --dev /dev \
     --proc /proc \
@@ -799,6 +840,9 @@ run_deploy() {
       >"${WORK}/out" 2>"${WORK}/err"
   status=$?
   set -e
+  if [ "$bwrap_as_root" -eq 1 ]; then
+    sudo -n -- chmod -R a+rX "$WORK"
+  fi
   printf '%s\n' "$status"
 }
 
