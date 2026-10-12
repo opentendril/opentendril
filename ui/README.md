@@ -75,6 +75,14 @@ docker compose --profile ui up -d     # from the repo root
 # → http://127.0.0.1:4173
 ```
 
+When this checkout is on a machine that already has the governed Stem and
+Greenhouse installed, `sudo make dev-deploy` from the repository root builds
+the Stem, the MCP client, and `opentendril-greenhouse:dev` from that
+checkout. It uses the same container lifecycle as the installed wrapper,
+keeps the verified release image, and returns to it with
+`sudo make dev-rollback`. The Compose profile above remains the reference
+declaration of that container contract.
+
 Explicit TCP (only when the Stem is intentionally reachable by TCP) is a
 separate Compose profile. It does not mount
 `/var/lib/opentendril-transport` and can start on a host that has no local

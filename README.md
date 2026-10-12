@@ -298,6 +298,19 @@ The repository Compose path is for development/reference use only:
 docker compose --profile ui up -d
 ```
 
+With a governed Stem and Greenhouse already installed, this checkout can
+build and run its own Greenhouse beside that release:
+
+```bash
+sudo make dev-deploy
+sudo make dev-rollback
+```
+
+`make dev-deploy` builds the Stem, the MCP client, and
+`opentendril-greenhouse:dev` from one clean revision through the shared
+Greenhouse lifecycle. It does not retag the verified release image.
+`make dev-rollback` returns the preserved release container.
+
 For UI development, run the Vite dev server instead:
 
 ```bash

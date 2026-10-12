@@ -427,6 +427,14 @@ jobs:
         shell: bash
         run: bash scripts/install-test.sh
 
+      - name: Install bubblewrap
+        shell: bash
+        run: sudo apt-get update && sudo apt-get install -y bubblewrap
+
+      - name: Run development deployment tests
+        shell: bash
+        run: bash scripts/dev-deploy-test.sh
+
   # This job's NAME is a required status check in the "Protect Default"
   # ruleset. Renaming it makes the required context never report and leaves
   # every pull request unmergeable.
