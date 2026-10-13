@@ -12,7 +12,11 @@
 # mount namespace without a user namespace, so this harness retries through
 # passwordless sudo only after that unprivileged probe fails. The root
 # namespace keeps / read-only, and the runner has no /home/tendril, so the
-# mounts that must be created sit on fresh tmpfs parents.
+# mounts that must be created sit on fresh tmpfs parents. Covering a program
+# follows a symlink. A missing target cannot be created on that read-only
+# root, so /usr/bin and /usr/sbin are mounted from a directory where each
+# covered program is an ordinary file and every other name points back at
+# the host /usr tree. That keeps relative links, such as ../lib/..., intact.
 #
 # Usage:
 #   bash scripts/dev-deploy-test.sh
@@ -75,6 +79,59 @@ dev_container_id="devctr456"
 
 works=()
 WORK=""
+command_mirror_root=""
+
+# Bubblewrap follows a symlink when it covers a program. A missing target
+# then fails with "No such file or directory" because the read-only root
+# cannot grow that path. Publish ordinary files for the programs this
+# harness covers, and point every other name at the host /usr tree so a
+# relative link still resolves.
+prepare_command_mirrors() {
+  command_mirror_root="$(mktemp -d /tmp/opentendril-dev-deploy-commands.XXXXXX)"
+  works+=("$command_mirror_root")
+  python3 - "$command_mirror_root" <<'PY'
+import os
+import sys
+
+root = sys.argv[1]
+parents = {
+    "usr-bin": (
+        "/usr/bin",
+        "/tmp/host-usr/bin",
+        {
+            "id",
+            "stat",
+            "getent",
+            "readlink",
+            "systemctl",
+            "curl",
+            "git",
+            "go",
+            "install",
+            "chown",
+            "docker",
+        },
+    ),
+    "usr-sbin": (
+        "/usr/sbin",
+        "/tmp/host-usr/sbin",
+        {"runuser"},
+    ),
+}
+for key, (parent, alias, covered) in parents.items():
+    mirror = os.path.join(root, key)
+    os.makedirs(mirror, exist_ok=True)
+    present = set(os.listdir(parent)) if os.path.isdir(parent) else set()
+    for name in present:
+        dest = os.path.join(mirror, name)
+        if name in covered:
+            open(dest, "wb").close()
+        else:
+            os.symlink("%s/%s" % (alias, name), dest)
+    for name in covered - present:
+        open(os.path.join(mirror, name), "wb").close()
+PY
+}
 
 cleanup() {
   local dir
@@ -87,6 +144,7 @@ cleanup() {
   done
 }
 trap cleanup EXIT
+prepare_command_mirrors
 
 fail() {
   printf 'dev-deploy-test: %s\n' "$*" >&2
@@ -813,6 +871,9 @@ run_deploy() {
     --tmpfs /home \
     --tmpfs /var/lib \
     --tmpfs /usr/local \
+    --ro-bind /usr /tmp/host-usr \
+    --ro-bind "${command_mirror_root}/usr-bin" /usr/bin \
+    --ro-bind "${command_mirror_root}/usr-sbin" /usr/sbin \
     --bind "$WORK" /tmp/work \
     --ro-bind "$repo_root" "$repo_root" \
     --bind "${WORK}/tendril-home" /home/tendril \
