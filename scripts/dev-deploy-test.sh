@@ -10,7 +10,9 @@
 # AppArmor profile to /usr/bin/bwrap. Unprivileged bubblewrap 0.9 then
 # fails with "setting up uid map: Permission denied". Root can create the
 # mount namespace without a user namespace, so this harness retries through
-# passwordless sudo only after that unprivileged probe fails.
+# passwordless sudo only after that unprivileged probe fails. The root
+# namespace keeps / read-only, and the runner has no /home/tendril, so the
+# mounts that must be created sit on fresh tmpfs parents.
 #
 # Usage:
 #   bash scripts/dev-deploy-test.sh
@@ -808,12 +810,15 @@ run_deploy() {
     --dev /dev \
     --proc /proc \
     --tmpfs /tmp \
+    --tmpfs /home \
+    --tmpfs /var/lib \
+    --tmpfs /usr/local \
     --bind "$WORK" /tmp/work \
+    --ro-bind "$repo_root" "$repo_root" \
     --bind "${WORK}/tendril-home" /home/tendril \
     --bind "${WORK}/sbin" /usr/local/sbin \
     --bind "${WORK}/run-user" /run/user \
     --bind "${WORK}/transport" /var/lib/opentendril-transport \
-    --ro-bind "$repo_root" "$repo_root" \
     --bind "${WORK}/shims/id" /usr/bin/id \
     --bind "${WORK}/shims/stat" /usr/bin/stat \
     --bind "${WORK}/shims/getent" /usr/bin/getent \
