@@ -358,6 +358,19 @@ someone else, and a wrapper that is not root-owned mode `0755`. It uses
 tendril's rootless Docker socket and publishes only `127.0.0.1:4173`. It
 does not read the Botanist key and does not change Substrate Git state.
 
+The deployment records its revision and the preserved release container
+in the Pollinator-hosting account's
+`~/.local/share/opentendril-dev-deploy/state`. That directory and file
+are created owned by the account. The command checks that it can write
+this state before it replaces a binary or a container. A directory or
+state file owned by another account, including root, is left unchanged
+and the deployment stops. Rollback can read a root-owned recovery file
+without taking ownership of it. The recorded revision is replaced only
+by a complete file owned by the account. If that write fails, the
+previous recorded revision stays in place. Binaries this attempt
+replaced are put back, and the Greenhouse publisher returns to the
+container that was running before the attempt.
+
 Restarting the Stem refreshes each managed Substrate with `git fetch`. That
 fetch can create or move a remote-tracking ref, including a branch pushed
 while the deployment is running. The deployment reports that refresh and

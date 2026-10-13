@@ -267,6 +267,16 @@ case "$path" in
     group=tendril
     mode_bits=$(/tmp/work/real/stat -c '%a' "$path")
     ;;
+  /tmp/work/alice/.local/share/opentendril-dev-deploy|/tmp/work/alice/.local/share/opentendril-dev-deploy/*)
+    if [ "$testmode" = root-owned-state ]; then
+      owner=root
+      group=root
+    else
+      owner=alice
+      group=alice
+    fi
+    mode_bits=$(/tmp/work/real/stat -c '%a' "$path")
+    ;;
   /tmp/work/alice|/tmp/work/alice/*)
     owner=alice
     group=alice
@@ -565,6 +575,15 @@ while [ "$#" -gt 0 ]; do
       ;;
   esac
 done
+dest=${positionals[${#positionals[@]}-1]}
+if [ -f /tmp/work/mode ] && [ "$(tr -d '[:space:]' </tmp/work/mode)" = state-write-fail ]; then
+  case "$dest" in
+    */opentendril-dev-deploy/state|*/opentendril-dev-deploy/state.incoming)
+      printf 'install refused state file\n' >>/tmp/work/events
+      exit 1
+      ;;
+  esac
+fi
 if [ "$dir" -eq 1 ]; then
   mkdir -p "${positionals[0]}"
   [ -n "$mode" ] && chmod "$mode" "${positionals[0]}"
@@ -1128,6 +1147,43 @@ grep -F -- "RELEASE_IMAGE_ID=${release_id}" "$state_file" >/dev/null || fail "st
 grep -F -- "SOURCE_SHA=${source_sha}" "$state_file" >/dev/null || fail "state revision drifted"
 assert_absent "$state_file" "$secret"
 assert_absent "$state_file" "dr3w"
+[ "$(stat -c '%a' "$(dirname "$state_file")")" = 750 ] || fail "state directory mode is not 0750"
+[ "$(stat -c '%a' "$state_file")" = 640 ] || fail "state file mode is not 0640"
+[ ! -e "$(dirname "$state_file")/.state-write-probe" ] || fail "state directory probe was left behind"
+[ ! -e "$(dirname "$state_file")/state.incoming" ] || fail "incoming state file was left behind"
+awk '
+  /install -d -o alice -g alice -m 0750 \/tmp\/work\/alice\/.local\/share\/opentendril-dev-deploy$/ { if (!dir) dir = NR }
+  /install -o alice -g alice -m 0640 / && /opentendril-dev-deploy\/.state-write-probe$/ { if (!probe) probe = NR }
+  /^call / { if (!call) call = NR }
+  END {
+    if (!dir || !probe) exit 1
+    if (call && (dir > call || probe > call)) exit 2
+  }
+' "${WORK}/events" || fail "state directory was not created for alice before Docker"
+if grep -F 'chown ' "${WORK}/events" | grep -F 'opentendril-dev-deploy' >/dev/null; then
+  fail "state path was handed to chown"
+fi
+[ ! -e "${WORK}/docker/containers/opentendril-greenhouse-prior" ] || fail "first deployment held a previous container"
+
+# --- repeat deployment records state again without taking ownership ---
+
+first_state=$(cat "$state_file")
+status="$(run_deploy deploy)"
+[ "$status" -eq 0 ] || fail "repeat deployment failed"
+grep -F -- "DONE checkout ${source_sha}" "${WORK}/out" >/dev/null || fail "repeat deployment did not report the checkout"
+grep -F -- "SOURCE_SHA=${source_sha}" "$state_file" >/dev/null || fail "repeat deployment lost the recorded revision"
+grep -F -- "RELEASE_CONTAINER_ID=${release_container_id}" "$state_file" >/dev/null || fail "repeat deployment lost the release container id"
+if grep -F -- "refusing to take ownership" "${WORK}/err" >/dev/null; then
+  fail "repeat deployment tried to take ownership"
+fi
+[ "$(stat -c '%a' "$state_file")" = 640 ] || fail "repeat deployment state file mode drifted"
+[ ! -e "${WORK}/docker/containers/opentendril-greenhouse-prior" ] || fail "previous development container was left behind"
+[ "$(tr -d '[:space:]' <"${WORK}/docker/containers/opentendril-greenhouse-release/id")" = "$release_container_id" ] || fail "repeat deployment changed the release container id"
+[ "$(tr -d '[:space:]' <"${WORK}/docker/containers/opentendril-greenhouse/image")" = "$dev_id" ] || fail "repeat deployment did not leave the development image running"
+if grep -F 'chown ' "${WORK}/events" | grep -F 'opentendril-dev-deploy' >/dev/null; then
+  fail "repeat deployment handed the state path to chown"
+fi
+grep -F -- "RELEASE_CONTAINER_ID=${release_container_id}" <<<"$first_state" >/dev/null || fail "first deployment did not record the release container"
 
 # --- explicit rollback of that same fixture ---
 
@@ -1342,6 +1398,115 @@ fi
 if grep -F -- "FAILED:" "${WORK}/err" >/dev/null; then
   fail "peeled remote HEAD oid produced a deployment failure"
 fi
+
+# A root-owned recovery file is the record left by an earlier deployment
+# that created the directory as root. Deploy must stop before replacing
+# binaries or containers. Rollback may read it and must not take ownership.
+
+setup_fixture root-owned-state "$source_sha"
+state_dir="${WORK}/alice/.local/share/opentendril-dev-deploy"
+mkdir -p "$state_dir"
+wrapper_sha="$(sha256sum "${WORK}/sbin/opentendril-greenhouse" | awk '{print $1}')"
+cat >"${state_dir}/state" <<EOF
+SOURCE_SHA=${old_sha}
+DEV_VERSION=${dev_version}
+RELEASE_IMAGE_ID=${release_id}
+RELEASE_CONTAINER_ID=${release_container_id}
+DEV_IMAGE_ID=${dev_id}
+DEV_TAG=opentendril-greenhouse:dev
+WRAPPER_SHA=${wrapper_sha}
+ACTIVE=opentendril-greenhouse
+RELEASE_HOLD=opentendril-greenhouse-release
+DEV_HOLD=opentendril-greenhouse-dev
+EOF
+chmod 0755 "$state_dir"
+chmod 0644 "${state_dir}/state"
+root_state_before="$(sha256sum "${state_dir}/state")"
+status="$(run_deploy deploy)"
+[ "$status" -ne 0 ] || fail "root-owned deployment state was accepted"
+grep -F -- "owned by root, expected alice; refusing to take ownership" "${WORK}/err" >/dev/null || fail "root-owned state produced the wrong failure"
+grep -F -- "SOURCE_SHA=${old_sha}" "${WORK}/err" >/dev/null || fail "root-owned failure did not name the preserved revision"
+grep -F -- "RELEASE_CONTAINER_ID=${release_container_id}" "${WORK}/err" >/dev/null || fail "root-owned failure did not name the preserved release container"
+grep -F -- "left unchanged" "${WORK}/err" >/dev/null || fail "root-owned failure did not say the recovery state was left unchanged"
+[ "$(sha256sum "${state_dir}/state")" = "$root_state_before" ] || fail "root-owned recovery state was modified"
+[ "$(stat -c '%a' "$state_dir")" = 755 ] || fail "root-owned state directory mode changed"
+[ "$(stat -c '%a' "${state_dir}/state")" = 644 ] || fail "root-owned state file mode changed"
+if grep -E '^(call|install|chown) ' "${WORK}/events" >/dev/null; then
+  fail "root-owned state reached Docker, install, or chown"
+fi
+if grep -F -- "DONE checkout" "${WORK}/out" >/dev/null; then
+  fail "root-owned state reported a recorded checkout"
+fi
+
+: >"${WORK}/events"
+status="$(run_deploy rollback)"
+[ "$status" -eq 0 ] || fail "rollback could not read root-owned recovery state"
+grep -F -- "using root-owned deployment recovery state without changing its ownership" "${WORK}/out" >/dev/null || fail "rollback did not say it left root ownership unchanged"
+[ "$(sha256sum "${state_dir}/state")" = "$root_state_before" ] || fail "rollback modified root-owned recovery state"
+[ "$(stat -c '%a' "${state_dir}/state")" = 644 ] || fail "rollback changed the root-owned state file mode"
+if grep -F 'chown ' "${WORK}/events" | grep -F 'opentendril-dev-deploy' >/dev/null; then
+  fail "rollback took ownership of the recovery state"
+fi
+[ "$(tr -d '[:space:]' <"${WORK}/docker/containers/opentendril-greenhouse/image")" = "$release_id" ] || fail "root-owned rollback did not leave the release image"
+[ "$(tr -d '[:space:]' <"${WORK}/docker/containers/opentendril-greenhouse/id")" = "$release_container_id" ] || fail "root-owned rollback did not keep the release container"
+
+# A failed state write after a deployment must not replace the recorded
+# revision. The previous binaries and the previous Greenhouse publisher
+# come back, and the recovery file stays byte for byte.
+
+setup_fixture state-write-fail "$old_sha"
+state_dir="${WORK}/alice/.local/share/opentendril-dev-deploy"
+mkdir -p "$state_dir"
+wrapper_sha="$(sha256sum "${WORK}/sbin/opentendril-greenhouse" | awk '{print $1}')"
+cat >"${state_dir}/state" <<EOF
+SOURCE_SHA=${old_sha}
+DEV_VERSION=${dev_version}
+RELEASE_IMAGE_ID=${release_id}
+RELEASE_CONTAINER_ID=${release_container_id}
+DEV_IMAGE_ID=${dev_id}
+DEV_TAG=opentendril-greenhouse:dev
+WRAPPER_SHA=${wrapper_sha}
+ACTIVE=opentendril-greenhouse
+RELEASE_HOLD=opentendril-greenhouse-release
+DEV_HOLD=opentendril-greenhouse-dev
+EOF
+chmod 0750 "$state_dir"
+chmod 0640 "${state_dir}/state"
+active="${WORK}/docker/containers/opentendril-greenhouse"
+release="${WORK}/docker/containers/opentendril-greenhouse-release"
+mkdir -p "$release"
+cp "$active/id" "$active/image" "$active/health" "$active/ports" "$release/"
+printf 'exited\n' >"$release/status"
+printf '%s\n' "$dev_id" >"$active/image"
+printf '%s\n' "$dev_container_id" >"$active/id"
+printf 'running\n' >"$active/status"
+printf 'healthy\n' >"$active/health"
+printf '127.0.0.1:4173->8080/tcp\n' >"$active/ports"
+printf 'previous\n' >"$active/previous-marker"
+recovery_state_before="$(sha256sum "${state_dir}/state")"
+stem_before="$(sha256sum "${WORK}/tendril-home/.local/bin/tendril")"
+mcp_before="$(sha256sum "${WORK}/alice/.local/bin/tendril-mcp")"
+status="$(run_deploy deploy)"
+[ "$status" -ne 0 ] || fail "a failed state write was accepted"
+grep -F -- "deployment state was not replaced; recorded revision remains ${old_sha}" "${WORK}/err" >/dev/null || fail "failed state write did not keep the recorded revision"
+grep -F -- "This checkout was not recorded" "${WORK}/err" >/dev/null || fail "failed state write recorded the checkout"
+if grep -F -- "DONE checkout" "${WORK}/out" >/dev/null; then
+  fail "failed state write reported a recorded checkout"
+fi
+[ "$(sha256sum "${state_dir}/state")" = "$recovery_state_before" ] || fail "failed state write replaced the recovery file"
+grep -F -- "SOURCE_SHA=${old_sha}" "${state_dir}/state" >/dev/null || fail "recovery file lost its revision"
+if grep -F -- "SOURCE_SHA=${source_sha}" "${state_dir}/state" >/dev/null; then
+  fail "recovery file reports the unrecorded checkout"
+fi
+[ "$(sha256sum "${WORK}/tendril-home/.local/bin/tendril")" = "$stem_before" ] || fail "failed state write left the new Stem in place"
+[ "$(sha256sum "${WORK}/alice/.local/bin/tendril-mcp")" = "$mcp_before" ] || fail "failed state write left the new MCP client in place"
+[ -f "$active/previous-marker" ] || fail "previous Greenhouse publisher was not restored"
+[ ! -e "${WORK}/docker/containers/opentendril-greenhouse-prior" ] || fail "previous Greenhouse publisher was left under the hold name"
+[ "$(tr -d '[:space:]' <"$active/image")" = "$dev_id" ] || fail "restored Greenhouse publisher is not the previous development image"
+[ "$(tr -d '[:space:]' <"$release/id")" = "$release_container_id" ] || fail "failed state write changed the release container"
+grep -F -- "install refused state file" "${WORK}/events" >/dev/null || fail "state write did not fail at the state file"
+[ ! -e "${state_dir}/state.incoming" ] || fail "incoming state file remained after the failed write"
+[ ! -e "${state_dir}/.state-write-probe" ] || fail "state probe remained after the failed write"
 
 {
   GIT_OPTIONAL_LOCKS=0 git -C "$repo_root" --no-optional-locks status --porcelain=v1 --untracked-files=all

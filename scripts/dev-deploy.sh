@@ -19,10 +19,12 @@ SOCKET_CHECK_PATH=$STEM_SOCKET
 EXPECTED_ACTIVE=opentendril-greenhouse
 EXPECTED_RELEASE_HOLD=opentendril-greenhouse-release
 EXPECTED_DEV_HOLD=opentendril-greenhouse-dev
+EXPECTED_PRIOR=opentendril-greenhouse-prior
 EXPECTED_DEV_TAG=opentendril-greenhouse:dev
 ACTIVE=$EXPECTED_ACTIVE
 RELEASE_HOLD=$EXPECTED_RELEASE_HOLD
 DEV_HOLD=$EXPECTED_DEV_HOLD
+PRIOR=$EXPECTED_PRIOR
 DEV_TAG=$EXPECTED_DEV_TAG
 CONTAINER=$ACTIVE
 
@@ -41,6 +43,7 @@ CP_BIN=/usr/bin/cp
 CHMOD_BIN=/usr/bin/chmod
 CHOWN_BIN=/usr/bin/chown
 RM_BIN=/usr/bin/rm
+MV_BIN=/usr/bin/mv
 MKTEMP_BIN=/usr/bin/mktemp
 CMP_BIN=/usr/bin/cmp
 AWK_BIN=/usr/bin/awk
@@ -147,6 +150,104 @@ ensure_owned_dir() {
   "$INSTALL_BIN" -d -o "$user" -g "$group" -m "$mode" "$path" </dev/null
   [ "$(owner_of "$path")" = "$user" ] || fail "created ${path} is not owned by ${user}"
   [ "$(group_of "$path")" = "$group" ] || fail "created ${path} group is not ${group}"
+}
+
+# Read a recovery field without executing the file. Empty means absent.
+state_field() {
+  local want=$1 state=${STATE_DIR}/state line key value
+  [ -f "$state" ] && [ ! -L "$state" ] || return 0
+  while IFS= read -r line || [ -n "$line" ]; do
+    key=${line%%=*}
+    value=${line#*=}
+    [ "$key" = "$want" ] || continue
+    [ "$key" != "$line" ] || continue
+    case "$value" in
+      ''|*[!a-zA-Z0-9:._+-]*) return 0 ;;
+    esac
+    [ "${#value}" -le 128 ] || return 0
+    printf '%s' "$value"
+    return 0
+  done <"$state"
+}
+
+recovery_note() {
+  local sha container
+  sha=$(state_field SOURCE_SHA || true)
+  container=$(state_field RELEASE_CONTAINER_ID || true)
+  if [ -n "$sha" ] && [ -n "$container" ]; then
+    printf 'Preserved deployment recovery state records SOURCE_SHA=%s and RELEASE_CONTAINER_ID=%s; it was left unchanged.' \
+      "$sha" "$container"
+    return 0
+  fi
+  printf 'Existing deployment state was left unchanged.'
+}
+
+recorded_revision() {
+  local sha
+  sha=$(state_field SOURCE_SHA || true)
+  if [ -n "$sha" ]; then
+    printf '%s' "$sha"
+  else
+    printf 'unset'
+  fi
+}
+
+refuse_foreign_state_path() {
+  local path=$1 kind=$2
+  [ -e "$path" ] || [ -L "$path" ] || return 0
+  refuse_symlink "$path"
+  if [ "$kind" = directory ]; then
+    [ -d "$path" ] || fail "${path} exists and is not a directory. $(recovery_note)"
+  else
+    [ -f "$path" ] || fail "${path} exists and is not a file. $(recovery_note)"
+  fi
+  if [ "$(owner_of "$path")" != "$pollinator_user" ]; then
+    fail "${path} is owned by $(owner_of "$path"), expected ${pollinator_user}; refusing to take ownership. $(recovery_note)"
+  fi
+  if [ "$(group_of "$path")" != "$pollinator_group" ]; then
+    fail "${path} group is $(group_of "$path"), expected ${pollinator_group}; refusing to change it. $(recovery_note)"
+  fi
+  refuse_other_writable "$path"
+}
+
+install_owned_file() {
+  local src=$1 dest=$2
+  "$INSTALL_BIN" -o "$pollinator_user" -g "$pollinator_group" -m 0640 "$src" "$dest" </dev/null
+  [ "$(owner_of "$dest")" = "$pollinator_user" ] || return 1
+  [ "$(group_of "$dest")" = "$pollinator_group" ] || return 1
+  [ "$(mode_of "$dest")" = 640 ] || return 1
+  "$CMP_BIN" -s "$src" "$dest"
+}
+
+# Prove the state directory can be created and written as the invoking
+# account before any binary or container is replaced. A foreign directory
+# or recovery file is left untouched.
+prepare_state_persistence() {
+  local probe body created=0
+  ensure_owned_dir "$pollinator_user" "$pollinator_group" 0755 "${pollinator_home}/.local"
+  ensure_owned_dir "$pollinator_user" "$pollinator_group" 0750 "${pollinator_home}/.local/share"
+  if [ -e "$STATE_DIR" ] || [ -L "$STATE_DIR" ]; then
+    refuse_foreign_state_path "$STATE_DIR" directory
+  else
+    ensure_owned_dir "$pollinator_user" "$pollinator_group" 0750 "$STATE_DIR"
+    created=1
+  fi
+  if [ "$created" -eq 1 ] && [ "$(mode_of "$STATE_DIR")" != 750 ]; then
+    fail "created ${STATE_DIR} mode is not 0750"
+  fi
+  refuse_foreign_state_path "${STATE_DIR}/state" file
+  probe=${STATE_DIR}/.state-write-probe
+  if [ -e "$probe" ] || [ -L "$probe" ]; then
+    fail "${probe} already exists; refusing to replace it. $(recovery_note)"
+  fi
+  body=$("$MKTEMP_BIN" /tmp/opentendril-dev-state.XXXXXX)
+  printf 'probe\n' >"$body"
+  if ! install_owned_file "$body" "$probe"; then
+    "$RM_BIN" -f "$body" "$probe"
+    fail "deployment state directory cannot be written as ${pollinator_user}; refusing to replace binaries or containers. $(recovery_note)"
+  fi
+  "$RM_BIN" -f "$body" "$probe"
+  [ ! -e "$probe" ] || fail "state directory probe could not be removed"
 }
 
 run_as() {
@@ -309,9 +410,22 @@ remove_dev_active_if_present() {
     return 0
   fi
   assert_not_release_image "$ACTIVE"
-  log "replacing development container ${ACTIVE}"
+  if container_exists "$PRIOR"; then
+    fail "previous development container ${PRIOR} already exists; refusing to remove it"
+  fi
+  log "holding the previous development container as ${PRIOR}"
   stop_and_unrestart "$ACTIVE"
-  rootless_docker container rm "$ACTIVE" >/dev/null
+  rootless_docker rename "$ACTIVE" "$PRIOR" >/dev/null
+  PRIOR_HELD=1
+}
+
+discard_prior_container() {
+  [ "${PRIOR_HELD:-0}" = 1 ] || return 0
+  container_exists "$PRIOR" || return 0
+  assert_not_release_image "$PRIOR"
+  log "removing the previous development container now that state is recorded"
+  rootless_docker container rm "$PRIOR" >/dev/null
+  PRIOR_HELD=0
 }
 
 wait_container_healthy() {
@@ -705,6 +819,7 @@ install_mcp() {
       "$CP_BIN" -a "$MCP_BIN" "${MCP_ROLLBACK_DIR}/tendril-mcp"
     fi
   fi
+  MCP_REPLACED=1
   "$INSTALL_BIN" -o "$pollinator_user" -g "$pollinator_group" -m 0755 "${BUILD_DIR}/tendril-mcp" "$MCP_BIN" </dev/null
   assert_binary_revision "$MCP_BIN" tendril-mcp "$sha" "$version"
   log "MCP client installed at ${MCP_BIN} (${version}, ${sha})"
@@ -748,6 +863,7 @@ install_stem_if_needed() {
   fi
   log "installing Stem ${version} at ${sha} and restarting tendril.service"
   STEM_NEEDS_RESTORE=1
+  STEM_REPLACED=1
   "$INSTALL_BIN" -o "$STEM_USER" -g "$STEM_USER" -m 0750 "${BUILD_DIR}/tendril" "$STEM_BIN" </dev/null
   "$SYSTEMCTL_BIN" restart tendril.service
   if ! wait_http http://127.0.0.1:8080/health 200 || [ ! -S "$STEM_SOCKET" ]; then
@@ -853,11 +969,29 @@ restore_greenhouse() {
   fi
 }
 
+fail_unpublished_state() {
+  STATE_WRITE_FAILED=1
+  fail "deployment state was not replaced; recorded revision remains $(recorded_revision). This checkout was not recorded."
+}
+
 write_state() {
-  ensure_owned_dir "$pollinator_user" "$pollinator_group" 0750 "$STATE_DIR"
-  local state=${STATE_DIR}/state
-  "$RM_BIN" -f "$state"
-  cat >"$state" <<EOF
+  local state=${STATE_DIR}/state incoming=${STATE_DIR}/state.incoming body
+  # Any failure after this point must not leave the new revision recorded,
+  # and must put back binaries and the publisher replaced by this attempt.
+  STATE_WRITE_FAILED=1
+  refuse_foreign_state_path "$STATE_DIR" directory
+  if [ -e "$state" ] || [ -L "$state" ]; then
+    refuse_symlink "$state"
+    if [ "$(owner_of "$state")" != "$pollinator_user" ] || [ "$(group_of "$state")" != "$pollinator_group" ]; then
+      fail "${state} is owned by $(owner_of "$state"):$(group_of "$state"), expected ${pollinator_user}:${pollinator_group}; refusing to take ownership. $(recovery_note)"
+    fi
+    refuse_other_writable "$state"
+  fi
+  if [ -e "$incoming" ] || [ -L "$incoming" ]; then
+    fail_unpublished_state
+  fi
+  body=$("$MKTEMP_BIN" /tmp/opentendril-dev-state.XXXXXX)
+  cat >"$body" <<EOF
 SOURCE_SHA=${SOURCE_SHA}
 DEV_VERSION=${DEV_VERSION}
 RELEASE_IMAGE_ID=${RELEASE_IMAGE_ID}
@@ -869,8 +1003,17 @@ ACTIVE=${ACTIVE}
 RELEASE_HOLD=${RELEASE_HOLD}
 DEV_HOLD=${DEV_HOLD}
 EOF
-  "$CHOWN_BIN" "${pollinator_user}:${pollinator_group}" "$state"
-  "$CHMOD_BIN" 0640 "$state"
+  if ! install_owned_file "$body" "$incoming"; then
+    "$RM_BIN" -f "$body" "$incoming"
+    fail_unpublished_state
+  fi
+  "$RM_BIN" -f "$body"
+  if ! "$MV_BIN" -T "$incoming" "$state"; then
+    "$RM_BIN" -f "$incoming"
+    fail_unpublished_state
+  fi
+  STATE_PUBLISHED=1
+  STATE_WRITE_FAILED=0
 }
 
 assign_state_field() {
@@ -886,11 +1029,33 @@ assign_state_field() {
   printf -v "$key" '%s' "$value"
 }
 
+state_writable_by_others() {
+  local mode group other
+  mode=$(mode_of "$1")
+  group=${mode: -2:1}
+  other=${mode: -1}
+  case "$group" in
+    2|3|6|7) return 0 ;;
+  esac
+  case "$other" in
+    2|3|6|7) return 0 ;;
+  esac
+  return 1
+}
+
 load_state() {
-  local state=${STATE_DIR}/state line key value
+  local state=${STATE_DIR}/state line key value owner
   [ -f "$state" ] || fail "no development deployment state at ${state}"
   refuse_symlink "$state"
-  [ "$(owner_of "$state")" = "$pollinator_user" ] || fail "state file is not owned by the Pollinator-hosting account"
+  owner=$(owner_of "$state")
+  if [ "$owner" = "$pollinator_user" ]; then
+    [ "$(group_of "$state")" = "$pollinator_group" ] || fail "state file group is $(group_of "$state"), expected ${pollinator_group}"
+    refuse_other_writable "$state"
+  elif [ "$owner" = root ] && [ "$(group_of "$state")" = root ] && ! state_writable_by_others "$state"; then
+    log "using root-owned deployment recovery state without changing its ownership"
+  else
+    fail "state file is owned by ${owner}, expected ${pollinator_user}; refusing to take ownership. $(recovery_note)"
+  fi
   while IFS= read -r line || [ -n "$line" ]; do
     case "$line" in
       ''|\#*) continue ;;
@@ -918,7 +1083,7 @@ prepare_host() {
   [ "$("$ID_BIN" -u)" -eq 0 ] || fail "this development deployment needs administrator authority. Run: sudo make dev-deploy"
   for tool in "$ID_BIN" "$STAT_BIN" "$GETENT_BIN" "$READLINK_BIN" "$GIT_BIN" "$GO_BIN" "$CURL_BIN" \
     "$SYSTEMCTL_BIN" "$INSTALL_BIN" "$SHA256_BIN" "$FIND_BIN" "$CP_BIN" "$CHMOD_BIN" "$CHOWN_BIN" \
-    "$RM_BIN" "$MKTEMP_BIN" "$CMP_BIN" "$AWK_BIN" "$SORT_BIN" "$TR_BIN" "$GREP_BIN" \
+    "$RM_BIN" "$MV_BIN" "$MKTEMP_BIN" "$CMP_BIN" "$AWK_BIN" "$SORT_BIN" "$TR_BIN" "$GREP_BIN" \
     "$RUNUSER_BIN" "$ENV_BIN" "$DOCKER_BIN"; do
     require_tool "$tool"
   done
@@ -985,6 +1150,11 @@ prepare_host() {
   [ "$(group_of "$GREENHOUSE_WRAPPER")" = root ] || fail "${GREENHOUSE_WRAPPER} is not root-group-owned"
   [ "$(mode_of "$GREENHOUSE_WRAPPER")" = 755 ] || fail "${GREENHOUSE_WRAPPER} mode is not 0755"
 
+  STATE_DIR=${pollinator_home}/.local/share/opentendril-dev-deploy
+  if [ "$command_name" = deploy ]; then
+    prepare_state_persistence
+  fi
+
   STEM_UID=$tendril_uid
   DOCKER_HOST=unix:///run/user/${STEM_UID}/docker.sock
   # shellcheck disable=SC1090
@@ -993,7 +1163,6 @@ prepare_host() {
   assert_docker_root
 
   MCP_BIN=${pollinator_home}/.local/bin/tendril-mcp
-  STATE_DIR=${pollinator_home}/.local/share/opentendril-dev-deploy
   BUILD_DIR=${pollinator_home}/.cache/opentendril-dev-build
   MCP_ROLLBACK_DIR=${pollinator_home}/.local/share/opentendril-dev-rollback
   ROLLBACK_DIR=${STEM_HOME}/.local/share/opentendril-dev-rollback
@@ -1004,8 +1173,61 @@ prepare_host() {
   WRAPPER_SHA=$("$SHA256_BIN" "$GREENHOUSE_WRAPPER" | "$AWK_BIN" '{print $1}')
 }
 
+capture_installed_binaries() {
+  binary_snapshot=$("$MKTEMP_BIN" -d /tmp/opentendril-dev-binaries.XXXXXX)
+  if [ -f "$STEM_BIN" ]; then
+    "$CP_BIN" -a "$STEM_BIN" "${binary_snapshot}/tendril"
+  fi
+  if [ -f "$MCP_BIN" ]; then
+    "$CP_BIN" -a "$MCP_BIN" "${binary_snapshot}/tendril-mcp"
+  fi
+}
+
+cleanup_binary_snapshot() {
+  case "${binary_snapshot:-}" in
+    /tmp/opentendril-dev-binaries.*)
+      "$RM_BIN" -rf "$binary_snapshot"
+      binary_snapshot=""
+      ;;
+  esac
+}
+
+restore_unpublished_binaries() {
+  [ -n "${binary_snapshot:-}" ] || return 0
+  if [ "${STEM_REPLACED:-0}" = 1 ] && [ -f "${binary_snapshot}/tendril" ]; then
+    "$CP_BIN" -a "${binary_snapshot}/tendril" "$STEM_BIN" || true
+    "$CHOWN_BIN" "${STEM_USER}:${STEM_USER}" "$STEM_BIN" || true
+    "$CHMOD_BIN" 0750 "$STEM_BIN" || true
+    "$SYSTEMCTL_BIN" restart tendril.service || true
+  fi
+  if [ "${MCP_REPLACED:-0}" = 1 ] && [ -f "${binary_snapshot}/tendril-mcp" ]; then
+    "$CP_BIN" -a "${binary_snapshot}/tendril-mcp" "$MCP_BIN" || true
+    "$CHOWN_BIN" "${pollinator_user}:${pollinator_group}" "$MCP_BIN" || true
+    "$CHMOD_BIN" 0755 "$MCP_BIN" || true
+  fi
+}
+
+restore_unpublished_greenhouse() {
+  if [ "${PRIOR_HELD:-0}" = 1 ] && container_exists "$PRIOR"; then
+    if container_exists "$ACTIVE"; then
+      stop_and_unrestart "$ACTIVE" || true
+      if [ "$(image_of "$ACTIVE" 2>/dev/null || printf '')" != "$RELEASE_IMAGE_ID" ]; then
+        rootless_docker container rm "$ACTIVE" >/dev/null || true
+      fi
+    fi
+    rootless_docker rename "$PRIOR" "$ACTIVE" >/dev/null || true
+    start_named "$ACTIVE" || true
+    PRIOR_HELD=0
+    return 0
+  fi
+  DEV_READY=0
+  NEED_RESTORE=1
+  restore_greenhouse || true
+}
+
 cmd_deploy() {
   local before after end_sha
+  capture_installed_binaries
   SOURCE_SHA=$(source_sha)
   DEV_VERSION=$(dev_version)
   log "checkout ${SOURCE_SHA}; release image ${RELEASE_IMAGE_ID}; pollinator ${pollinator_user}"
@@ -1026,6 +1248,7 @@ cmd_deploy() {
   assert_binary_revision "$STEM_BIN" tendril "$SOURCE_SHA" "$DEV_VERSION"
   assert_binary_revision "$MCP_BIN" tendril-mcp "$SOURCE_SHA" "$DEV_VERSION"
   write_state
+  discard_prior_container
   log "DONE checkout ${SOURCE_SHA}"
   log "Stem: ${STEM_BIN} (${DEV_VERSION})"
   log "MCP client: ${MCP_BIN} (${DEV_VERSION})"
@@ -1055,15 +1278,22 @@ on_exit() {
   trap - EXIT
   cleanup_stage
   if [ "$status" -ne 0 ]; then
-    restore_previous_stem || true
-    restore_greenhouse || true
+    if [ "${STATE_PUBLISHED:-0}" != 1 ] && [ "${STATE_WRITE_FAILED:-0}" = 1 ]; then
+      restore_unpublished_binaries || true
+      restore_unpublished_greenhouse || true
+    else
+      restore_previous_stem || true
+      restore_greenhouse || true
+    fi
   fi
+  cleanup_binary_snapshot
   exit "$status"
 }
 
 main() {
   local cmd=${1:-deploy}
   [ "$#" -le 1 ] || usage
+  command_name=$cmd
   trap on_exit EXIT
   prepare_host
   case "$cmd" in
