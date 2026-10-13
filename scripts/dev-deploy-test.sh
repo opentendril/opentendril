@@ -906,8 +906,11 @@ run_deploy() {
       >"${WORK}/out" 2>"${WORK}/err"
   status=$?
   set -e
+  # Root-created files must be readable by the invoking user. Adding
+  # execute for everyone would turn a 0750 Stem binary into 0755, and
+  # the next command would reject that mode.
   if [ "$bwrap_as_root" -eq 1 ]; then
-    sudo -n -- chmod -R a+rX "$WORK"
+    sudo -n -- chown -R "$(id -u):$(id -g)" "$WORK"
   fi
   printf '%s\n' "$status"
 }
