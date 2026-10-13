@@ -358,6 +358,14 @@ someone else, and a wrapper that is not root-owned mode `0755`. It uses
 tendril's rootless Docker socket and publishes only `127.0.0.1:4173`. It
 does not read the Botanist key and does not change Substrate Git state.
 
+Restarting the Stem refreshes each managed Substrate with `git fetch`. That
+fetch can create or move a remote-tracking ref, including a branch pushed
+while the deployment is running. The deployment reports that refresh and
+does not treat it as a change to the checkout. It still fails when a local
+branch, HEAD, the index, a worktree, a Tendril-owned ref, or any other ref
+changes, and the failure names that class. A Fruit branch is a local branch,
+so it stays under that check.
+
 `docker compose --profile ui` remains the declarative reference for this
 container contract. `make dev-deploy` is the supported local replacement
 from a checkout.

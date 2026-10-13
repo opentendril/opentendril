@@ -409,21 +409,248 @@ swap_to_dev_hold() {
   start_named "$ACTIVE"
 }
 
+# Snapshot the checkout and every Substrate git directory.
+# Each record is one class the verifier can name:
+#   dev-head, dev-status, repo, repo-head, repo-status, ref.
+# A ref line is: ref <dir> <oid> <name> <symref-or-dash>.
+# Direct refs/remotes/<remote>/<branch> records are the only class a fetch
+# may change. Local branches, HEAD, index and worktree status, the worktree
+# set, Tendril-owned refs, remote HEAD, and every other ref stay protected.
 snapshot_git() {
-  local dest=$1 dir count substrates
+  local dest=$1 dir line oid name sym rest substrates
   substrates="${STEM_HOME}/.tendril/substrates"
   {
-    printf 'dev %s\n' "$(git_as "$pollinator_user" "$pollinator_home" -C "$REPO" rev-parse HEAD)"
-    git_as "$pollinator_user" "$pollinator_home" -C "$REPO" status --porcelain
+    printf 'dev-head %s\n' "$(git_as "$pollinator_user" "$pollinator_home" -C "$REPO" rev-parse HEAD)"
+    while IFS= read -r line; do
+      [ -n "$line" ] || continue
+      printf 'dev-status %s\n' "$line"
+    done < <(git_as "$pollinator_user" "$pollinator_home" -C "$REPO" status --porcelain)
     if [ -d "$substrates" ]; then
       while IFS= read -r dir; do
         [ -n "$dir" ] || continue
-        count=$(git_as "$STEM_USER" "$STEM_HOME" -C "$dir" status --porcelain | "$AWK_BIN" 'END { print NR+0 }')
-        printf 'repo %s %s %s\n' "$dir" "$(git_as "$STEM_USER" "$STEM_HOME" -C "$dir" rev-parse HEAD)" "$count"
-        git_as "$STEM_USER" "$STEM_HOME" -C "$dir" for-each-ref --format='ref %(objectname) %(refname)'
+        printf 'repo %s\n' "$dir"
+        printf 'repo-head %s %s\n' "$dir" "$(git_as "$STEM_USER" "$STEM_HOME" -C "$dir" rev-parse HEAD)"
+        while IFS= read -r line; do
+          [ -n "$line" ] || continue
+          printf 'repo-status %s %s\n' "$dir" "$line"
+        done < <(git_as "$STEM_USER" "$STEM_HOME" -C "$dir" status --porcelain)
+        while IFS= read -r line; do
+          [ -n "$line" ] || continue
+          case "$line" in
+            [0-9a-f]*\ refs/*\ *) ;;
+            *) fail "Git ref snapshot line could not be classified: ${line}" ;;
+          esac
+          oid=${line%% *}
+          rest=${line#* }
+          name=${rest%% *}
+          sym=${rest#* }
+          if [ -z "$oid" ] || [ -z "$name" ] || [ -z "$sym" ] || [ "$sym" = "$rest" ]; then
+            fail "Git ref snapshot line could not be classified: ${line}"
+          fi
+          case "$sym" in
+            -|refs/*) ;;
+            *) fail "Git ref snapshot line could not be classified: ${line}" ;;
+          esac
+          printf 'ref %s %s %s %s\n' "$dir" "$oid" "$name" "$sym"
+        done < <(git_as "$STEM_USER" "$STEM_HOME" -C "$dir" for-each-ref --format='%(objectname) %(refname) %(if)%(symref)%(then)%(symref)%(else)-%(end)')
       done < <("$FIND_BIN" "$substrates" -mindepth 2 -maxdepth 3 -type d -name .git -printf '%h\n' | "$SORT_BIN")
     fi
   } >"$dest"
+}
+
+# Compare two snapshots. A direct remote-tracking branch may be created,
+# updated, or removed by git fetch, including the fetch Stem startup runs
+# when it refreshes a managed Substrate. That refresh is reported and is
+# not a deployment failure. Any other difference is a protected change:
+# it is named and it fails the deployment, including when a remote-tracking
+# ref changed in the same window.
+verify_git_snapshots() {
+  local before=$1 after=$2 report line failed awk_status detail
+  report=$("$MKTEMP_BIN")
+  awk_status=0
+  "$AWK_BIN" '
+    function is_oid(s,    i, c, n) {
+      n = length(s)
+      if (n != 40 && n != 64) return 0
+      for (i = 1; i <= n; i++) {
+        c = substr(s, i, 1)
+        if (c !~ /[0-9a-f]/) return 0
+      }
+      return 1
+    }
+    function bad(msg) {
+      print "BAD " msg
+      exit 2
+    }
+    function ref_class(name, sym,    rest, remote, branch) {
+      if (name ~ /^refs\/heads\//) return "local"
+      if (name ~ /^refs\/opentendril\//) return "owned"
+      if (name ~ /^refs\/remotes\//) {
+        rest = substr(name, length("refs/remotes/") + 1)
+        if (index(rest, "/") == 0) return "other"
+        remote = rest
+        sub(/\/.*/, "", remote)
+        branch = substr(rest, length(remote) + 2)
+        if (remote == "" || branch == "") return "other"
+        if (branch == "HEAD") return "remote-head"
+        if (sym != "-") return "other"
+        return "remote"
+      }
+      return "other"
+    }
+    function remember(key, class, where) {
+      seen[key] = 1
+      pclass[key] = class
+      pwhere[key] = where
+    }
+    function record(file, line,    tag, rest, dir, payload, n, oid, name, sym, class, key) {
+      if (line == "") return
+      tag = line
+      sub(/ .*/, "", tag)
+      if (length(line) <= length(tag)) bad(line)
+      rest = substr(line, length(tag) + 2)
+      if (tag == "dev-head") {
+        if (!is_oid(rest)) bad(line)
+        prot[file, "dev-head"] = rest
+        remember("dev-head", "checkout-head", "checkout")
+        return
+      }
+      if (tag == "dev-status") {
+        key = "dev-status " rest
+        prot[file, key] = 1
+        remember(key, "checkout-status", "checkout " rest)
+        return
+      }
+      if (tag == "repo") {
+        if (rest ~ /[[:space:]]/) bad(line)
+        key = "repo " rest
+        prot[file, key] = 1
+        remember(key, "worktree", rest)
+        return
+      }
+      if (tag == "repo-head") {
+        n = split(rest, f, " ")
+        if (n != 2 || !is_oid(f[2])) bad(line)
+        key = "repo-head " f[1]
+        prot[file, key] = f[2]
+        remember(key, "repo-head", f[1])
+        return
+      }
+      if (tag == "repo-status") {
+        dir = rest
+        sub(/ .*/, "", dir)
+        if (dir == "" || dir == rest) bad(line)
+        payload = substr(rest, length(dir) + 2)
+        key = "repo-status " dir "\n" payload
+        prot[file, key] = 1
+        remember(key, "repo-status", dir " " payload)
+        return
+      }
+      if (tag == "ref") {
+        n = split(rest, f, " ")
+        if (n != 4 || !is_oid(f[2]) || f[3] !~ /^refs\//) bad(line)
+        dir = f[1]
+        oid = f[2]
+        name = f[3]
+        sym = f[4]
+        if (sym != "-" && sym !~ /^refs\//) bad(line)
+        class = ref_class(name, sym)
+        if (class == "remote") {
+          key = dir "\n" name
+          remote_oid[file, key] = oid
+          rseen[key] = name
+          return
+        }
+        if (class == "remote-head") value = sym
+        else value = oid " " sym
+        key = "ref " dir "\n" name
+        prot[file, key] = value
+        remember(key, class, dir " " name)
+        return
+      }
+      bad(line)
+    }
+    function fail_text(key,    class) {
+      class = pclass[key]
+      if (class == "checkout-head" || class == "repo-head" || class == "remote-head") {
+        return "HEAD changed during deployment: " pwhere[key]
+      }
+      if (class == "checkout-status" || class == "repo-status") {
+        return "index or worktree changed during deployment: " pwhere[key]
+      }
+      if (class == "worktree") {
+        return "worktree set changed during deployment: " pwhere[key]
+      }
+      if (class == "local") {
+        return "local branch changed during deployment: " pwhere[key]
+      }
+      if (class == "owned") {
+        return "Tendril-owned ref changed during deployment: " pwhere[key]
+      }
+      return "unexpected Git ref changed during deployment: " pwhere[key]
+    }
+    FNR == 1 { which++ }
+    { record(which, $0) }
+    END {
+      if (which != 2) bad("snapshot pair")
+      if (!((1 SUBSEP "dev-head") in prot) || !((2 SUBSEP "dev-head") in prot)) {
+        bad("snapshot is missing checkout HEAD")
+      }
+      failed = 0
+      for (key in seen) {
+        has_before = (1 SUBSEP key) in prot
+        has_after = (2 SUBSEP key) in prot
+        if (!has_before || !has_after || prot[1, key] != prot[2, key]) {
+          print "FAIL " fail_text(key)
+          failed = 1
+        }
+      }
+      for (key in rseen) {
+        has_before = (1 SUBSEP key) in remote_oid
+        has_after = (2 SUBSEP key) in remote_oid
+        name = rseen[key]
+        if (!has_before && has_after) {
+          print "LOG external remote-tracking refresh, not a deployment mutation: " name " created"
+        } else if (has_before && !has_after) {
+          print "LOG external remote-tracking refresh, not a deployment mutation: " name " removed"
+        } else if (remote_oid[1, key] != remote_oid[2, key]) {
+          print "LOG external remote-tracking refresh, not a deployment mutation: " name " updated"
+        }
+      }
+      if (failed) exit 1
+    }
+  ' "$before" "$after" >"$report" || awk_status=$?
+  if [ "$awk_status" -eq 2 ]; then
+    detail=$(head -n 1 "$report" || true)
+    "$RM_BIN" -f "$report"
+    case "$detail" in
+      BAD\ *) fail "Git snapshot could not be classified: ${detail#BAD }" ;;
+      *) fail "Git snapshot could not be classified" ;;
+    esac
+  fi
+  if [ "$awk_status" -ne 0 ] && [ "$awk_status" -ne 1 ]; then
+    "$RM_BIN" -f "$report"
+    fail "Git snapshot could not be classified"
+  fi
+  failed=0
+  while IFS= read -r line || [ -n "$line" ]; do
+    case "$line" in
+      LOG\ *) log "${line#LOG }" ;;
+      FAIL\ *)
+        printf 'opentendril-dev-deploy: FAILED: %s\n' "${line#FAIL }" >&2
+        failed=1
+        ;;
+      '') ;;
+      *)
+        "$RM_BIN" -f "$report"
+        fail "Git snapshot report could not be classified"
+        ;;
+    esac
+  done <"$report"
+  "$RM_BIN" -f "$report"
+  if [ "$failed" -ne 0 ]; then
+    exit 1
+  fi
 }
 
 is_sha256() {
@@ -792,10 +1019,7 @@ cmd_deploy() {
   deploy_greenhouse
   after=$("$MKTEMP_BIN")
   snapshot_git "$after"
-  if ! "$CMP_BIN" -s "$before" "$after"; then
-    diff -u "$before" "$after" >&2 || true
-    fail "workspace, Fruit, or Git state changed during deployment"
-  fi
+  verify_git_snapshots "$before" "$after"
   "$RM_BIN" -f "$before" "$after"
   end_sha=$(source_sha)
   [ "$end_sha" = "$SOURCE_SHA" ] || fail "checkout changed from ${SOURCE_SHA} to ${end_sha}"

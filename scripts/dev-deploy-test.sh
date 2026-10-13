@@ -391,12 +391,58 @@ case "$*" in
     fi
     ;;
   "status --porcelain")
+    if [ "$dir" != "$repo" ] && [ "$(tr -d '[:space:]' </tmp/work/mode)" = protected-index ]; then
+      n=0
+      if [ -f /tmp/work/substrate-status-count ]; then
+        n=$(tr -d '[:space:]' </tmp/work/substrate-status-count)
+      fi
+      n=$((n + 1))
+      printf '%s\n' "$n" >/tmp/work/substrate-status-count
+      if [ "$n" -ge 2 ]; then
+        printf ' M SENTINEL\n'
+      fi
+    fi
     ;;
   "rev-parse --show-toplevel")
     printf '%s\n' "$dir"
     ;;
   for-each-ref*)
-    printf 'ref %s refs/heads/main\n' "$(tr -d '[:space:]' </tmp/work/substrate-sha)"
+    sha=$(tr -d '[:space:]' </tmp/work/substrate-sha)
+    n=0
+    if [ -f /tmp/work/for-each-ref-count ]; then
+      n=$(tr -d '[:space:]' </tmp/work/for-each-ref-count)
+    fi
+    n=$((n + 1))
+    printf '%s\n' "$n" >/tmp/work/for-each-ref-count
+    mode=$(tr -d '[:space:]' </tmp/work/mode)
+    printf '%s refs/heads/main -\n' "$sha"
+    head_oid=$sha
+    head_sym=refs/remotes/origin/main
+    if [ "$n" -ge 2 ] && [ "$mode" = protected-remote-head ]; then
+      head_sym=refs/remotes/origin/other
+    fi
+    if [ "$n" -ge 2 ] && [ "$mode" = remote-head-peeled ]; then
+      head_oid=$(tr -d '[:space:]' </tmp/work/old-sha)
+    fi
+    printf '%s refs/remotes/origin/HEAD %s\n' "$head_oid" "$head_sym"
+    if [ "$n" -ge 2 ]; then
+      case "$mode" in
+        external-remote-ref|mixed-protected)
+          printf '%s refs/remotes/origin/staging/ai-greenhouse-dev-lifecycle -\n' "$sha"
+          ;;
+      esac
+      case "$mode" in
+        mixed-protected)
+          printf '%s refs/heads/sprout/task-fruit -\n' "$(tr -d '[:space:]' </tmp/work/old-sha)"
+          ;;
+        protected-owned)
+          printf '%s refs/opentendril/owned/qualification -\n' "$(tr -d '[:space:]' </tmp/work/old-sha)"
+          ;;
+        protected-tag)
+          printf '%s refs/tags/v9 -\n' "$(tr -d '[:space:]' </tmp/work/old-sha)"
+          ;;
+      esac
+    fi
     ;;
   *)
     printf 'unexpected git %s\n' "$*" >>/tmp/work/events
@@ -1228,6 +1274,73 @@ assert_release_preserved opentendril-greenhouse-release
 [ "$(sha256sum "${WORK}/sbin/opentendril-greenhouse")" = "$wrapper_before" ] || fail "interrupted rollback edited the governed wrapper"
 if grep -E 'call (build|run|tag|container rm) ' "${WORK}/events" >/dev/null; then
   fail "interrupted rollback built, ran, retagged, or removed a container"
+fi
+
+# Stem startup refreshes a managed Substrate with git fetch. That fetch can
+# add one remote-tracking ref while HEAD, the index, local branches, and
+# Fruit branches stay put. The deployment must report that refresh and
+# finish. A protected change in the same window must still fail by name.
+
+setup_fixture external-remote-ref "$source_sha"
+status="$(run_deploy deploy)"
+[ "$status" -eq 0 ] || fail "an external remote-tracking ref failed deployment"
+grep -F -- "external remote-tracking refresh, not a deployment mutation: refs/remotes/origin/staging/ai-greenhouse-dev-lifecycle created" "${WORK}/out" >/dev/null || fail "remote-tracking refresh was not classified"
+if grep -F -- "workspace, Fruit, or Git state changed during deployment" "${WORK}/err" >/dev/null; then
+  fail "remote-tracking refresh was classified as a protected mutation"
+fi
+if grep -F -- "FAILED:" "${WORK}/err" >/dev/null; then
+  fail "remote-tracking refresh produced a deployment failure"
+fi
+[ -f "${WORK}/alice/.local/share/opentendril-dev-deploy/state" ] || fail "remote-tracking refresh stopped before deployment state was recorded"
+
+setup_fixture mixed-protected "$source_sha"
+status="$(run_deploy deploy)"
+[ "$status" -ne 0 ] || fail "a new local branch was ignored because a remote-tracking ref also appeared"
+grep -F -- "local branch changed during deployment:" "${WORK}/err" >/dev/null || fail "local branch change was not named"
+grep -F -- "refs/heads/sprout/task-fruit" "${WORK}/err" >/dev/null || fail "Fruit branch change was not named"
+grep -F -- "external remote-tracking refresh, not a deployment mutation: refs/remotes/origin/staging/ai-greenhouse-dev-lifecycle created" "${WORK}/out" >/dev/null || fail "mixed change hid the remote-tracking refresh"
+if grep -F -- "refs/remotes/origin/staging/ai-greenhouse-dev-lifecycle" "${WORK}/err" >/dev/null; then
+  fail "remote-tracking refresh was reported as the protected failure"
+fi
+if grep -F -- "workspace, Fruit, or Git state changed during deployment" "${WORK}/err" >/dev/null; then
+  fail "mixed change used the combined Git state failure"
+fi
+
+setup_fixture protected-owned "$source_sha"
+status="$(run_deploy deploy)"
+[ "$status" -ne 0 ] || fail "a Tendril-owned ref change was ignored"
+grep -F -- "Tendril-owned ref changed during deployment:" "${WORK}/err" >/dev/null || fail "Tendril-owned ref change was not named"
+grep -F -- "refs/opentendril/owned/qualification" "${WORK}/err" >/dev/null || fail "Tendril-owned ref was not identified"
+
+setup_fixture protected-index "$source_sha"
+status="$(run_deploy deploy)"
+[ "$status" -ne 0 ] || fail "an index or worktree change was ignored"
+grep -F -- "index or worktree changed during deployment:" "${WORK}/err" >/dev/null || fail "index or worktree change was not named"
+grep -F -- "SENTINEL" "${WORK}/err" >/dev/null || fail "index or worktree change did not name the status"
+
+setup_fixture protected-tag "$source_sha"
+status="$(run_deploy deploy)"
+[ "$status" -ne 0 ] || fail "an unexpected tag ref was ignored"
+grep -F -- "unexpected Git ref changed during deployment:" "${WORK}/err" >/dev/null || fail "unexpected tag was not named"
+grep -F -- "refs/tags/v9" "${WORK}/err" >/dev/null || fail "unexpected tag ref was not identified"
+
+setup_fixture protected-remote-head "$source_sha"
+status="$(run_deploy deploy)"
+[ "$status" -ne 0 ] || fail "a remote HEAD change was treated as a branch refresh"
+grep -F -- "HEAD changed during deployment:" "${WORK}/err" >/dev/null || fail "remote HEAD change was not named"
+grep -F -- "refs/remotes/origin/HEAD" "${WORK}/err" >/dev/null || fail "remote HEAD ref was not identified"
+if grep -F -- "external remote-tracking refresh" "${WORK}/out" >/dev/null; then
+  fail "remote HEAD change was classified as a remote-tracking refresh"
+fi
+
+setup_fixture remote-head-peeled "$source_sha"
+status="$(run_deploy deploy)"
+[ "$status" -eq 0 ] || fail "a peeled remote HEAD oid failed deployment without a symref change"
+if grep -F -- "HEAD changed during deployment:" "${WORK}/err" >/dev/null; then
+  fail "peeled remote HEAD oid was classified as a HEAD change"
+fi
+if grep -F -- "FAILED:" "${WORK}/err" >/dev/null; then
+  fail "peeled remote HEAD oid produced a deployment failure"
 fi
 
 {
