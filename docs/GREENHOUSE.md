@@ -330,3 +330,55 @@ Greenhouse does not use host networking and does not need
   `--profile ui` is a transport failure; it does not select TCP.
 See [`ui/README.md`](../ui/README.md) for commands, configuration variables,
 and the manual static-build alternative.
+
+## 6. Repository development deployment
+
+`sudo make dev-deploy` builds the Stem, the MCP client, and the Greenhouse
+from one clean checkout revision. Container start, health, and the fixed
+runtime contract come from
+[`scripts/greenhouse-lifecycle.sh`](../scripts/greenhouse-lifecycle.sh).
+The governed installer embeds that same text in
+`/usr/local/sbin/opentendril-greenhouse`. The development image is
+`opentendril-greenhouse:dev` and is started by its immutable image id.
+The command does not retag `opentendril-greenhouse:<version>` and does not
+edit the governed wrapper.
+
+The running release container is renamed to `opentendril-greenhouse-release`
+and kept. `sudo make dev-rollback` starts that preserved container again.
+A failed deployment restores a publisher on `127.0.0.1:4173`.
+If the replacement Stem does not become healthy on the governed Unix
+socket, the previous Stem binary is restored and restarted.
+
+The command discovers the Pollinator-hosting account from `SUDO_USER` and
+requires that account's uid to equal `SUDO_UID`. It reads the `tendril`
+account from the system account database. It refuses a system account, a
+home that is not owned by that account, a `tendril` home other than
+`/home/tendril`, an unlocked `tendril` password, a checkout owned by
+someone else, and a wrapper that is not root-owned mode `0755`. It uses
+tendril's rootless Docker socket and publishes only `127.0.0.1:4173`. It
+does not read the Botanist key and does not change Substrate Git state.
+
+The deployment records its revision and the preserved release container
+in the Pollinator-hosting account's
+`~/.local/share/opentendril-dev-deploy/state`. That directory and file
+are created owned by the account. The command checks that it can write
+this state before it replaces a binary or a container. A directory or
+state file owned by another account, including root, is left unchanged
+and the deployment stops. Rollback can read a root-owned recovery file
+without taking ownership of it. The recorded revision is replaced only
+by a complete file owned by the account. If that write fails, the
+previous recorded revision stays in place. Binaries this attempt
+replaced are put back, and the Greenhouse publisher returns to the
+container that was running before the attempt.
+
+Restarting the Stem refreshes each managed Substrate with `git fetch`. That
+fetch can create or move a remote-tracking ref, including a branch pushed
+while the deployment is running. The deployment reports that refresh and
+does not treat it as a change to the checkout. It still fails when a local
+branch, HEAD, the index, a worktree, a Tendril-owned ref, or any other ref
+changes, and the failure names that class. A Fruit branch is a local branch,
+so it stays under that check.
+
+`docker compose --profile ui` remains the declarative reference for this
+container contract. `make dev-deploy` is the supported local replacement
+from a checkout.

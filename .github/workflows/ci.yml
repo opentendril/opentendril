@@ -427,6 +427,19 @@ jobs:
         shell: bash
         run: bash scripts/install-test.sh
 
+      - name: Install bubblewrap
+        shell: bash
+        run: sudo apt-get update && sudo apt-get install -y bubblewrap
+
+      # ubuntu-24.04 denies unprivileged user namespaces and does not
+      # profile /usr/bin/bwrap, so bubblewrap reports "setting up uid map:
+      # Permission denied". The test runs bubblewrap as root in that case.
+      # Root builds a mount namespace without a user namespace. This job
+      # stays on the standard runner.
+      - name: Run development deployment tests
+        shell: bash
+        run: bash scripts/dev-deploy-test.sh
+
   # This job's NAME is a required status check in the "Protect Default"
   # ruleset. Renaming it makes the required context never report and leaves
   # every pull request unmergeable.
