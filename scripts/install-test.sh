@@ -921,13 +921,61 @@ GOVERNED_SUDO_USER=""
 write_os_release() {
   local id=$1
   local version=$2
+  local version_codename=${3-}
+  local ubuntu_spec=${4-__unset__}
+
+  # Two arguments keep existing fixtures on the release map: 24.04 is noble
+  # and 26.04 is resolute, written to both codename fields. A third argument
+  # sets both fields to that codename. "none" omits a field. A fourth
+  # argument sets UBUNTU_CODENAME independently so a mismatch can be exact.
+  if [ "$#" -lt 3 ]; then
+    case "${id}:${version}" in
+      ubuntu:24.04) version_codename=noble ;;
+      ubuntu:26.04) version_codename=resolute ;;
+      *) version_codename= ;;
+    esac
+    ubuntu_spec=${version_codename}
+  elif [ "${version_codename}" = none ]; then
+    version_codename=
+    if [ "${ubuntu_spec}" = __unset__ ]; then
+      ubuntu_spec=none
+    fi
+  elif [ "${ubuntu_spec}" = __unset__ ]; then
+    ubuntu_spec=${version_codename}
+  fi
+
+  local ubuntu_codename=
+  if [ "${ubuntu_spec}" != none ]; then
+    ubuntu_codename=${ubuntu_spec}
+  fi
+
   mkdir -p "${HOSTFS}/etc"
-  cat >"${HOSTFS}/etc/os-release" <<EOF
-PRETTY_NAME="${id} ${version}"
-NAME="${id}"
-ID=${id}
-VERSION_ID="${version}"
-EOF
+  {
+    printf 'PRETTY_NAME="%s %s"\n' "${id}" "${version}"
+    printf 'NAME="%s"\n' "${id}"
+    printf 'ID=%s\n' "${id}"
+    printf 'VERSION_ID="%s"\n' "${version}"
+    if [ -n "${version_codename}" ]; then
+      printf 'VERSION_CODENAME=%s\n' "${version_codename}"
+    fi
+    if [ -n "${ubuntu_codename}" ]; then
+      printf 'UBUNTU_CODENAME=%s\n' "${ubuntu_codename}"
+    fi
+  } >"${HOSTFS}/etc/os-release"
+}
+
+assert_docker_suite() {
+  local name=$1
+  local suite=$2
+  local sources="${HOSTFS}/etc/apt/sources.list.d/docker.sources"
+  if [ -f "${sources}" ] \
+    && [ "$(grep -c '^Suites:' "${sources}")" -eq 1 ] \
+    && grep -q "^Suites: ${suite}$" "${sources}"; then
+    pass "${name}"
+    return 0
+  fi
+  fail "${name}" "sources=$(tr '\n' ' ' <"${sources}" 2>/dev/null || echo missing)"
+  return 1
 }
 
 setup_governed_host() {
@@ -2950,9 +2998,13 @@ new_governed_case
 write_os_release ubuntu 22.04
 run_governed_installer --pollinator-user alice
 if assert_governed_failure "wrong Ubuntu release rejected"; then
-  if grep -q '24.04' "${stderr_file}"; then
+  if grep -q '24.04' "${stderr_file}" && grep -q 'VERSION_ID=22.04' "${stderr_file}"; then
     if assert_no_host_mutation "wrong Ubuntu release rejected"; then
-      pass "wrong Ubuntu release rejected"
+      if [ -e "${HOSTFS}/etc/apt/sources.list.d/docker.sources" ]; then
+        fail "wrong Ubuntu release rejected: Docker apt source was installed"
+      else
+        pass "wrong Ubuntu release rejected"
+      fi
     fi
   else
     fail "wrong Ubuntu release rejected: message" "stderr=$(tr '\n' ' ' <"${stderr_file}")"
@@ -2960,17 +3012,71 @@ if assert_governed_failure "wrong Ubuntu release rejected"; then
 fi
 
 new_governed_case
-write_os_release ubuntu 26.04
+write_os_release ubuntu 22.04 jammy
 run_governed_installer --pollinator-user alice
-if assert_governed_failure "Ubuntu 26.04 fresh governed rejected before mutation"; then
-  if grep -q '24.04' "${stderr_file}" && grep -q '26.04' "${stderr_file}"; then
-    if assert_no_host_mutation "Ubuntu 26.04 fresh governed rejected before mutation"; then
-      pass "Ubuntu 26.04 fresh governed rejected before mutation"
+if assert_governed_failure "Ubuntu 22.04 codename does not select a suite"; then
+  if grep -q 'VERSION_ID=22.04' "${stderr_file}" && ! grep -q 'jammy' "${stderr_file}"; then
+    if assert_no_host_mutation "Ubuntu 22.04 codename does not select a suite"; then
+      if [ -e "${HOSTFS}/etc/apt/sources.list.d/docker.sources" ]; then
+        fail "Ubuntu 22.04 codename does not select a suite: Docker apt source was installed"
+      else
+        pass "Ubuntu 22.04 codename does not select a suite"
+      fi
     fi
   else
-    fail "Ubuntu 26.04 fresh governed rejected before mutation: message" "stderr=$(tr '\n' ' ' <"${stderr_file}")"
+    fail "Ubuntu 22.04 codename does not select a suite: message" "stderr=$(tr '\n' ' ' <"${stderr_file}")"
   fi
 fi
+
+assert_fresh_codename_rejected() {
+  local name=$1
+  local needle=$2
+  if assert_governed_failure "${name}"; then
+    if grep -F -q "${needle}" "${stderr_file}"; then
+      if assert_no_host_mutation "${name}"; then
+        if [ -e "${HOSTFS}/etc/apt/sources.list.d/docker.sources" ]; then
+          fail "${name}: Docker apt source was installed"
+        elif events_match '^CMD adduser ' || events_match '^CMD dockerd-rootless'; then
+          fail "${name}: account or Docker setup ran" "events=$(tr '\n' ' ' <"${events_file}")"
+        else
+          pass "${name}"
+        fi
+      fi
+    else
+      fail "${name}: message" "stderr=$(tr '\n' ' ' <"${stderr_file}")"
+    fi
+  fi
+}
+
+new_governed_case
+write_os_release ubuntu 26.04 noble
+run_governed_installer --pollinator-user alice
+assert_fresh_codename_rejected "Ubuntu 26.04 with noble codename rejected before mutation" "VERSION_CODENAME=noble does not match"
+
+new_governed_case
+write_os_release ubuntu 24.04 resolute
+run_governed_installer --pollinator-user alice
+assert_fresh_codename_rejected "Ubuntu 24.04 with resolute codename rejected before mutation" "VERSION_CODENAME=resolute does not match"
+
+new_governed_case
+write_os_release ubuntu 24.04 noble resolute
+run_governed_installer --pollinator-user alice
+assert_fresh_codename_rejected "disagreeing Ubuntu 24.04 codename fields rejected before mutation" "disagree"
+
+new_governed_case
+write_os_release ubuntu 26.04 resolute noble
+run_governed_installer --pollinator-user alice
+assert_fresh_codename_rejected "disagreeing Ubuntu 26.04 codename fields rejected before mutation" "disagree"
+
+new_governed_case
+write_os_release ubuntu 24.04 none
+run_governed_installer --pollinator-user alice
+assert_fresh_codename_rejected "Ubuntu 24.04 without a codename rejected before mutation" "neither codename is present"
+
+new_governed_case
+write_os_release ubuntu 26.04 none
+run_governed_installer --pollinator-user alice
+assert_fresh_codename_rejected "Ubuntu 26.04 without a codename rejected before mutation" "neither codename is present"
 
 new_governed_case
 UNAME_M=aarch64
@@ -3464,6 +3570,19 @@ if assert_governed_success_core "clean Ubuntu governed bootstrap"; then
   else
     fail "Docker bootstrap uses the official Docker GPG URL" "events=$(tr '\n' ' ' <"${events_file}")"
   fi
+  if grep -q '^VERSION_CODENAME=noble$' "${HOSTFS}/etc/os-release" \
+    && grep -q '^UBUNTU_CODENAME=noble$' "${HOSTFS}/etc/os-release" \
+    && grep -q 'Platform:    Ubuntu 24.04 LTS (noble)' "${stdout_file}"; then
+    assert_docker_suite "Ubuntu 24.04 noble writes Suites: noble" noble
+  else
+    fail "Ubuntu 24.04 noble writes Suites: noble" "os-release=$(tr '\n' ' ' <"${HOSTFS}/etc/os-release") stdout=$(tr '\n' ' ' <"${stdout_file}")"
+  fi
+  if grep -q '(ALL : ALL) ALL' "${ROOT}/state/sudo-l" \
+    && ! grep -q 'Boundary warning' "${stdout_file}"; then
+    pass "password-protected sudo is not a fresh-install failure"
+  else
+    fail "password-protected sudo is not a fresh-install failure" "stdout=$(tr '\n' ' ' <"${stdout_file}")"
+  fi
   if [ -f "${HOSTFS}/home/tendril/.env" ] && [ -d "${HOSTFS}/home/tendril/.tendril" ]; then
     pass "control-plane scaffolding is created when absent"
   else
@@ -3478,6 +3597,55 @@ if assert_governed_success_core "clean Ubuntu governed bootstrap"; then
     fail "clean bootstrap used --skip-iptables" "events=$(tr '\n' ' ' <"${events_file}")"
   else
     pass "clean bootstrap does not pass --skip-iptables"
+  fi
+fi
+
+new_governed_case
+write_os_release ubuntu 26.04 resolute
+run_governed_installer --pollinator-user alice --version v0.3.0
+if assert_governed_success_core "Ubuntu 26.04 resolute fresh governed bootstrap"; then
+  if grep -q '^VERSION_CODENAME=resolute$' "${HOSTFS}/etc/os-release" \
+    && grep -q '^UBUNTU_CODENAME=resolute$' "${HOSTFS}/etc/os-release" \
+    && grep -q 'Platform:    Ubuntu 26.04 LTS (resolute)' "${stdout_file}" \
+    && ! grep -q 'qualified' "${stdout_file}" \
+    && events_match '^CMD adduser .* tendril$' \
+    && events_match '^CMD install -o tendril -g tendril -m 0750 .* /home/tendril/.local/bin/tendril$' \
+    && events_match '^CMD install -o alice -g alice -m 0755 .* /home/alice/.local/bin/tendril-mcp$' \
+    && events_match '^CMD dockerd-rootless-setuptool.sh install' \
+    && events_match '^CMD sudo .* -n -u tendril true' \
+    && [ -f "${HOSTFS}/usr/local/lib/systemd/system/tendril.service" ] \
+    && ! grep -Eq '^CMD systemctl (enable |start )tendril' "${events_file}" \
+    && [ -f "${HOSTFS}${GREENHOUSE_WRAPPER}" ] \
+    && ! events_match '^CMD docker .* run ' \
+    && grep -q '(ALL : ALL) ALL' "${ROOT}/state/sudo-l" \
+    && ! grep -q 'Boundary warning' "${stdout_file}"; then
+    assert_docker_suite "Ubuntu 26.04 resolute writes Suites: resolute" resolute
+  else
+    fail "Ubuntu 26.04 resolute fresh governed bootstrap" "stdout=$(tr '\n' ' ' <"${stdout_file}") events=$(tr '\n' ' ' <"${events_file}")"
+  fi
+fi
+
+new_governed_case
+write_os_release ubuntu 24.04 noble none
+run_governed_installer --pollinator-user alice
+if assert_governed_success_core "Ubuntu 24.04 accepts VERSION_CODENAME alone"; then
+  if grep -q '^VERSION_CODENAME=noble$' "${HOSTFS}/etc/os-release" \
+    && ! grep -q '^UBUNTU_CODENAME=' "${HOSTFS}/etc/os-release"; then
+    assert_docker_suite "Ubuntu 24.04 VERSION_CODENAME noble writes Suites: noble" noble
+  else
+    fail "Ubuntu 24.04 accepts VERSION_CODENAME alone" "os-release=$(tr '\n' ' ' <"${HOSTFS}/etc/os-release")"
+  fi
+fi
+
+new_governed_case
+write_os_release ubuntu 26.04 none resolute
+run_governed_installer --pollinator-user alice
+if assert_governed_success_core "Ubuntu 26.04 accepts UBUNTU_CODENAME alone"; then
+  if ! grep -q '^VERSION_CODENAME=' "${HOSTFS}/etc/os-release" \
+    && grep -q '^UBUNTU_CODENAME=resolute$' "${HOSTFS}/etc/os-release"; then
+    assert_docker_suite "Ubuntu 26.04 UBUNTU_CODENAME resolute writes Suites: resolute" resolute
+  else
+    fail "Ubuntu 26.04 accepts UBUNTU_CODENAME alone" "os-release=$(tr '\n' ' ' <"${HOSTFS}/etc/os-release")"
   fi
 fi
 
@@ -3895,10 +4063,11 @@ if [ "${status}" -eq 0 ]; then
     pass "enablement state is unchanged"
   fi
   if grep -q 'does not qualify this Ubuntu release for fresh governed installation' "${stdout_file}" \
-    && grep -q 'Fresh governed installation remains Ubuntu 24.04 LTS' "${stdout_file}"; then
-    pass "Ubuntu 24.04 governed upgrade does not expand the fresh-install matrix"
+    && grep -q 'Fresh governed installation admits Ubuntu 24.04 LTS and Ubuntu 26.04 LTS' "${stdout_file}" \
+    && grep -q 'Ubuntu 26.04 LTS is not qualified until a fresh-host record exists' "${stdout_file}"; then
+    pass "Ubuntu 24.04 governed upgrade does not qualify the host"
   else
-    fail "Ubuntu 24.04 governed upgrade does not expand the fresh-install matrix" "stdout=$(tr '\n' ' ' <"${stdout_file}")"
+    fail "Ubuntu 24.04 governed upgrade does not qualify the host" "stdout=$(tr '\n' ' ' <"${stdout_file}")"
   fi
   if assert_no_sudo_timestamp_mutation "successful governed upgrade does not invalidate sudo timestamps"; then
     pass "successful governed upgrade does not invalidate sudo timestamps"
@@ -4322,7 +4491,8 @@ if [ "${status}" -eq 0 ] \
   && [ -f "${HOSTFS}/usr/local/lib/systemd/system/tendril.service" ] \
   && grep -q 'tendril-payload' "${HOSTFS}/home/tendril/.local/bin/tendril" \
   && grep -q 'does not qualify this Ubuntu release for fresh governed installation' "${stdout_file}" \
-  && grep -q 'Fresh governed installation remains Ubuntu 24.04 LTS' "${stdout_file}"; then
+  && grep -q 'Fresh governed installation admits Ubuntu 24.04 LTS and Ubuntu 26.04 LTS' "${stdout_file}" \
+  && grep -q 'Ubuntu 26.04 LTS is not qualified until a fresh-host record exists' "${stdout_file}"; then
   pass "valid Ubuntu 26.04 existing governed upgrade"
   if assert_no_upgrade_bootstrap "valid Ubuntu 26.04 existing governed upgrade"; then
     pass "Ubuntu 26.04 upgrade does not bootstrap Docker or the Stem principal"

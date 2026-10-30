@@ -6,7 +6,10 @@
 # ~/.local/bin/tendril. Does not establish the governed P1-P5 boundary. Does
 # not run tendril.
 #
-# Governed: Ubuntu 24.04 LTS linux/amd64 with systemd and rootless Docker.
+# Governed: Ubuntu 24.04 LTS (apt suite noble) and Ubuntu 26.04 LTS
+# (apt suite resolute), linux/amd64, with systemd and rootless Docker.
+# The suite comes from that fixed map. A codename does not select it.
+# Ubuntu 26.04 LTS is not qualified until a fresh-host record exists.
 # Requires root. Places protected tendril under the tendril principal and
 # tendril-mcp under the Pollinator-hosting account. Does not start an
 # unconfigured Stem.
@@ -52,6 +55,11 @@ staged_tendril_version=""
 staged_mcp_version=""
 docker_units_guarded=0
 governed_finished=0
+governed_docker_suite=
+os_id=
+os_version_id=
+os_version_codename=
+os_ubuntu_codename=
 APT_LOCK_RETRY_DELAY_SECONDS=2
 APT_LOCK_MAX_RETRIES=30
 APT_LOCK_MAX_WAIT_SECONDS=$((APT_LOCK_RETRY_DELAY_SECONDS * APT_LOCK_MAX_RETRIES))
@@ -90,8 +98,10 @@ Usage:
 Options:
   --version <tag>              Pin to one GitHub Release (v0.3.0 or 0.3.0).
                                Also accepted as OPENTENDRIL_VERSION.
-  --governed                   Establish the Ubuntu 24.04 LTS governed host.
-                               Requires root. Does not install locally.
+  --governed                   Establish the governed host on Ubuntu 24.04 LTS
+                               or Ubuntu 26.04 LTS. Requires root. Does not
+                               install locally. 26.04 admission is not
+                               qualification.
   --governed-upgrade           Upgrade an existing governed Ubuntu host.
                                Requires root. Does not bootstrap Docker,
                                create the Stem principal, rewrite P2 policy,
@@ -112,16 +122,21 @@ Local platforms (default; no --governed):
   or establish the governed P1-P5 boundary.
 
 Governed platform (--governed):
-  Ubuntu 24.04 LTS, linux/amd64, systemd, rootless Docker only.
-  WSL, macOS, other Linux distributions, other Ubuntu releases, and arm64
-  are not qualified. Installs protected tendril for the tendril principal
-  and tendril-mcp for the Pollinator account. Does not start the Stem.
+  Ubuntu 24.04 LTS (apt suite noble) and Ubuntu 26.04 LTS (apt suite resolute),
+  linux/amd64, systemd, and rootless Docker. A present VERSION_CODENAME or
+  UBUNTU_CODENAME must match that suite, and at least one must be present.
+  The codename does not select the suite. Ubuntu 26.04 LTS is not qualified
+  until a fresh-host record exists. WSL, macOS, other Linux distributions,
+  other Ubuntu releases, and arm64 are not admitted. Installs protected
+  tendril for the tendril principal and tendril-mcp for the Pollinator
+  account. Does not start the Stem.
 
 Governed upgrade (--governed-upgrade):
   Existing governed Ubuntu linux/amd64 host with systemd and rootless Docker.
-  Fresh-install qualification stays Ubuntu 24.04 LTS. Upgrade may proceed on
-  another Ubuntu release only after a read-only proof of the existing
-  governed posture; it fails closed when that posture cannot be established.
+  Fresh governed installation admits Ubuntu 24.04 LTS and Ubuntu 26.04 LTS.
+  Upgrade may proceed on another Ubuntu release only after a read-only proof
+  of the existing governed posture. Upgrade does not qualify a release, and
+  it fails closed when that posture cannot be established.
 EOF
 }
 
@@ -979,22 +994,25 @@ password_is_locked() {
 parse_os_release() {
   os_id=
   os_version_id=
+  os_version_codename=
+  os_ubuntu_codename=
   os_release_text=$(cat /etc/os-release) || die "cannot read /etc/os-release"
   [ -n "$os_release_text" ] || die "/etc/os-release is empty"
   while IFS= read -r line || [ -n "$line" ]; do
     case "$line" in
-      ID=*|VERSION_ID=*)
+      ID=*|VERSION_ID=*|VERSION_CODENAME=*|UBUNTU_CODENAME=*)
         _key=${line%%=*}
         _val=${line#*=}
         _val=${_val#\"}
         _val=${_val%\"}
         _val=${_val#\'}
         _val=${_val%\'}
-        if [ "$_key" = ID ]; then
-          os_id=$_val
-        else
-          os_version_id=$_val
-        fi
+        case "$_key" in
+          ID) os_id=$_val ;;
+          VERSION_ID) os_version_id=$_val ;;
+          VERSION_CODENAME) os_version_codename=$_val ;;
+          UBUNTU_CODENAME) os_ubuntu_codename=$_val ;;
+        esac
         ;;
     esac
   done <<EOF
@@ -1061,7 +1079,7 @@ classify_docker() {
   docker_class=absent
   if pkg_installed docker.io; then
     docker_class=unsafe
-    docker_reason="package docker.io is installed. Ubuntu docker.io starts a rootful daemon and does not ship dockerd-rootless-setuptool.sh. Governed installation will not remove or replace it. Use a clean Ubuntu 24.04 LTS host."
+    docker_reason="package docker.io is installed. Ubuntu docker.io starts a rootful daemon and does not ship dockerd-rootless-setuptool.sh. Governed installation will not remove or replace it. Use a clean Ubuntu 24.04 LTS or Ubuntu 26.04 LTS host."
     return 0
   fi
   if unit_is_active docker.service; then
@@ -1352,10 +1370,16 @@ install_docker_engine() {
   install -m 0644 "${workdir}/docker.asc" /etc/apt/keyrings/docker.asc </dev/null || die "failed to install the Docker repository key"
   chmod a+r /etc/apt/keyrings/docker.asc || die "failed to chmod /etc/apt/keyrings/docker.asc"
   _arch=$(dpkg --print-architecture) || die "dpkg --print-architecture failed"
+  case "$governed_docker_suite" in
+    noble|resolute) ;;
+    *)
+      die "internal error: Docker apt suite was not resolved from the Ubuntu release map"
+      ;;
+  esac
   cat >"${workdir}/docker.sources" <<EOF
 Types: deb
 URIs: https://download.docker.com/linux/ubuntu
-Suites: noble
+Suites: ${governed_docker_suite}
 Components: stable
 Architectures: ${_arch}
 Signed-By: /etc/apt/keyrings/docker.asc
@@ -1554,7 +1578,7 @@ enforce_p2() {
 print_governed_success() {
   printf '\n'
   printf 'Posture:     GOVERNED\n'
-  printf 'Platform:    Ubuntu 24.04 LTS linux/amd64 (systemd, rootless Docker)\n'
+  printf 'Platform:    Ubuntu %s LTS (%s) linux/amd64 (systemd, rootless Docker)\n' "$os_version_id" "$governed_docker_suite"
   printf 'Stem:        %s\n' "$STEM_USER"
   printf 'Pollinator:  %s\n' "$pollinator_user"
   printf 'Protected:   %s\n' "$STEM_BIN"
@@ -1598,20 +1622,40 @@ require_governed_fresh_platform() {
   require_governed_root "governed installation"
   detect_platform
   if [ "$os" != linux ]; then
-    die "governed installation requires Linux; ${raw_os} is not a qualified governed platform (Ubuntu 24.04 LTS linux/amd64 only)"
+    die "governed installation requires Linux; ${raw_os} is not an admitted governed platform (Ubuntu 24.04 LTS or Ubuntu 26.04 LTS, linux/amd64)"
   fi
   if [ "$wsl" -eq 1 ]; then
-    die "governed installation does not support WSL. The qualified governed platform is Ubuntu 24.04 LTS linux/amd64 with systemd and rootless Docker."
+    die "governed installation does not support WSL. The admitted governed platform is Ubuntu 24.04 LTS or Ubuntu 26.04 LTS, linux/amd64, with systemd and rootless Docker."
   fi
   if [ "$arch" != amd64 ]; then
-    die "governed installation requires linux/amd64; linux/${arch} is not qualified"
+    die "governed installation requires linux/amd64; linux/${arch} is not admitted"
   fi
   parse_os_release
   if [ "$os_id" != ubuntu ]; then
-    die "governed installation requires Ubuntu; /etc/os-release ID=${os_id} is not qualified (Ubuntu 24.04 LTS only)"
+    die "governed installation requires Ubuntu; /etc/os-release ID=${os_id} is not admitted (Ubuntu 24.04 LTS or Ubuntu 26.04 LTS)"
   fi
-  if [ "$os_version_id" != 24.04 ]; then
-    die "governed installation requires Ubuntu 24.04 LTS; VERSION_ID=${os_version_id} is not qualified"
+  resolve_governed_fresh_suite
+}
+
+resolve_governed_fresh_suite() {
+  case "$os_version_id" in
+    24.04) governed_docker_suite=noble ;;
+    26.04) governed_docker_suite=resolute ;;
+    *)
+      die "governed installation requires Ubuntu 24.04 LTS or Ubuntu 26.04 LTS; VERSION_ID=${os_version_id} is not admitted"
+      ;;
+  esac
+  if [ -n "$os_version_codename" ] && [ -n "$os_ubuntu_codename" ] && [ "$os_version_codename" != "$os_ubuntu_codename" ]; then
+    die "governed installation requires VERSION_CODENAME and UBUNTU_CODENAME to agree for Ubuntu ${os_version_id}; VERSION_CODENAME=${os_version_codename} and UBUNTU_CODENAME=${os_ubuntu_codename} disagree"
+  fi
+  if [ -z "$os_version_codename" ] && [ -z "$os_ubuntu_codename" ]; then
+    die "governed installation requires VERSION_CODENAME or UBUNTU_CODENAME ${governed_docker_suite} for Ubuntu ${os_version_id}; neither codename is present"
+  fi
+  if [ -n "$os_version_codename" ] && [ "$os_version_codename" != "$governed_docker_suite" ]; then
+    die "governed installation requires Ubuntu ${os_version_id} codename ${governed_docker_suite}; VERSION_CODENAME=${os_version_codename} does not match"
+  fi
+  if [ -n "$os_ubuntu_codename" ] && [ "$os_ubuntu_codename" != "$governed_docker_suite" ]; then
+    die "governed installation requires Ubuntu ${os_version_id} codename ${governed_docker_suite}; UBUNTU_CODENAME=${os_ubuntu_codename} does not match"
   fi
 }
 
@@ -2202,7 +2246,8 @@ install_governed_upgrade() {
   printf 'This upgrade did not run tendril init and did not reinitialize durable Stem state.\n'
   printf 'The host retains its P1-P5 governed posture.\n'
   printf 'This upgrade does not qualify this Ubuntu release for fresh governed installation.\n'
-  printf 'Fresh governed installation remains Ubuntu 24.04 LTS, linux/amd64, systemd, and rootless Docker.\n'
+  printf 'Fresh governed installation admits Ubuntu 24.04 LTS and Ubuntu 26.04 LTS, linux/amd64, systemd, and rootless Docker.\n'
+  printf 'Ubuntu 26.04 LTS is not qualified until a fresh-host record exists.\n'
 }
 
 main() {
