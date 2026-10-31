@@ -226,8 +226,11 @@ the automated realization of this procedure's host-bootstrap steps.
   account. That posture is LOCAL / SINGLE-PRINCIPAL. It does not claim the
   governed boundary. Qualified on Linux amd64, Linux arm64, WSL2 amd64, WSL2
   arm64, macOS Intel, and macOS Apple Silicon.
-- **Governed** is qualified on Ubuntu 24.04 LTS, Linux amd64, systemd, and
-  rootless Docker. It creates the Stem principal, establishes rootless Docker,
+- **Governed** fresh installation admits Ubuntu 24.04 LTS and Ubuntu 26.04 LTS,
+  Linux amd64, systemd, and rootless Docker. The apt suite is `noble` for
+  24.04 and `resolute` for 26.04. Ubuntu 24.04 LTS is the qualified release.
+  Ubuntu 26.04 LTS is not qualified until a fresh-host record exists.
+  It creates the Stem principal, establishes rootless Docker,
   places protected `tendril` and Pollinator-only `tendril-mcp`, installs the
   system unit without starting it, and applies the Stage 9 administrative
   posture. It does not run `tendril init` and does not start the Stem. WSL and
@@ -284,9 +287,12 @@ usermod --add-subuids 165536-231071 --add-subgids 165536-231071 tendril
 A rootless daemon runs as an ordinary user, so a container cannot become root on
 the host. This is what stops container access from being an escalation path.
 
-On Ubuntu 24.04 LTS this stage needs **Docker Engine** from
+On Ubuntu 24.04 LTS and Ubuntu 26.04 LTS this stage needs **Docker Engine** from
 https://download.docker.com/linux/ubuntu: `docker-ce`, `docker-ce-cli`,
-`containerd.io`, and `docker-ce-rootless-extras`. `docker-ce-rootless-extras`
+`containerd.io`, and `docker-ce-rootless-extras`. The apt suite is `noble` on
+24.04 and `resolute` on 26.04. Do not install `noble` packages on 26.04, or
+`resolute` packages on 24.04. Ubuntu 26.04 LTS is not qualified until a
+fresh-host record exists. `docker-ce-rootless-extras`
 is the package that provides `dockerd-rootless-setuptool.sh`.
 
 > [!CAUTION]
@@ -297,7 +303,8 @@ is the package that provides `dockerd-rootless-setuptool.sh`.
 
 ```bash
 # [root] Ubuntu 24.04 LTS - Docker Engine. docker-ce-rootless-extras provides
-#        dockerd-rootless-setuptool.sh.
+#        dockerd-rootless-setuptool.sh. This block uses Suites: noble.
+#        On Ubuntu 26.04 LTS set Suites to resolute instead.
 apt-get remove -y docker.io
 apt-get update && apt-get install -y ca-certificates curl
 install -m 0755 -d /etc/apt/keyrings
@@ -1296,6 +1303,9 @@ the host policy, make that administrator decision separately; OpenTendril does
 not prescribe a timeout or install a sudoers rule. Better still, administer
 `tendril` from a session that does not host Pollinators.
 
+The fresh-host record rejects a Pollinator that can become root or `tendril`
+through sudo policy or group authority, including password-protected sudo.
+
 ---
 
 ## Verify the installation
@@ -1397,9 +1407,11 @@ place, including `.env`, `.tendril/`, GitHub App credentials, Pollinator
 credentials, grants, Substrate definitions, and other runtime state.
 
 Governed upgrade is an administrator-run installer operation. Fresh governed
-installation remains qualified only on Ubuntu 24.04 LTS, linux/amd64, systemd,
-and rootless Docker. `--governed-upgrade` is not that qualification. An
-existing governed Ubuntu linux/amd64 host may proceed on another Ubuntu
+installation admits Ubuntu 24.04 LTS and Ubuntu 26.04 LTS, linux/amd64, systemd,
+and rootless Docker. Ubuntu 24.04 LTS remains the qualified release. Ubuntu
+26.04 LTS is not qualified until a fresh-host record exists.
+`--governed-upgrade` is not that qualification. An existing governed Ubuntu
+linux/amd64 host may proceed on another Ubuntu
 release only after a read-only proof of the current governed posture. That
 proof does not install or repair Docker, create users, invoke rootless setup,
 run `loginctl`, rewrite sudo policy, invalidate a cached sudo timestamp, run
