@@ -132,6 +132,10 @@ type DelegationAuthorizer struct {
 
 	pendingStore *PendingConfirmationStore
 	pendingTTL   time.Duration
+
+	// deploymentPosture is the Stem posture captured when this authorizer was
+	// built. Empty and full do not change grant matching.
+	deploymentPosture string
 }
 
 // NewDelegationAuthorizer builds an authorizer over the given grants. The
@@ -153,6 +157,16 @@ func (a *DelegationAuthorizer) WithPendingStore(store *PendingConfirmationStore,
 	return a
 }
 
+// WithDeploymentPosture attaches the posture already resolved by the caller.
+// The authorizer does not read the control plane itself.
+func (a *DelegationAuthorizer) WithDeploymentPosture(posture string) *DelegationAuthorizer {
+	if a == nil {
+		return nil
+	}
+	a.deploymentPosture = posture
+	return a
+}
+
 // Authorize evaluates one delegated invocation. A nil authorizer, an empty
 // grant set, or an incomplete request all deny — with no configuration,
 // delegation is impossible.
@@ -161,7 +175,18 @@ func (a *DelegationAuthorizer) Authorize(request DelegationRequest) DelegationDe
 	operationClass := strings.TrimSpace(request.OperationClass)
 	substrate := strings.TrimSpace(request.Substrate)
 
-	if a == nil || len(a.grants) == 0 {
+	if a == nil {
+		return delegationDenied("no delegation grants are configured")
+	}
+	// Posture is decided before any grant matches and before a pending
+	// confirmation can be created. An existing grant cannot restore an
+	// execution capability that this posture refuses.
+	if operationClass != "" && postureDeniesExecution(a.deploymentPosture, operationClass) {
+		return delegationDenied(fmt.Sprintf(
+			"operation-class %q is unavailable in the remote-git deployment posture",
+			operationClass))
+	}
+	if len(a.grants) == 0 {
 		return delegationDenied("no delegation grants are configured")
 	}
 	if pollen == "" {

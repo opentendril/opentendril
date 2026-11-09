@@ -110,7 +110,7 @@ func buildSeedCore(ctx context.Context) (core.Core, error) {
 	if err != nil {
 		return nil, err
 	}
-	return core.NewService(manager).WithSeed(seedOperations(nil, nil)), nil
+	return withStemDeploymentPosture(core.NewService(manager).WithSeed(seedOperations(nil, nil))), nil
 }
 
 func seedPersistence(history *historydb.Store) core.SeedPersistence {

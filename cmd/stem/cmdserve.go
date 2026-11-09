@@ -77,6 +77,10 @@ func runServeCmd(ctx context.Context, args []string) {
 	}
 
 	tendrilDir := "./.tendril"
+	deploymentPosture, postureErr := core.ResolveDeploymentPosture(tendrilDir)
+	if postureErr != nil {
+		log.Fatalf("deployment posture is ambiguous: %v", postureErr)
+	}
 
 	// Ensure hormonal triggers directory exists (Slice 1 requirement)
 	triggersDir := getTriggersDir()
@@ -212,7 +216,7 @@ func runServeCmd(ctx context.Context, args []string) {
 	// lifecycle, genome, plasmid, substrate-grafting, mesh trait governance,
 	// sequence, and sprout/run capabilities; the REST, MCP, and CLI surfaces
 	// are adapters that route through this one service.
-	coreSvc := buildServeCore(sessions, tendrilDir, history, bus)
+	coreSvc := buildServeCore(sessions, tendrilDir, history, bus).WithDeploymentPosture(deploymentPosture)
 	if err := reconcileServeSeedWork(ctx, coreSvc, history); err != nil {
 		log.Fatalf("❌ Failed to reconcile orphaned Seed continuation state: %v", err)
 	}

@@ -83,7 +83,7 @@ func buildStomaCore(ctx context.Context) (core.Core, error) {
 	if err != nil {
 		return nil, err
 	}
-	return core.NewService(manager).WithStoma(stomaOperations()), nil
+	return withStemDeploymentPosture(core.NewService(manager).WithStoma(stomaOperations())), nil
 }
 
 // stomaOperations binds the stoma execution port to the conductor's

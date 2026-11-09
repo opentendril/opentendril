@@ -400,6 +400,9 @@ func continuationEligibilityError(status, substrate string) error {
 // insert can refuse a TOCTOU ownership change. Idempotency is keyed by
 // Phytomer + Pollen + idempotency key; equality uses the intent digest.
 func (s *Service) AcceptContinuation(ctx context.Context, in ContinuationInput) (ContinuationRecord, error) {
+	if err := s.refuseRemoteGitExecution(CapContinuePhytomer); err != nil {
+		return ContinuationRecord{}, err
+	}
 	if s == nil || s.continuation.Accept == nil || s.continuation.ResolveTarget == nil {
 		return ContinuationRecord{}, ErrContinuationNotWired
 	}
@@ -435,6 +438,9 @@ func (s *Service) AcceptContinuation(ctx context.Context, in ContinuationInput) 
 // continued intent through AcceptContinuation and returns the safe
 // Pollinator-facing identity/order/state result.
 func (s *Service) ContinuePhytomer(ctx context.Context, in ContinuationInput) (ContinuationResult, error) {
+	if err := s.refuseRemoteGitExecution(CapContinuePhytomer); err != nil {
+		return ContinuationResult{}, err
+	}
 	rec, err := s.AcceptContinuation(ctx, in)
 	if err != nil {
 		return ContinuationResult{}, err

@@ -88,7 +88,7 @@ func buildMeshCore(ctx context.Context) (core.Core, error) {
 	if err != nil {
 		return nil, err
 	}
-	return core.NewService(manager).WithMesh(meshOperations()), nil
+	return withStemDeploymentPosture(core.NewService(manager).WithMesh(meshOperations())), nil
 }
 
 // meshOperations binds the mesh execution port to the conductor (substrate

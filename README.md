@@ -50,19 +50,24 @@ The Stem coordinates **Sprouts** (ephemeral execution bodies) running inside **T
 ## 🚀 Installing
 
 **Start at [docs/GUIDE-INSTALL-QUICK.md](docs/GUIDE-INSTALL-QUICK.md).** It is
-the short public installation entrypoint. Two postures; they are not the same
+the short public installation entrypoint. These postures are not the same
 thing.
 
 | Posture | What it is | Qualified on |
 |---|---|---|
 | **Local / evaluation** | LOCAL / SINGLE-PRINCIPAL. The Stem runs as this account. It does not claim the governed boundary. | Linux amd64, Linux arm64, WSL2 amd64, WSL2 arm64, macOS Intel, macOS Apple Silicon |
 | **Governed** | Separate Stem principal and protected `tendril`; optional restricted `tendril-mcp` for delegated clients. | Ubuntu 24.04 LTS (`noble`) and Ubuntu 26.04 LTS (`resolute`), Linux amd64, systemd, rootless Docker |
+| **Remote-git** | The same protected `tendril` principal and governed Git capabilities, with no local Pollinator-hosting account and no Docker requirement. | Admitted on Ubuntu 24.04 LTS and Ubuntu 26.04 LTS, Linux amd64, systemd. Not qualified until a fresh-host record exists. |
 
 An existing governed Ubuntu installation may be eligible for
 `--governed-upgrade` outside that fresh-install matrix when the installer can
-prove the current governed posture. Upgrade admissibility is not fresh-install
+prove the current governed posture. An existing remote-git installation is
+upgraded with `--governed-remote-git-upgrade` and does not take
+`--pollinator-user`. Upgrade admissibility is not fresh-install
 qualification, does not qualify that Ubuntu release generally, and fails
-closed when the required properties cannot be established.
+closed when the required properties cannot be established. A full governed
+installation is not changed into remote-git, and remote-git is not changed
+into the full governed posture.
 Fresh `--governed` admits Ubuntu 24.04 LTS, apt suite `noble`, and Ubuntu
 26.04 LTS, apt suite `resolute`. Ubuntu 24.04 LTS is the qualified release.
 Ubuntu 26.04 LTS is not qualified until a fresh 26.04 host record includes

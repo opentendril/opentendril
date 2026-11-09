@@ -114,6 +114,9 @@ func (s *Service) WithStoma(operations StomaOperations) *Service {
 // StomaPass validates the request and runs the bounded command to
 // completion via the injected execution port.
 func (s *Service) StomaPass(ctx context.Context, in StomaPassInput) (StomaPassResult, error) {
+	if err := s.refuseRemoteGitExecution(CapStomaPass); err != nil {
+		return StomaPassResult{}, err
+	}
 	if s.stoma.Run == nil {
 		return StomaPassResult{}, fmt.Errorf("stoma.pass is not wired: construct the Core with WithStoma(StomaOperations{Run: …})")
 	}

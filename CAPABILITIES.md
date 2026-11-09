@@ -287,6 +287,20 @@ A `DelegationGrant` (`cmd/stem/internal/core/delegation.go`) carries:
 - **Expiry is checked at authorization time.** A grant past its `Expires`
   timestamp is silently skipped.
 
+### Remote-git deployment posture
+
+A Stem installed with the remote-git posture still uses this registry and
+these grants. The posture is resolved in Stem Core. Before a grant is matched,
+Core denies every delegated operation class that is not one of the existing
+Git capabilities, including a class that an earlier grant still names and
+including `sprout.watch`. Git capabilities remain in `DelegatedCapabilityNames`
+and still require an exact Pollen, operation class, and Substrate grant. The
+serving Stem reads the posture for each admission. REST, MCP, and CLI adapters
+do not apply a separate authorization rule. Execution methods in Core also
+refuse the same non-Git capabilities, so a Botanist invocation on that Stem
+cannot run them either. A missing posture file with no posture environment
+variable remains the full posture.
+
 ### Remote Pollinator transport
 
 The Stem's optional remote listener uses HTTPS terminated directly at the Stem

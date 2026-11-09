@@ -177,6 +177,37 @@ The default branch stays unchanged until the Botanist separately accepts and
 merges the Fruit. Pollinator, REST, and MCP instructions remain available for
 delegated integrations in the detailed guide.
 
+## Remote-git
+
+Remote-git is a governed Git Stem. It uses the protected `tendril` principal,
+the existing remote HTTPS Pollinator listener, and the existing Stem Core Git
+capabilities. It does not install Docker, start a Sprout, require an LLM
+configuration, or create a local Pollinator-hosting account. Ubuntu 24.04 LTS
+and Ubuntu 26.04 LTS are admitted. Ubuntu 26.04 LTS is not qualified until a
+fresh-host record exists.
+
+Do **not** pipe the installer into `sudo sh`. Do **not** pass
+`--pollinator-user`.
+
+```bash
+RELEASE=v0.5.2
+curl -fsSL -o install.sh \
+  "https://github.com/opentendril/opentendril/releases/download/${RELEASE}/install.sh"
+curl -fsSL -o checksums.txt \
+  "https://github.com/opentendril/opentendril/releases/download/${RELEASE}/checksums.txt"
+grep 'install.sh$' checksums.txt | sha256sum -c || exit 1
+
+sudo sh install.sh --governed-remote-git --version "${RELEASE}"
+```
+
+The installer does not run `tendril init` and does not start the Stem. After
+it finishes, configure `TENDRIL_REMOTE_LISTEN_ADDR`, `TENDRIL_REMOTE_TLS_CERT`,
+and `TENDRIL_REMOTE_TLS_KEY`, then place Stem-owned Git credentials and a
+DelegationGrant for the remote Pollinator. Git operation classes stay in the
+existing Core registry. Execution capabilities are refused by the Stem even
+when an older grant names them. See
+[GUIDE-GIT-CONNECTION.md](./GUIDE-GIT-CONNECTION.md).
+
 ## Upgrade
 
 Use the same verified installer and release pin as governed installation. Name
@@ -204,8 +235,17 @@ sudo sh install.sh \
   --version "${RELEASE}"
 ```
 
-The upgrade does not run `tendril init` and does not reinitialize durable Stem
-state. A recognized `/etc/systemd/system/tendril.service` is
+A remote-git host uses the matching upgrade and does not take
+`--pollinator-user`:
+
+```bash
+sudo sh install.sh --governed-remote-git-upgrade --version "${RELEASE}"
+```
+
+That upgrade preserves credentials, grants, managed Substrates, workspaces,
+and the recorded posture. It fails closed when the posture is missing or
+ambiguous. The full governed upgrade does not run `tendril init` and does not
+reinitialize durable Stem state. A recognized `/etc/systemd/system/tendril.service` is
 migrated; a modified or otherwise ambiguous `/etc` unit fails closed. See
 [GUIDE-INSTALL.md](./GUIDE-INSTALL.md) for the ownership model, fail-closed
 cases, and how restoration is reported if a step fails.

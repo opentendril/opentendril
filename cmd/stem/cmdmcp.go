@@ -211,6 +211,17 @@ func newInProcessMCPHandler(ctx context.Context) (*receptors.MCPHandler, func(),
 	} else {
 		warnIfWorkingDirectoryGrantsIgnored(os.Stderr, grantsDir)
 	}
+	postureDir := grantsDir
+	if postureDir == "" {
+		postureDir = tendrilDir
+	}
+	deploymentPosture, postureErr := core.ResolveDeploymentPosture(postureDir)
+	if postureErr != nil {
+		fmt.Fprintf(os.Stderr, "deployment posture is ambiguous: %v\n", postureErr)
+		release()
+		os.Exit(1)
+	}
+	coreSvc = coreSvc.WithDeploymentPosture(deploymentPosture)
 
 	var delegationGrants []core.DelegationGrant
 	var grantsErr error
@@ -238,7 +249,7 @@ func newInProcessMCPHandler(ctx context.Context) (*receptors.MCPHandler, func(),
 	}
 	delegationGate := &receptors.DelegationGate{
 		Pollinators: pollinatorCredentials,
-		Authorizer:  core.NewDelegationAuthorizer(delegationGrants),
+		Authorizer:  core.NewDelegationAuthorizer(delegationGrants).WithDeploymentPosture(deploymentPosture),
 		Bus:         bus,
 	}
 	if len(pollinatorCredentials) > 0 {

@@ -140,7 +140,7 @@ func buildSproutCore(ctx context.Context) (core.Core, func(), error) {
 		cleanup()
 		return nil, func() {}, err
 	}
-	return core.NewService(manager).WithSprout(sproutOperations(history, nil)), cleanup, nil
+	return withStemDeploymentPosture(core.NewService(manager).WithSprout(sproutOperations(history, nil))), cleanup, nil
 }
 
 // sproutOperations binds the sprout execution port to the conductor's terrarium
