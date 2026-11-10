@@ -67,9 +67,10 @@ upgraded with `--governed-remote-git-upgrade` and does not take
 qualification, does not qualify that Ubuntu release generally, and fails
 closed when the required properties cannot be established. A full governed
 installation is not changed into remote-git, and remote-git is not changed
-into the full governed posture. The published v0.5.2 installer and binary do
-not support remote-git. Production installation of that posture waits for a
-later published release.
+into the full governed posture. This release supports remote-git. Production
+installation uses the pinned release below with `--governed-remote-git` or
+`--governed-remote-git-upgrade`. The installer refuses a release whose tendril
+binary does not enforce remote-git execution denial.
 Fresh `--governed` admits Ubuntu 24.04 LTS, apt suite `noble`, and Ubuntu
 26.04 LTS, apt suite `resolute`. Ubuntu 24.04 LTS is the qualified release.
 Ubuntu 26.04 LTS is not qualified until a fresh 26.04 host record includes
@@ -98,7 +99,7 @@ installer into `sudo sh`. The full sequence is in
 [docs/GUIDE-INSTALL-QUICK.md](docs/GUIDE-INSTALL-QUICK.md):
 
 ```bash
-RELEASE=v0.5.2
+RELEASE=v0.5.3
 curl -fsSL -o install.sh \
   "https://github.com/opentendril/opentendril/releases/download/${RELEASE}/install.sh"
 curl -fsSL -o checksums.txt \

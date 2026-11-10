@@ -74,7 +74,7 @@ identity or credential.
 Do **not** pipe the installer into `sudo sh`.
 
 ```bash
-RELEASE=v0.5.2
+RELEASE=v0.5.3
 curl -fsSL -o install.sh \
   "https://github.com/opentendril/opentendril/releases/download/${RELEASE}/install.sh"
 curl -fsSL -o checksums.txt \
@@ -85,7 +85,7 @@ grep 'install.sh$' checksums.txt | sha256sum -c
 Read the verified `install.sh` before privileged execution. Then:
 
 ```bash
-RELEASE=v0.5.2
+RELEASE=v0.5.3
 sudo sh install.sh \
   --governed \
   --pollinator-user <ordinary-user> \
@@ -189,11 +189,18 @@ fresh-host record exists.
 Do **not** pipe the installer into `sudo sh`. Do **not** pass
 `--pollinator-user`.
 
-The published v0.5.2 installer and binary do not support remote-git. Do not
-use that release for `--governed-remote-git` or `--governed-remote-git-upgrade`.
-Production installation waits for a later published release. The installer
-verifies that release the same way as governed installation, then refuses it
+Production installation uses the same verified installer and the same
+`RELEASE` pin as governed installation. This release supports
+`--governed-remote-git` and `--governed-remote-git-upgrade`. The installer
+verifies that release the same way as governed installation and refuses it
 when the tendril binary does not enforce remote-git execution denial.
+
+```bash
+# Same RELEASE pin as governed installation above.
+sudo sh install.sh \
+  --governed-remote-git \
+  --version "${RELEASE}"
+```
 
 Staged qualification is not a production installation. It runs a candidate
 binary built from one exact source commit, after the checksum of that binary
@@ -236,10 +243,15 @@ sudo sh install.sh \
 ```
 
 A remote-git host uses `--governed-remote-git-upgrade` and does not take
-`--pollinator-user`. The `RELEASE` pin above is the full governed release.
-Published v0.5.2 does not provide remote-git, so that pin is not a remote-git
-upgrade. Use a later published release whose tendril binary enforces
-remote-git execution denial.
+`--pollinator-user`. Use the same `RELEASE` pin. The installer refuses the
+release when the tendril binary does not enforce remote-git execution denial.
+
+```bash
+# Same RELEASE pin as governed installation above.
+sudo sh install.sh \
+  --governed-remote-git-upgrade \
+  --version "${RELEASE}"
+```
 
 That upgrade preserves credentials, grants, managed Substrates, workspaces,
 and the recorded posture. It fails closed when the posture is missing or
