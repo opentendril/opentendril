@@ -75,6 +75,33 @@ func TestDeploymentPostureResolution(t *testing.T) {
 	if _, err := core.ResolveDeploymentPosture(unreadable); err == nil {
 		t.Fatal("non-regular posture file resolved")
 	}
+
+	blocked := filepath.Join(t.TempDir(), "blocked-home")
+	if err := os.WriteFile(blocked, []byte("not a directory\n"), 0o600); err != nil {
+		t.Fatalf("write blocked home: %v", err)
+	}
+	if got, err = core.ResolveDeploymentPosture(filepath.Join(blocked, ".tendril")); err != nil || got != core.DeploymentPostureFull {
+		t.Fatalf("non-directory home = %q, %v; want full, nil", got, err)
+	}
+	t.Setenv(core.DeploymentPostureEnv, core.DeploymentPostureRemoteGit)
+	if _, err = core.ResolveDeploymentPosture(filepath.Join(blocked, ".tendril")); err == nil {
+		t.Fatal("remote-git environment with a non-directory home resolved")
+	}
+
+	if os.Getuid() != 0 {
+		t.Setenv(core.DeploymentPostureEnv, "")
+		denied := t.TempDir()
+		deniedPath := filepath.Join(denied, core.DeploymentPostureFilename)
+		if err := os.WriteFile(deniedPath, []byte("remote-git\n"), 0o600); err != nil {
+			t.Fatalf("write unreadable posture: %v", err)
+		}
+		if err := os.Chmod(deniedPath, 0); err != nil {
+			t.Fatalf("chmod posture: %v", err)
+		}
+		if _, err := core.ResolveDeploymentPosture(denied); err == nil {
+			t.Fatal("unreadable posture file resolved")
+		}
+	}
 }
 
 func TestGovernedGitCapabilitiesMatchRegistry(t *testing.T) {

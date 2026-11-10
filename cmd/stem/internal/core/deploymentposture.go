@@ -1,10 +1,12 @@
 package core
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
+	"syscall"
 )
 
 // Deployment posture is a Stem Core property. install.sh records the same
@@ -34,8 +36,10 @@ func IsGovernedGitCapability(name string) bool {
 // ResolveDeploymentPosture agrees the process environment with the posture
 // file in the Stem control plane. An empty directory means the file is
 // absent. A missing file and an empty environment are the full posture, so
-// existing installations keep their current behavior. Any other combination
-// is an error and must fail closed.
+// existing installations keep their current behavior. A path component that
+// is not a directory cannot contain the file and is the same absence. An
+// unreadable file, a non-regular file, and any other combination are errors
+// and must fail closed.
 func ResolveDeploymentPosture(controlPlaneDir string) (string, error) {
 	env := strings.TrimRight(os.Getenv(DeploymentPostureEnv), "\r\n")
 	fileValue, present, err := readDeploymentPostureFile(controlPlaneDir)
@@ -61,7 +65,7 @@ func readDeploymentPostureFile(controlPlaneDir string) (string, bool, error) {
 	path := filepath.Join(controlPlaneDir, DeploymentPostureFilename)
 	info, err := os.Lstat(path)
 	if err != nil {
-		if os.IsNotExist(err) {
+		if posturePathAbsent(err) {
 			return "", false, nil
 		}
 		return "", false, fmt.Errorf("deployment posture could not be read: %w", err)
@@ -74,6 +78,12 @@ func readDeploymentPostureFile(controlPlaneDir string) (string, bool, error) {
 		return "", false, fmt.Errorf("deployment posture could not be read: %w", err)
 	}
 	return strings.TrimRight(string(raw), "\r\n"), true, nil
+}
+
+// posturePathAbsent reports that no posture file is present at the looked-up
+// path. Permission errors are not absence: an unreadable file stays fail-closed.
+func posturePathAbsent(err error) bool {
+	return os.IsNotExist(err) || errors.Is(err, syscall.ENOTDIR)
 }
 
 // postureDeniesExecution is the authoritative remote-git rule. Empty and full

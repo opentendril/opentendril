@@ -7,8 +7,11 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"os"
 	"os/exec"
 	"strings"
+
+	"github.com/opentendril/opentendril/cmd/stem/internal/gitsafety"
 )
 
 var (
@@ -32,6 +35,10 @@ var runCommand commandRunner = runGit
 func runGit(ctx context.Context, workspace string, patch []byte, args ...string) error {
 	if ctx == nil {
 		ctx = context.Background()
+	}
+	args, err := gitSafetyArgs(ctx, workspace, args)
+	if err != nil {
+		return err
 	}
 	cmd := exec.CommandContext(ctx, "git", args...)
 	cmd.Dir = workspace
@@ -91,10 +98,22 @@ func runNumstat(ctx context.Context, workspace string, patch []byte, strip strin
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	cmd := exec.CommandContext(ctx, "git", "apply", "--numstat", "-z", strip, "--binary", "--whitespace=nowarn", "-")
+	args, err := gitSafetyArgs(ctx, workspace, []string{"apply", "--numstat", "-z", strip, "--binary", "--whitespace=nowarn", "-"})
+	if err != nil {
+		return nil, err
+	}
+	cmd := exec.CommandContext(ctx, "git", args...)
 	cmd.Dir = workspace
 	cmd.Stdin = bytes.NewReader(patch)
 	return cmd.Output()
+}
+
+func gitSafetyArgs(ctx context.Context, workspace string, args []string) ([]string, error) {
+	safety, err := gitsafety.Args(ctx, workspace, os.Environ())
+	if err != nil || len(safety) == 0 {
+		return args, err
+	}
+	return gitsafety.Insert(args, safety), nil
 }
 
 // parseNumstatPaths decodes Git's documented --numstat -z output, including

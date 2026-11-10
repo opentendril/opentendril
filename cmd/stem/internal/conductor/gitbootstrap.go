@@ -333,8 +333,13 @@ func runGitBootstrapCommand(ctx context.Context, dir string, extraEnv []string, 
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	cmd := exec.CommandContext(ctx, "git", append([]string{"-C", dir}, args...)...)
-	cmd.Env = append(os.Environ(), extraEnv...)
+	effectiveEnv := append(os.Environ(), extraEnv...)
+	commandArgs, err := gitArgsForPosture(ctx, dir, effectiveEnv, append([]string{"-C", dir}, args...))
+	if err != nil {
+		return "", fmt.Errorf("git %s failed: %w", strings.Join(args, " "), err)
+	}
+	cmd := exec.CommandContext(ctx, "git", commandArgs...)
+	cmd.Env = effectiveEnv
 	if input != "" {
 		cmd.Stdin = strings.NewReader(input)
 	}

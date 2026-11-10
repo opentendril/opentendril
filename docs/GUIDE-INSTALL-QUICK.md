@@ -189,16 +189,16 @@ fresh-host record exists.
 Do **not** pipe the installer into `sudo sh`. Do **not** pass
 `--pollinator-user`.
 
-```bash
-RELEASE=v0.5.2
-curl -fsSL -o install.sh \
-  "https://github.com/opentendril/opentendril/releases/download/${RELEASE}/install.sh"
-curl -fsSL -o checksums.txt \
-  "https://github.com/opentendril/opentendril/releases/download/${RELEASE}/checksums.txt"
-grep 'install.sh$' checksums.txt | sha256sum -c || exit 1
+The published v0.5.2 installer and binary do not support remote-git. Do not
+use that release for `--governed-remote-git` or `--governed-remote-git-upgrade`.
+Production installation waits for a later published release. The installer
+verifies that release the same way as governed installation, then refuses it
+when the tendril binary does not enforce remote-git execution denial.
 
-sudo sh install.sh --governed-remote-git --version "${RELEASE}"
-```
+Staged qualification is not a production installation. It runs a candidate
+binary built from one exact source commit, after the checksum of that binary
+is checked. It does not relax published-release checks, and it does not
+substitute an older binary for the implementation being qualified.
 
 The installer does not run `tendril init` and does not start the Stem. After
 it finishes, configure `TENDRIL_REMOTE_LISTEN_ADDR`, `TENDRIL_REMOTE_TLS_CERT`,
@@ -235,12 +235,11 @@ sudo sh install.sh \
   --version "${RELEASE}"
 ```
 
-A remote-git host uses the matching upgrade and does not take
-`--pollinator-user`:
-
-```bash
-sudo sh install.sh --governed-remote-git-upgrade --version "${RELEASE}"
-```
+A remote-git host uses `--governed-remote-git-upgrade` and does not take
+`--pollinator-user`. The `RELEASE` pin above is the full governed release.
+Published v0.5.2 does not provide remote-git, so that pin is not a remote-git
+upgrade. Use a later published release whose tendril binary enforces
+remote-git execution denial.
 
 That upgrade preserves credentials, grants, managed Substrates, workspaces,
 and the recorded posture. It fails closed when the posture is missing or

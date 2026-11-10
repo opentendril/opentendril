@@ -887,6 +887,10 @@ func runGitFetchCommandInput(ctx context.Context, dir string, env []string, inpu
 	if ctx == nil {
 		ctx = context.Background()
 	}
+	args, err := gitArgsForPosture(ctx, dir, env, args)
+	if err != nil {
+		return nil, fmt.Errorf("git command failed: %w", err)
+	}
 	cmd := exec.CommandContext(ctx, "git", args...)
 	cmd.Dir = dir
 	cmd.Env = append([]string(nil), env...)

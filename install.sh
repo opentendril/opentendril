@@ -173,7 +173,8 @@ Remote-git (--governed-remote-git):
   Ubuntu 24.04 LTS and Ubuntu 26.04 LTS, linux/amd64, systemd. No Docker and
   no local Pollinator-hosting account. The protected tendril principal still
   owns the binary, control plane, and Git configuration. Ubuntu 26.04 LTS is
-  not qualified until a fresh-host record exists.
+  not qualified until a fresh-host record exists. The installer refuses a
+  release whose tendril binary does not enforce remote-git execution denial.
 
 Remote-git upgrade (--governed-remote-git-upgrade):
   An existing remote-git Ubuntu linux/amd64 host. The posture file and the
@@ -555,6 +556,26 @@ pin_governed_release() {
     die "canonical VERSION for ${release_tag} is not a stable MAJOR.MINOR.PATCH version"
   [ "$canonical_release_version" = "$expected_release_version" ] ||
     die "canonical VERSION ${canonical_release_version} does not match release tag ${release_tag}"
+}
+
+# require_remote_git_binary_compat runs after the release pin and before any
+# protected host change. A checksum-valid historical binary that does not
+# implement execution denial is refused. The refusal text does not include
+# the probe path or the binary's own output.
+require_remote_git_binary_compat() {
+  _binary=$1
+  require_cmd env
+  _probe="${workdir}/remote-git-compat"
+  rm -rf "$_probe"
+  mkdir -p "$_probe" || die "cannot create a remote-git compatibility probe directory"
+  printf '%s\n' "$POSTURE_REMOTE" >"${_probe}/deployment-posture" || die "cannot write the remote-git compatibility probe"
+  _output=$(
+    env -i PATH="$PATH" HOME="${workdir}" TMPDIR="${workdir}" LC_ALL=C \
+      "${POSTURE_ENV}=${POSTURE_REMOTE}" \
+      "$_binary" remote-git-compat "$_probe" </dev/null 2>"${_probe}/stderr"
+  ) || die "tendril binary does not enforce remote-git execution denial"
+  [ "$_output" = "remote-git-compat: execution-denied git-admitted" ] ||
+    die "tendril binary does not enforce remote-git execution denial"
 }
 
 verify_greenhouse_archive_metadata() {
@@ -2036,6 +2057,7 @@ install_remote_git() {
   extract_member tendril
   staged_tendril_version=$(verify_binary_version "${workdir}/tendril" tendril)
   pin_governed_release
+  require_remote_git_binary_compat "${workdir}/tendril"
   ensure_remote_stem_principal
   install_remote_stem_binary
   ensure_control_plane
@@ -2081,6 +2103,7 @@ install_remote_git_upgrade() {
   extract_member tendril
   staged_tendril_version=$(verify_binary_version "${workdir}/tendril" tendril)
   pin_governed_release
+  require_remote_git_binary_compat "${workdir}/tendril"
 
   mkdir -p "${workdir}/rollback" || die "failed to create rollback directory"
   cp -a "$STEM_BIN" "${workdir}/rollback/tendril" || die "failed to capture the protected Stem binary for rollback"

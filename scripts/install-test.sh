@@ -276,9 +276,23 @@ setup_default_fixtures() {
 #!/bin/sh
 if [ "${1:-}" = --version ]; then
   printf 'tendril %s\n' "${FIXTURE_VERSION:-0.3.13}"
-else
-  printf 'tendril-payload\n'
+  exit 0
 fi
+if [ "${1:-}" = remote-git-compat ]; then
+  probe=${2:-}
+  posture=""
+  if [ -f "${probe}/deployment-posture" ]; then
+    IFS= read -r posture < "${probe}/deployment-posture" || posture=""
+  fi
+  cr=$(printf '\r')
+  posture=${posture%"$cr"}
+  if [ "$posture" = remote-git ] && [ "${TENDRIL_DEPLOYMENT_POSTURE:-}" = remote-git ]; then
+    printf '%s\n' 'remote-git-compat: execution-denied git-admitted'
+    exit 0
+  fi
+  exit 1
+fi
+printf 'tendril-payload\n'
 EOF
   cat >"${staging}/tendril-mcp" <<'EOF'
 #!/bin/sh
@@ -301,6 +315,30 @@ EOF
     cp "${FIXTURE_DIR}/bundle.tar.gz" "${FIXTURE_DIR}/${name}"
   done
   write_default_checksums "${hash}"
+}
+
+write_historical_tendril_archive() {
+  local staging="${ROOT}/staging"
+  local name
+  cat >"${staging}/tendril" <<'EOF'
+#!/bin/sh
+if [ "${1:-}" = --version ]; then
+  printf 'tendril %s\n' "${FIXTURE_VERSION:-0.3.13}"
+  exit 0
+fi
+printf 'Unknown command\n' >&2
+exit 1
+EOF
+  chmod 0755 "${staging}/tendril"
+  tar -C "${staging}" -czf "${FIXTURE_DIR}/bundle.tar.gz" tendril tendril-mcp
+  for name in \
+    opentendril-linux-amd64.tar.gz \
+    opentendril-linux-arm64.tar.gz \
+    opentendril-darwin-amd64.tar.gz \
+    opentendril-darwin-arm64.tar.gz
+  do
+    cp "${FIXTURE_DIR}/bundle.tar.gz" "${FIXTURE_DIR}/${name}"
+  done
 }
 
 setup_governed_release_fixture() {
@@ -392,6 +430,7 @@ new_case() {
   FIXTURE_CORRUPT_GREENHOUSE=0
   FIXTURE_PRESERVE_CHECKSUMS=0
   FIXTURE_MISSING_GREENHOUSE_CHECKSUM=0
+  FIXTURE_HISTORICAL_TENDRIL=0
   setup_default_fixtures
 }
 
@@ -2500,6 +2539,9 @@ run_posture_installer() {
   fi
   if [ -f "${ROOT}/fail-version" ]; then
     fixture_version=9.9.9
+  fi
+  if [ "${FIXTURE_HISTORICAL_TENDRIL}" -eq 1 ]; then
+    write_historical_tendril_archive
   fi
   setup_governed_release_fixture "${fixture_version}"
   local env_args=(
@@ -5599,6 +5641,40 @@ if [ "${status}" -ne 0 ] \
   pass "remote-git upgrade fails closed on an ambiguous posture file"
 else
   fail "remote-git upgrade fails closed on an ambiguous posture file" "status=${status} stderr=$(tr '\n' ' ' <"${stderr_file}")"
+fi
+
+new_governed_case
+FIXTURE_HISTORICAL_TENDRIL=1
+run_remote_git_installer --version v0.3.0
+if [ "${status}" -ne 0 ] \
+  && grep -q 'tendril binary does not enforce remote-git execution denial' "${stderr_file}" \
+  && ! grep -q 'Attempting rollback' "${stderr_file}" \
+  && ! events_match '^CMD adduser ' \
+  && ! events_match '^CMD systemctl stop ' \
+  && [ ! -e "${HOSTFS}/home/tendril/.local/bin/tendril" ] \
+  && [ ! -e "${HOSTFS}/usr/local/lib/systemd/system/tendril.service" ] \
+  && [ ! -e "${HOSTFS}/home/tendril/.tendril/deployment-posture" ] \
+  && events_match "CMD curl https://raw.githubusercontent.com/opentendril/opentendril/${FIXTURE_REVISION}/VERSION" \
+  && events_match 'CMD git ls-remote https://github.com/opentendril/opentendril.git refs/tags/v0.3.0'; then
+  pass "remote-git install refuses a historical binary after provenance checks"
+else
+  fail "remote-git install refuses a historical binary after provenance checks" "status=${status} stderr=$(tr '\n' ' ' <"${stderr_file}") events=$(tr '\n' ' ' <"${events_file}")"
+fi
+
+new_governed_case
+prepare_remote_upgrade_host
+FIXTURE_HISTORICAL_TENDRIL=1
+run_remote_git_upgrade_installer --version v0.3.0
+if [ "${status}" -ne 0 ] \
+  && grep -q 'tendril binary does not enforce remote-git execution denial' "${stderr_file}" \
+  && ! grep -q 'Attempting rollback' "${stderr_file}" \
+  && ! events_match '^CMD systemctl stop ' \
+  && grep -q 'tendril old' "${HOSTFS}/home/tendril/.local/bin/tendril" \
+  && events_match "CMD curl https://raw.githubusercontent.com/opentendril/opentendril/${FIXTURE_REVISION}/VERSION" \
+  && events_match 'CMD git ls-remote https://github.com/opentendril/opentendril.git refs/tags/v0.3.0'; then
+  pass "remote-git upgrade refuses a historical binary before stopping the Stem"
+else
+  fail "remote-git upgrade refuses a historical binary before stopping the Stem" "status=${status} stderr=$(tr '\n' ' ' <"${stderr_file}") events=$(tr '\n' ' ' <"${events_file}")"
 fi
 
 if [ -n "${host_tendril}" ]; then

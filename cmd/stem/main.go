@@ -42,6 +42,12 @@ func main() {
 	if handleVersion(os.Args[1:]) {
 		return
 	}
+	if message, code, ok := handleRemoteGitCompat(os.Args[1:]); ok {
+		if message != "" {
+			fmt.Println(message)
+		}
+		os.Exit(code)
+	}
 	if warning := dotenvWarning(godotenv.Load(), workingDirForReport()); warning != "" {
 		fmt.Fprint(os.Stderr, warning)
 	}

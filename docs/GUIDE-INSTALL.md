@@ -85,6 +85,14 @@ posture omits the container daemon and the local Pollinator account. It does
 not weaken the full governed installation, and the installer refuses to change
 one posture into the other.
 
+The published v0.5.2 installer and binary do not support remote-git. Production
+installation of this posture uses a later published release. The installer
+verifies that release and refuses it when the tendril binary does not enforce
+remote-git execution denial. Staged qualification uses a candidate binary built
+from one exact source commit and checks that binary's checksum before the run.
+It is not a production installation, it does not relax published-release checks,
+and it does not substitute an older binary for the implementation being qualified.
+
 ---
 
 ## Before you start: separate process state from the Substrate registry

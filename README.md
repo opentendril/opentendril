@@ -67,7 +67,9 @@ upgraded with `--governed-remote-git-upgrade` and does not take
 qualification, does not qualify that Ubuntu release generally, and fails
 closed when the required properties cannot be established. A full governed
 installation is not changed into remote-git, and remote-git is not changed
-into the full governed posture.
+into the full governed posture. The published v0.5.2 installer and binary do
+not support remote-git. Production installation of that posture waits for a
+later published release.
 Fresh `--governed` admits Ubuntu 24.04 LTS, apt suite `noble`, and Ubuntu
 26.04 LTS, apt suite `resolute`. Ubuntu 24.04 LTS is the qualified release.
 Ubuntu 26.04 LTS is not qualified until a fresh 26.04 host record includes
