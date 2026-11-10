@@ -226,6 +226,9 @@ type Service struct {
 	git                GitOperations
 	delegatedWorkspace DelegatedWorkspaceOperations
 	runWorkspace       RunWorkspaceOperations
+	// deploymentPosture is set by the composing surface from the Stem control
+	// plane. It is never read from an arbitrary Substrate checkout.
+	deploymentPosture string
 
 	seedPersist    SeedPersistence
 	observation    PhytomerObservationSource
@@ -256,6 +259,17 @@ func NewService(sessions *session.Manager) *Service {
 // WithTendrilDir injects the root directory of the Stem's control plane.
 func (s *Service) WithTendrilDir(dir string) *Service {
 	s.tendrilDir = dir
+	return s
+}
+
+// WithDeploymentPosture records the posture resolved for this process. An
+// empty value and "full" keep the existing execution behavior. The remote-git
+// posture refuses execution capabilities inside Core methods.
+func (s *Service) WithDeploymentPosture(posture string) *Service {
+	if s == nil {
+		return nil
+	}
+	s.deploymentPosture = posture
 	return s
 }
 

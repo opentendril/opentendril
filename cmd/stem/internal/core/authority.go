@@ -56,7 +56,12 @@ func (a *Authority) AuthorizeDelegation(request DelegationRequest) (DelegationDe
 	if err != nil {
 		return delegationDenied("current delegation grants could not be loaded"), err
 	}
+	posture, err := ResolveDeploymentPosture(a.controlPlaneDir)
+	if err != nil {
+		return delegationDenied("deployment posture is ambiguous"), err
+	}
 	authorizer := NewDelegationAuthorizer(grants)
 	authorizer.WithPendingStore(a.pendingStore, a.pendingTTL)
+	authorizer.WithDeploymentPosture(posture)
 	return authorizer.Authorize(request), nil
 }

@@ -422,6 +422,9 @@ func (s *Service) WithSeed(operations SeedOperations) *Service {
 // Phytomer for the Seed growth. Sync SeedGrow and async dispatch share this
 // path so they cannot mint separate identities. It is not a governed command.
 func (s *Service) PrepareSeed(ctx context.Context, in SeedGrowInput) (SeedGrowth, error) {
+	if err := s.refuseRemoteGitExecution(CapSeedGrow); err != nil {
+		return SeedGrowth{}, err
+	}
 	spec, err := resolveSeedSpec(in)
 	if err != nil {
 		return SeedGrowth{}, err
@@ -468,6 +471,9 @@ func (s *Service) prepareResolvedSeed(ctx context.Context, spec SeedSpec, idempo
 // another Phytomer, Substrate, Pollen, or spec fails closed. It is not a
 // governed command.
 func (s *Service) GrowPreparedSeed(ctx context.Context, growth SeedGrowth) (SeedGrowResult, error) {
+	if err := s.refuseRemoteGitExecution(CapSeedGrow); err != nil {
+		return SeedGrowResult{}, err
+	}
 	if s.seed.Run == nil {
 		return SeedGrowResult{}, fmt.Errorf("seed.grow is not wired: construct the Core with WithSeed(SeedOperations{Run: …})")
 	}
@@ -601,6 +607,9 @@ func seedFinalizationContext(ctx context.Context) (context.Context, context.Canc
 // before detached dispatch is accepted. Core always mints the handle;
 // Phytomer, Pollen, and Substrate come only from the envelope.
 func (s *Service) OpenPreparedSeed(ctx context.Context, growth SeedGrowth) (SeedDispatch, error) {
+	if err := s.refuseRemoteGitExecution(CapSeedGrow); err != nil {
+		return SeedDispatch{}, err
+	}
 	if strings.TrimSpace(growth.idempotencyKey) == "" {
 		return SeedDispatch{}, ErrSeedIdempotencyKeyRequired
 	}
@@ -666,6 +675,9 @@ func (s *Service) OpenPreparedSeed(ctx context.Context, growth SeedGrowth) (Seed
 // that prepared envelope. Bounds are clamped to Stem-owned caps here, so a
 // caller can only ever narrow — never widen — what a grant already permits.
 func (s *Service) SeedGrow(ctx context.Context, in SeedGrowInput) (SeedGrowResult, error) {
+	if err := s.refuseRemoteGitExecution(CapSeedGrow); err != nil {
+		return SeedGrowResult{}, err
+	}
 	if s.seed.Run == nil {
 		return SeedGrowResult{}, fmt.Errorf("seed.grow is not wired: construct the Core with WithSeed(SeedOperations{Run: …})")
 	}

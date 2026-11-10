@@ -81,8 +81,13 @@ func newCLIDelegation(ctx context.Context) *cliDelegation {
 		delegation.closers = append(delegation.closers, func() { bus.Shutdown() })
 	}
 
+	posture, postureErr := core.ResolveDeploymentPosture(tendrilDir)
+	if postureErr != nil {
+		fmt.Fprintf(os.Stderr, "deployment posture is ambiguous: %v\n", postureErr)
+		os.Exit(1)
+	}
 	delegation.gate = &receptors.DelegationGate{
-		Authorizer: core.NewDelegationAuthorizer(grants),
+		Authorizer: core.NewDelegationAuthorizer(grants).WithDeploymentPosture(posture),
 		Bus:        bus,
 	}
 

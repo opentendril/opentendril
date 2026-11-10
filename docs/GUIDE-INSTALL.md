@@ -76,6 +76,23 @@ root-equivalent: a member can bind-mount the whole filesystem and read or write
 anything as root, whatever file ownership says. That defeats P1, P2 and P3
 together, so a rootful daemon is not a supported variation.
 
+Remote-git is an installed posture of this same boundary. It keeps P1 through
+P5 for the protected `tendril` principal: the principal is distinct from every
+Pollinator, no local Pollinator-hosting account is created, that absence means
+no local account can read the Stem credentials or write the Stem binary, and
+a remote Pollinator still proves its Pollen with an issued credential. The
+posture omits the container daemon and the local Pollinator account. It does
+not weaken the full governed installation, and the installer refuses to change
+one posture into the other.
+
+The published v0.5.2 installer and binary do not support remote-git. Production
+installation of this posture uses a later published release. The installer
+verifies that release and refuses it when the tendril binary does not enforce
+remote-git execution denial. Staged qualification uses a candidate binary built
+from one exact source commit and checks that binary's checksum before the run.
+It is not a production installation, it does not relax published-release checks,
+and it does not substitute an older binary for the implementation being qualified.
+
 ---
 
 ## Before you start: separate process state from the Substrate registry

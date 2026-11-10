@@ -151,7 +151,7 @@ func buildGitCore(ctx context.Context) (core.Core, error) {
 	if err != nil {
 		return nil, err
 	}
-	return core.NewService(manager).WithGit(gitOperations()), nil
+	return withStemDeploymentPosture(core.NewService(manager).WithGit(gitOperations())), nil
 }
 
 // gitOperations binds the delegated git execution port to the conductor's

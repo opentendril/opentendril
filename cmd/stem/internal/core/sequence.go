@@ -95,6 +95,9 @@ func (s *Service) SequenceList(ctx context.Context) ([]string, error) {
 // states, so adapters can render a summary alongside the error exactly as the
 // legacy surfaces did.
 func (s *Service) SequenceRun(ctx context.Context, in SequenceRunInput) (SequenceRunResult, error) {
+	if err := s.refuseRemoteGitExecution(CapSequenceGrow); err != nil {
+		return SequenceRunResult{}, err
+	}
 	if s.sequence.Run == nil {
 		return SequenceRunResult{}, fmt.Errorf("sequence.grow is not wired: construct the Core with WithSequence(SequenceOperations{Run: …})")
 	}

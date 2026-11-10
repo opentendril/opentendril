@@ -18,6 +18,11 @@
 # upgraded after a read-only proof of the current governed posture. That
 # proof is not a fresh-install qualification of other Ubuntu releases.
 #
+# Remote-git: the same protected tendril principal and governed Git
+# capabilities, without Docker, without a Sprout runtime, and without a
+# local Pollinator-hosting account. It does not replace a full governed
+# installation, and a full installation does not become remote-git.
+#
 # This script must work when supplied on stdin for LOCAL installation:
 #   curl -fsSL <release>/install.sh | sh
 # Do not consult $0 as a filesystem path.
@@ -25,6 +30,9 @@
 #   sudo sh install.sh --governed --pollinator-user <user>
 # Governed upgrade of an existing host:
 #   sudo sh install.sh --governed-upgrade --pollinator-user <user> --version <tag>
+# Remote-git installation and upgrade do not take a local Pollinator account:
+#   sudo sh install.sh --governed-remote-git --version <tag>
+#   sudo sh install.sh --governed-remote-git-upgrade --version <tag>
 
 set -eu
 
@@ -36,6 +44,13 @@ DEST_NAME="tendril"
 STEM_USER="tendril"
 STEM_HOME="/home/tendril"
 STEM_BIN="${STEM_HOME}/.local/bin/tendril"
+POSTURE_FILE="${STEM_HOME}/.tendril/deployment-posture"
+POSTURE_REMOTE="remote-git"
+POSTURE_FULL="full"
+POSTURE_ENV="TENDRIL_DEPLOYMENT_POSTURE"
+GIT_CONFIG_DIR="${STEM_HOME}/.config/opentendril"
+GIT_HOOKS_DIR="${GIT_CONFIG_DIR}/git-hooks"
+GIT_TEMPLATE_DIR="${GIT_CONFIG_DIR}/git-template"
 UNIT_PATH="/usr/local/lib/systemd/system/tendril.service"
 LEGACY_UNIT_PATH="/etc/systemd/system/tendril.service"
 GREENHOUSE_ARCHIVE="opentendril-greenhouse-linux-amd64.tar.gz"
@@ -49,6 +64,8 @@ version="${OPENTENDRIL_VERSION:-}"
 want_help=0
 governed=0
 governed_upgrade=0
+governed_remote_git=0
+governed_remote_git_upgrade=0
 pollinator_user=""
 workdir=""
 staged_tendril_version=""
@@ -94,6 +111,8 @@ Usage:
 
   sudo sh install.sh --governed --pollinator-user <user> [--version <tag>]
   sudo sh install.sh --governed-upgrade --pollinator-user <user> [--version <tag>]
+  sudo sh install.sh --governed-remote-git [--version <tag>]
+  sudo sh install.sh --governed-remote-git-upgrade [--version <tag>]
 
 Options:
   --version <tag>              Pin to one GitHub Release (v0.3.0 or 0.3.0).
@@ -108,11 +127,23 @@ Options:
                                run tendril init, or reinitialize durable state.
                                Other Ubuntu releases are not thereby qualified
                                for fresh governed installation.
+  --governed-remote-git        Install the remote-git posture on Ubuntu 24.04
+                               LTS or Ubuntu 26.04 LTS. Requires root. Does
+                               not install Docker, create a local
+                               Pollinator-hosting account, or start the Stem.
+                               26.04 admission is not qualification.
+  --governed-remote-git-upgrade
+                               Upgrade an existing remote-git host. Requires
+                               root. Does not bootstrap Docker, create a local
+                               Pollinator account, or reinitialize durable
+                               state. Fails closed when the recorded posture
+                               is not remote-git.
   --pollinator-user <account>  Ordinary Pollinator-hosting account. Required
                                for --governed unless sudo already set SUDO_USER
                                to a non-root ordinary account. Required for
                                --governed-upgrade; the named account is the
                                only Pollinator whose tendril-mcp is considered.
+                               Not accepted by the remote-git posture.
   -h, --help                   Show this help.
 
 Local platforms (default; no --governed):
@@ -137,6 +168,18 @@ Governed upgrade (--governed-upgrade):
   Upgrade may proceed on another Ubuntu release only after a read-only proof
   of the existing governed posture. Upgrade does not qualify a release, and
   it fails closed when that posture cannot be established.
+
+Remote-git (--governed-remote-git):
+  Ubuntu 24.04 LTS and Ubuntu 26.04 LTS, linux/amd64, systemd. No Docker and
+  no local Pollinator-hosting account. The protected tendril principal still
+  owns the binary, control plane, and Git configuration. Ubuntu 26.04 LTS is
+  not qualified until a fresh-host record exists. The installer refuses a
+  release whose tendril binary does not enforce remote-git execution denial.
+
+Remote-git upgrade (--governed-remote-git-upgrade):
+  An existing remote-git Ubuntu linux/amd64 host. The posture file and the
+  installed unit must both say remote-git. Upgrade preserves credentials,
+  grants, managed Substrates, workspaces, and the Git configuration.
 EOF
 }
 
@@ -186,6 +229,14 @@ parse_args() {
         ;;
       --governed-upgrade)
         governed_upgrade=1
+        shift
+        ;;
+      --governed-remote-git)
+        governed_remote_git=1
+        shift
+        ;;
+      --governed-remote-git-upgrade)
+        governed_remote_git_upgrade=1
         shift
         ;;
       --pollinator-user)
@@ -505,6 +556,26 @@ pin_governed_release() {
     die "canonical VERSION for ${release_tag} is not a stable MAJOR.MINOR.PATCH version"
   [ "$canonical_release_version" = "$expected_release_version" ] ||
     die "canonical VERSION ${canonical_release_version} does not match release tag ${release_tag}"
+}
+
+# require_remote_git_binary_compat runs after the release pin and before any
+# protected host change. A checksum-valid historical binary that does not
+# implement execution denial is refused. The refusal text does not include
+# the probe path or the binary's own output.
+require_remote_git_binary_compat() {
+  _binary=$1
+  require_cmd env
+  _probe="${workdir}/remote-git-compat"
+  rm -rf "$_probe"
+  mkdir -p "$_probe" || die "cannot create a remote-git compatibility probe directory"
+  printf '%s\n' "$POSTURE_REMOTE" >"${_probe}/deployment-posture" || die "cannot write the remote-git compatibility probe"
+  _output=$(
+    env -i PATH="$PATH" HOME="${workdir}" TMPDIR="${workdir}" LC_ALL=C \
+      "${POSTURE_ENV}=${POSTURE_REMOTE}" \
+      "$_binary" remote-git-compat "$_probe" </dev/null 2>"${_probe}/stderr"
+  ) || die "tendril binary does not enforce remote-git execution denial"
+  [ "$_output" = "remote-git-compat: execution-denied git-admitted" ] ||
+    die "tendril binary does not enforce remote-git execution denial"
 }
 
 verify_greenhouse_archive_metadata() {
@@ -1677,10 +1748,422 @@ require_governed_upgrade_platform() {
   fi
 }
 
+posture_file_class() {
+  posture_class=absent
+  if ! fs_exists "$POSTURE_FILE"; then
+    return 0
+  fi
+  if ! fs_is_file "$POSTURE_FILE"; then
+    posture_class=ambiguous
+    return 0
+  fi
+  _raw=$(cat "$POSTURE_FILE") || {
+    posture_class=ambiguous
+    return 0
+  }
+  while :; do
+    case "$_raw" in
+      *"$(printf '\r')") _raw=${_raw%"$(printf '\r')"} ;;
+      *) break ;;
+    esac
+  done
+  case "$_raw" in
+    "$POSTURE_REMOTE") posture_class=$POSTURE_REMOTE ;;
+    "$POSTURE_FULL") posture_class=$POSTURE_FULL ;;
+    *) posture_class=ambiguous ;;
+  esac
+}
+
+unit_contains() {
+  _needle=$1
+  for _unit_path in "$UNIT_PATH" "$LEGACY_UNIT_PATH"; do
+    if fs_exists "$_unit_path" && fs_is_file "$_unit_path"; then
+      _unit_body=$(cat "$_unit_path") || return 1
+      case "$_unit_body" in
+        *"$_needle"*) return 0 ;;
+      esac
+    fi
+  done
+  return 1
+}
+
+refuse_full_posture_change() {
+  posture_file_class
+  if [ "$posture_class" = ambiguous ]; then
+    die "deployment posture is ambiguous. Refusing to continue before changing host state."
+  fi
+  if [ "$posture_class" = "$POSTURE_REMOTE" ] || unit_contains "${POSTURE_ENV}=${POSTURE_REMOTE}"; then
+    die "this host records the remote-git deployment posture. Refusing to change it into the full governed posture. Use --governed-remote-git-upgrade."
+  fi
+}
+
+refuse_remote_fresh_conflict() {
+  posture_file_class
+  if [ "$posture_class" = ambiguous ]; then
+    die "deployment posture is ambiguous. Refusing to install remote-git before changing host state."
+  fi
+  if [ "$posture_class" = "$POSTURE_REMOTE" ] || unit_contains "${POSTURE_ENV}=${POSTURE_REMOTE}"; then
+    die "remote-git is already installed. Use --governed-remote-git-upgrade."
+  fi
+  if [ "$posture_class" = "$POSTURE_FULL" ] || unit_contains "DOCKER_HOST"; then
+    die "this host records the full governed posture. Refusing to change it into remote-git."
+  fi
+  if fs_exists "$UNIT_PATH" || fs_exists "$LEGACY_UNIT_PATH"; then
+    die "an existing Stem unit is not a remote-git unit. Refusing to change posture."
+  fi
+}
+
+require_remote_git_upgrade_posture() {
+  posture_file_class
+  if [ "$posture_class" != "$POSTURE_REMOTE" ]; then
+    die "cannot upgrade remote-git: deployment posture is ${posture_class}. Refusing to change posture."
+  fi
+  if fs_exists "$LEGACY_UNIT_PATH"; then
+    die "cannot upgrade remote-git: ${LEGACY_UNIT_PATH} is present. Refusing to change posture."
+  fi
+  if ! fs_exists "$UNIT_PATH" || ! fs_is_file "$UNIT_PATH"; then
+    die "cannot upgrade remote-git: ${UNIT_PATH} is missing. Refusing to change posture."
+  fi
+  if ! unit_contains "${POSTURE_ENV}=${POSTURE_REMOTE}"; then
+    die "cannot upgrade remote-git: ${UNIT_PATH} is not the remote-git unit. Refusing to change posture."
+  fi
+  if unit_contains "DOCKER_HOST"; then
+    die "cannot upgrade remote-git: the installed unit contains DOCKER_HOST. Refusing to change posture."
+  fi
+}
+
+require_remote_git_platform() {
+  require_governed_root "remote-git installation"
+  detect_platform
+  if [ "$os" != linux ]; then
+    die "remote-git installation requires Linux; ${raw_os} is not an admitted platform (Ubuntu 24.04 LTS or Ubuntu 26.04 LTS, linux/amd64)"
+  fi
+  if [ "$wsl" -eq 1 ]; then
+    die "remote-git installation does not support WSL. The admitted platform is Ubuntu 24.04 LTS or Ubuntu 26.04 LTS, linux/amd64, with systemd."
+  fi
+  if [ "$arch" != amd64 ]; then
+    die "remote-git installation requires linux/amd64; linux/${arch} is not admitted"
+  fi
+  parse_os_release
+  if [ "$os_id" != ubuntu ]; then
+    die "remote-git installation requires Ubuntu; /etc/os-release ID=${os_id} is not admitted (Ubuntu 24.04 LTS or Ubuntu 26.04 LTS)"
+  fi
+  resolve_governed_fresh_suite
+}
+
+ensure_remote_stem_principal() {
+  _pw=$(passwd_entry "$STEM_USER" || true)
+  if [ -n "$_pw" ]; then
+    parse_passwd_line "$_pw"
+    if [ "$pw_home" != "$STEM_HOME" ]; then
+      die "existing ${STEM_USER} account has home ${pw_home}, expected ${STEM_HOME}; refusing to rewrite it"
+    fi
+    case "$pw_uid" in
+      ''|*[!0-9]*) die "existing ${STEM_USER} account has an unusable uid" ;;
+    esac
+    if [ "$pw_uid" -lt 1000 ]; then
+      die "existing ${STEM_USER} account has uid ${pw_uid} (system account); refusing to rewrite it"
+    fi
+    _hash=$(shadow_hash "$STEM_USER") || die "cannot read the ${STEM_USER} shadow entry"
+    if ! password_is_locked "$_hash"; then
+      die "existing ${STEM_USER} account has an interactive password; refusing to rewrite it"
+    fi
+    fs_is_dir "$STEM_HOME" || die "existing ${STEM_USER} account is missing home ${STEM_HOME}; refusing to create it by rewriting the account"
+    _owner=$(fs_owner "$STEM_HOME") || die "cannot determine owner of ${STEM_HOME}"
+    if [ "$_owner" != "$STEM_USER" ]; then
+      die "existing ${STEM_HOME} is owned by ${_owner}, expected ${STEM_USER}; refusing to take ownership"
+    fi
+    tendril_uid=$pw_uid
+  else
+    require_cmd adduser
+    adduser --disabled-password --gecos "OpenTendril Stem" "$STEM_USER" </dev/null || die "failed to create the ${STEM_USER} account"
+    _pw=$(passwd_entry "$STEM_USER") || die "adduser did not create ${STEM_USER}"
+    parse_passwd_line "$_pw"
+    if [ "$pw_home" != "$STEM_HOME" ]; then
+      die "created ${STEM_USER} account has home ${pw_home}, expected ${STEM_HOME}"
+    fi
+    if [ "$pw_uid" -lt 1000 ]; then
+      die "created ${STEM_USER} account has uid ${pw_uid}; an ordinary login uid (>= 1000) is required"
+    fi
+    tendril_uid=$pw_uid
+    fs_is_dir "$STEM_HOME" || die "created ${STEM_USER} account is missing home ${STEM_HOME}"
+  fi
+  chmod 0750 "$STEM_HOME" || die "failed to chmod ${STEM_HOME}"
+}
+
+install_remote_stem_binary() {
+  install -d -o "$STEM_USER" -g "$STEM_USER" -m 0750 "${STEM_HOME}/.local" </dev/null || die "failed to create ${STEM_HOME}/.local"
+  install -d -o "$STEM_USER" -g "$STEM_USER" -m 0750 "${STEM_HOME}/.local/bin" </dev/null || die "failed to create ${STEM_HOME}/.local/bin"
+  install -o "$STEM_USER" -g "$STEM_USER" -m 0750 "${workdir}/tendril" "$STEM_BIN" </dev/null || die "failed to install ${STEM_BIN}"
+}
+
+require_empty_dir() {
+  _empty_dir=$1
+  if fs_exists "$_empty_dir"; then
+    fs_is_dir "$_empty_dir" || die "${_empty_dir} exists and is not a directory"
+    _owner=$(fs_owner "$_empty_dir") || die "cannot determine owner of ${_empty_dir}"
+    [ "$_owner" = "$STEM_USER" ] || die "${_empty_dir} is owned by ${_owner}, expected ${STEM_USER}"
+    _listing=$(ls -A "$_empty_dir") || die "cannot list ${_empty_dir}"
+    [ -z "$_listing" ] || die "${_empty_dir} is not empty; refusing to replace it"
+  else
+    install -d -o "$STEM_USER" -g "$STEM_USER" -m 0750 "$_empty_dir" </dev/null || die "failed to create ${_empty_dir}"
+  fi
+}
+
+install_remote_git_safety() {
+  if fs_exists "${STEM_HOME}/.gitconfig"; then
+    die "refusing to replace existing ${STEM_HOME}/.gitconfig"
+  fi
+  install -d -o "$STEM_USER" -g "$STEM_USER" -m 0750 "${STEM_HOME}/.config" </dev/null || die "failed to create ${STEM_HOME}/.config"
+  install -d -o "$STEM_USER" -g "$STEM_USER" -m 0750 "$GIT_CONFIG_DIR" </dev/null || die "failed to create ${GIT_CONFIG_DIR}"
+  require_empty_dir "$GIT_HOOKS_DIR"
+  require_empty_dir "$GIT_TEMPLATE_DIR"
+  cat >"${workdir}/gitconfig" <<EOF
+[core]
+	hooksPath = ${GIT_HOOKS_DIR}
+[init]
+	templateDir = ${GIT_TEMPLATE_DIR}
+EOF
+  install -o "$STEM_USER" -g "$STEM_USER" -m 0600 "${workdir}/gitconfig" "${STEM_HOME}/.gitconfig" </dev/null || die "failed to install ${STEM_HOME}/.gitconfig"
+}
+
+write_remote_posture_file() {
+  if fs_exists "$POSTURE_FILE"; then
+    die "refusing to replace existing ${POSTURE_FILE}"
+  fi
+  printf '%s\n' "$POSTURE_REMOTE" >"${workdir}/deployment-posture"
+  install -o "$STEM_USER" -g "$STEM_USER" -m 0600 "${workdir}/deployment-posture" "$POSTURE_FILE" </dev/null || die "failed to install ${POSTURE_FILE}"
+}
+
+render_remote_git_unit() {
+  _out=$1
+  cat >"$_out" <<EOF
+[Unit]
+Description=OpenTendril Stem
+After=network-online.target
+
+[Service]
+User=tendril
+Group=tendril
+WorkingDirectory=/home/tendril
+StateDirectory=opentendril-transport
+StateDirectoryMode=0755
+Environment=TENDRIL_LOCAL_SOCKET=/var/lib/opentendril-transport/stem.sock
+Environment=${POSTURE_ENV}=${POSTURE_REMOTE}
+ExecStart=/home/tendril/.local/bin/tendril serve
+Restart=on-failure
+
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ReadWritePaths=/home/tendril
+ProtectKernelTunables=yes
+ProtectControlGroups=yes
+RestrictSUIDSGID=yes
+
+[Install]
+WantedBy=multi-user.target
+EOF
+}
+
+validate_remote_effective_service() {
+  _eff=$(systemctl show tendril.service --property=User,Group,WorkingDirectory,ExecStart,Environment,StateDirectory,StateDirectoryMode,NoNewPrivileges,PrivateTmp,ProtectSystem,ProtectKernelTunables,ProtectControlGroups,RestrictSUIDSGID,ReadWritePaths </dev/null 2>/dev/null) || _eff=
+  [ -n "$_eff" ] || die_effective "systemctl show produced no properties"
+  case "$_eff" in
+    *DOCKER_HOST*) die_effective "remote-git unit must not set DOCKER_HOST" ;;
+  esac
+  case "$_eff" in
+    *XDG_RUNTIME_DIR*|*/run/user/*) die_effective "remote-git unit must not grant a user runtime directory" ;;
+  esac
+  require_eff User tendril
+  require_eff Group tendril
+  require_eff WorkingDirectory /home/tendril
+  if ! eff_execstart_is_canonical; then
+    die_effective "ExecStart must be exactly /home/tendril/.local/bin/tendril serve"
+  fi
+  require_eff Environment "${POSTURE_ENV}=${POSTURE_REMOTE}"
+  require_eff Environment "TENDRIL_LOCAL_SOCKET=/var/lib/opentendril-transport/stem.sock"
+  require_eff StateDirectory opentendril-transport
+  require_eff StateDirectoryMode 0755
+  require_eff NoNewPrivileges yes
+  require_eff PrivateTmp yes
+  require_eff ProtectSystem strict
+  require_eff ProtectKernelTunables yes
+  require_eff ProtectControlGroups yes
+  require_eff RestrictSUIDSGID yes
+  require_eff ReadWritePaths /home/tendril
+}
+
+install_remote_git_unit() {
+  if fs_exists "$LEGACY_UNIT_PATH"; then
+    die "cannot install: ${LEGACY_UNIT_PATH} already exists. Use --governed-remote-git-upgrade to reconcile an existing remote-git installation."
+  fi
+  mkdir -p "/usr/local/lib/systemd/system" || die "failed to create /usr/local/lib/systemd/system"
+  render_remote_git_unit "${workdir}/tendril.service"
+  install -m 0644 "${workdir}/tendril.service" "$UNIT_PATH" </dev/null || die "failed to install ${UNIT_PATH}"
+  systemctl daemon-reload </dev/null || die "systemctl daemon-reload failed"
+}
+
+install_remote_git_packages() {
+  require_cmd apt-get
+  apt_run "apt-get update failed" "update" 0 update
+  apt_install ca-certificates curl git
+  require_cmd curl
+  require_cmd git
+}
+
+print_remote_git_success() {
+  printf '\n'
+  printf 'Posture:     remote-git\n'
+  printf 'Platform:    Ubuntu %s LTS (%s) linux/amd64 (systemd)\n' "$os_version_id" "$governed_docker_suite"
+  printf 'Stem:        %s\n' "$STEM_USER"
+  printf 'Pollinator:  none on this host\n'
+  printf 'Protected:   %s\n' "$STEM_BIN"
+  printf 'Version:     %s\n' "$staged_tendril_version"
+  printf 'Docker:      not installed by this posture\n'
+  printf 'Greenhouse:  not installed by this posture\n'
+  printf 'systemd:     %s installed; not enabled; not started\n' "$UNIT_PATH"
+  printf '\n'
+  printf 'This installer did not create a local Pollinator-hosting account.\n'
+  printf 'This installer did not run tendril init and did not start the Stem.\n'
+  printf 'Ubuntu 26.04 LTS is admitted by the same release map and is not qualified until a fresh-host record exists.\n'
+  printf '\n'
+  printf 'Next, configure remote HTTPS with TENDRIL_REMOTE_LISTEN_ADDR, TENDRIL_REMOTE_TLS_CERT, and TENDRIL_REMOTE_TLS_KEY.\n'
+  printf 'Place Stem-owned Git credentials and a DelegationGrant for the remote Pollinator.\n'
+  printf 'Git capabilities remain the existing Stem Core capabilities.\n'
+  printf 'See https://github.com/opentendril/opentendril/blob/main/docs/GUIDE-GIT-CONNECTION.md\n'
+  printf '\n'
+  printf 'When configuration is complete, start the Stem:\n'
+  printf '\n'
+  printf '  systemctl enable --now tendril\n'
+}
+
+install_remote_git() {
+  require_remote_git_platform
+  require_cmd cat
+  require_cmd stat
+  if [ -n "$pollinator_user" ]; then
+    die "--pollinator-user is not valid with the remote-git posture. Remote-git does not create or use a local Pollinator-hosting account."
+  fi
+  refuse_remote_fresh_conflict
+  require_cmd getent
+  require_cmd install
+  require_cmd systemctl
+  require_cmd ls
+  archive="${ARCHIVE_PREFIX}-${os}-${arch}.tar.gz"
+  prepare_workdir cleanup
+  install_remote_git_packages
+  obtain_verified_archive
+  extract_member tendril
+  staged_tendril_version=$(verify_binary_version "${workdir}/tendril" tendril)
+  pin_governed_release
+  require_remote_git_binary_compat "${workdir}/tendril"
+  ensure_remote_stem_principal
+  install_remote_stem_binary
+  ensure_control_plane
+  install_remote_git_safety
+  write_remote_posture_file
+  install_remote_git_unit
+  validate_remote_effective_service
+  print_remote_git_success
+}
+
+install_remote_git_upgrade() {
+  require_governed_upgrade_platform
+  if [ -n "$pollinator_user" ]; then
+    die "--pollinator-user is not valid with the remote-git posture. Remote-git does not create or use a local Pollinator-hosting account."
+  fi
+  require_cmd cat
+  require_cmd stat
+  require_cmd getent
+  require_cmd install
+  require_cmd systemctl
+  require_cmd cmp
+  require_cmd git
+
+  governed_upgrade_started=0
+  governed_upgrade_finished=0
+  governed_upgrade_rolled_back=0
+  rollback_failed=0
+  rollback_had_baseline=0
+  rollback_had_legacy=0
+  rollback_greenhouse_state_captured=0
+  was_active=0
+  upgrade_mcp=0
+  mcp_dest=""
+  upgrade_failed_msg=""
+
+  require_existing_tendril_principal
+  require_protected_stem_binary
+  require_remote_git_upgrade_posture
+
+  archive="${ARCHIVE_PREFIX}-${os}-${arch}.tar.gz"
+  prepare_workdir governed_upgrade_cleanup
+  obtain_verified_archive
+  extract_member tendril
+  staged_tendril_version=$(verify_binary_version "${workdir}/tendril" tendril)
+  pin_governed_release
+  require_remote_git_binary_compat "${workdir}/tendril"
+
+  mkdir -p "${workdir}/rollback" || die "failed to create rollback directory"
+  cp -a "$STEM_BIN" "${workdir}/rollback/tendril" || die "failed to capture the protected Stem binary for rollback"
+  if fs_exists "$UNIT_PATH"; then
+    cp -a "$UNIT_PATH" "${workdir}/rollback/baseline.service" || die "failed to capture the release-owned unit for rollback"
+    rollback_had_baseline=1
+  fi
+
+  if systemctl is-active --quiet tendril.service; then
+    was_active=1
+  fi
+
+  governed_upgrade_started=1
+  if [ "$was_active" -eq 1 ]; then
+    systemctl stop tendril.service </dev/null || rollback_and_die "failed to stop tendril.service"
+  fi
+  mkdir -p "/usr/local/lib/systemd/system" || rollback_and_die "failed to create /usr/local/lib/systemd/system"
+  render_remote_git_unit "${workdir}/tendril.service"
+  install -m 0644 "${workdir}/tendril.service" "$UNIT_PATH" </dev/null || rollback_and_die "failed to install ${UNIT_PATH}"
+  systemctl daemon-reload </dev/null || rollback_and_die "systemctl daemon-reload failed"
+  validate_remote_effective_service
+  install -o "$STEM_USER" -g "$STEM_USER" -m 0750 "${workdir}/tendril" "$STEM_BIN" </dev/null || rollback_and_die "failed to replace the protected Stem binary"
+  if [ "$was_active" -eq 1 ]; then
+    systemctl start tendril.service </dev/null || rollback_and_die "failed to restart tendril.service"
+    if ! systemctl is-active --quiet tendril.service; then
+      rollback_and_die "tendril.service is not active after restart"
+    fi
+  else
+    if systemctl is-active --quiet tendril.service; then
+      rollback_and_die "inactive Stem was started during upgrade"
+    fi
+  fi
+  governed_upgrade_finished=1
+
+  printf '\n'
+  printf 'OpenTendril remote-git upgrade completed.\n'
+  printf '\n'
+  printf 'Installed:\n'
+  printf '  %s (%s)\n' "$STEM_BIN" "$staged_tendril_version"
+  printf '\n'
+  printf 'Release-owned baseline:\n'
+  printf '  %s\n' "$UNIT_PATH"
+  printf 'Posture:     remote-git\n'
+  if fs_is_dir "/etc/systemd/system/tendril.service.d"; then
+    printf '\n'
+    printf 'Administrator drop-ins preserved:\n'
+    printf '  /etc/systemd/system/tendril.service.d\n'
+  fi
+  printf '\n'
+  printf 'This upgrade did not run tendril init and did not reinitialize durable Stem state.\n'
+  printf 'Credentials, grants, managed Substrates, workspaces, and Git configuration were left in place.\n'
+  printf 'The host remains the remote-git posture. It was not changed into the full governed posture.\n'
+  printf 'Ubuntu 26.04 LTS is not qualified until a fresh-host record exists.\n'
+}
+
 install_governed() {
   require_governed_fresh_platform
   require_cmd cat
   require_cmd stat
+  refuse_full_posture_change
   require_cmd getent
   require_cmd install
   require_cmd systemctl
@@ -1884,6 +2367,9 @@ require_eff() {
 validate_effective_service() {
   _eff=$(systemctl show tendril.service --property=User,Group,WorkingDirectory,ExecStart,Environment,StateDirectory,StateDirectoryMode,NoNewPrivileges,PrivateTmp,ProtectSystem,ProtectKernelTunables,ProtectControlGroups,RestrictSUIDSGID </dev/null 2>/dev/null) || _eff=
   [ -n "$_eff" ] || die_effective "systemctl show produced no properties"
+  if eff_has_assignment Environment "${POSTURE_ENV}=${POSTURE_REMOTE}"; then
+    die_effective "full governed unit must not set ${POSTURE_ENV}=${POSTURE_REMOTE}"
+  fi
 
   require_eff User tendril
   require_eff Group tendril
@@ -2124,13 +2610,14 @@ install_governed_upgrade() {
   mcp_dest=""
   upgrade_failed_msg=""
 
+  require_existing_tendril_principal
+  require_protected_stem_binary
+  refuse_full_posture_change
   if [ -z "$pollinator_user" ]; then
     die "--governed-upgrade requires --pollinator-user <account>. Direct root execution cannot identify the Pollinator-hosting account."
   fi
   resolve_pollinator
-  require_existing_tendril_principal
   require_pollinator_separated_from_stem
-  require_protected_stem_binary
   inspect_pollinator_privilege_readonly
 
   mcp_dest="${pollinator_home}/.local/bin/tendril-mcp"
@@ -2256,8 +2743,26 @@ main() {
     usage
     exit 0
   fi
-  if [ "$governed" -eq 1 ] && [ "$governed_upgrade" -eq 1 ]; then
-    die "--governed and --governed-upgrade are mutually exclusive"
+  _posture_modes=0
+  if [ "$governed" -eq 1 ]; then
+    _posture_modes=$((_posture_modes + 1))
+  fi
+  if [ "$governed_upgrade" -eq 1 ]; then
+    _posture_modes=$((_posture_modes + 1))
+  fi
+  if [ "$governed_remote_git" -eq 1 ]; then
+    _posture_modes=$((_posture_modes + 1))
+  fi
+  if [ "$governed_remote_git_upgrade" -eq 1 ]; then
+    _posture_modes=$((_posture_modes + 1))
+  fi
+  if [ "$_posture_modes" -gt 1 ]; then
+    die "--governed, --governed-upgrade, --governed-remote-git, and --governed-remote-git-upgrade are mutually exclusive"
+  fi
+  if [ "$governed_remote_git" -eq 1 ] || [ "$governed_remote_git_upgrade" -eq 1 ]; then
+    if [ -n "$pollinator_user" ]; then
+      die "--pollinator-user is not valid with the remote-git posture. Remote-git does not create or use a local Pollinator-hosting account."
+    fi
   fi
   if [ "$governed" -eq 1 ]; then
     install_governed
@@ -2265,6 +2770,14 @@ main() {
   fi
   if [ "$governed_upgrade" -eq 1 ]; then
     install_governed_upgrade
+    return
+  fi
+  if [ "$governed_remote_git" -eq 1 ]; then
+    install_remote_git
+    return
+  fi
+  if [ "$governed_remote_git_upgrade" -eq 1 ]; then
+    install_remote_git_upgrade
     return
   fi
   if [ -n "$pollinator_user" ]; then

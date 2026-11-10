@@ -14,6 +14,8 @@ import (
 	"sort"
 	"strings"
 	"sync"
+
+	"github.com/opentendril/opentendril/cmd/stem/internal/gitsafety"
 )
 
 func runGitCommand(ctx context.Context, dir string, args ...string) (string, error) {
@@ -33,11 +35,18 @@ func runGitCommandWithEnv(ctx context.Context, dir string, extraEnv []string, ar
 	// Start the fixed git executable directly; args are never interpreted by a
 	// shell. Caller-controlled refs are separated with git's `--` marker or
 	// passed as explicit option values such as `-m`.
-	cmd := exec.CommandContext(ctx, "git")
-	cmd.Args = append([]string{"git"}, args...)
+	effectiveEnv := os.Environ()
+	if len(extraEnv) > 0 {
+		effectiveEnv = append(append([]string{}, effectiveEnv...), extraEnv...)
+	}
+	args, err := gitArgsForPosture(ctx, dir, effectiveEnv, args)
+	if err != nil {
+		return "", fmt.Errorf("git %s failed: %w", strings.Join(args, " "), err)
+	}
+	cmd := exec.CommandContext(ctx, "git", args...)
 	cmd.Dir = dir
 	if len(extraEnv) > 0 {
-		cmd.Env = append(os.Environ(), extraEnv...)
+		cmd.Env = effectiveEnv
 	}
 	output, err := cmd.CombinedOutput()
 	if err != nil {
@@ -57,6 +66,10 @@ func runGitCommandRawOutput(ctx context.Context, dir string, args ...string) (st
 	}
 
 	cmdArgs := append([]string{"-C", dir}, args...)
+	cmdArgs, err := gitArgsForPosture(ctx, dir, os.Environ(), cmdArgs)
+	if err != nil {
+		return "", fmt.Errorf("git %s failed: %w", strings.Join(args, " "), err)
+	}
 	cmd := exec.CommandContext(ctx, "git", cmdArgs...)
 	output, err := cmd.CombinedOutput()
 	if err != nil {
@@ -78,6 +91,10 @@ func runGitCommandBoundedRawOutput(ctx context.Context, dir string, maxOutput in
 	}
 
 	cmdArgs := append([]string{"-C", dir}, args...)
+	cmdArgs, err := gitArgsForPosture(ctx, dir, os.Environ(), cmdArgs)
+	if err != nil {
+		return "", false, fmt.Errorf("git %s failed: %w", strings.Join(args, " "), err)
+	}
 	cmd := exec.CommandContext(ctx, "git", cmdArgs...)
 	var output boundedGitOutput
 	output.limit = maxOutput
@@ -123,10 +140,24 @@ func (output *boundedGitOutput) String() string {
 
 // isGitRepo checks if the given path is inside a git repository.
 func isGitRepo(path string) bool {
-	cmd := exec.Command("git", "rev-parse", "--is-inside-work-tree")
+	args, err := gitArgsForPosture(context.Background(), path, os.Environ(), []string{"rev-parse", "--is-inside-work-tree"})
+	if err != nil {
+		return false
+	}
+	cmd := exec.Command("git", args...)
 	cmd.Dir = path
-	err := cmd.Run()
+	err = cmd.Run()
 	return err == nil
+}
+
+// gitArgsForPosture adds remote-git command-scope safety arguments. The full
+// posture receives the original arguments and the same Git behavior as before.
+func gitArgsForPosture(ctx context.Context, dir string, env []string, args []string) ([]string, error) {
+	safety, err := gitsafety.Args(ctx, dir, env)
+	if err != nil || len(safety) == 0 {
+		return args, err
+	}
+	return gitsafety.Insert(args, safety), nil
 }
 
 // Delegated git commit — the lowest rung of the delegated-execution ladder

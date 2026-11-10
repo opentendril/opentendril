@@ -276,9 +276,23 @@ setup_default_fixtures() {
 #!/bin/sh
 if [ "${1:-}" = --version ]; then
   printf 'tendril %s\n' "${FIXTURE_VERSION:-0.3.13}"
-else
-  printf 'tendril-payload\n'
+  exit 0
 fi
+if [ "${1:-}" = remote-git-compat ]; then
+  probe=${2:-}
+  posture=""
+  if [ -f "${probe}/deployment-posture" ]; then
+    IFS= read -r posture < "${probe}/deployment-posture" || posture=""
+  fi
+  cr=$(printf '\r')
+  posture=${posture%"$cr"}
+  if [ "$posture" = remote-git ] && [ "${TENDRIL_DEPLOYMENT_POSTURE:-}" = remote-git ]; then
+    printf '%s\n' 'remote-git-compat: execution-denied git-admitted'
+    exit 0
+  fi
+  exit 1
+fi
+printf 'tendril-payload\n'
 EOF
   cat >"${staging}/tendril-mcp" <<'EOF'
 #!/bin/sh
@@ -301,6 +315,30 @@ EOF
     cp "${FIXTURE_DIR}/bundle.tar.gz" "${FIXTURE_DIR}/${name}"
   done
   write_default_checksums "${hash}"
+}
+
+write_historical_tendril_archive() {
+  local staging="${ROOT}/staging"
+  local name
+  cat >"${staging}/tendril" <<'EOF'
+#!/bin/sh
+if [ "${1:-}" = --version ]; then
+  printf 'tendril %s\n' "${FIXTURE_VERSION:-0.3.13}"
+  exit 0
+fi
+printf 'Unknown command\n' >&2
+exit 1
+EOF
+  chmod 0755 "${staging}/tendril"
+  tar -C "${staging}" -czf "${FIXTURE_DIR}/bundle.tar.gz" tendril tendril-mcp
+  for name in \
+    opentendril-linux-amd64.tar.gz \
+    opentendril-linux-arm64.tar.gz \
+    opentendril-darwin-amd64.tar.gz \
+    opentendril-darwin-arm64.tar.gz
+  do
+    cp "${FIXTURE_DIR}/bundle.tar.gz" "${FIXTURE_DIR}/${name}"
+  done
 }
 
 setup_governed_release_fixture() {
@@ -392,6 +430,7 @@ new_case() {
   FIXTURE_CORRUPT_GREENHOUSE=0
   FIXTURE_PRESERVE_CHECKSUMS=0
   FIXTURE_MISSING_GREENHOUSE_CHECKSUM=0
+  FIXTURE_HISTORICAL_TENDRIL=0
   setup_default_fixtures
 }
 
@@ -2471,6 +2510,78 @@ run_governed_upgrade_installer() {
   set -e
 }
 
+run_posture_installer() {
+  local mode_flag=$1
+  shift
+  : >"${events_file}"
+  capture_sudo_policy_snapshot "${ROOT}/sudo-policy-before"
+  setup_governed_shims
+  local fixture_version="${PIN_VERSION#v}"
+  local scan_arg scan_value scan_index
+  local scan_args=("$@")
+  for ((scan_index = 0; scan_index < ${#scan_args[@]}; scan_index++)); do
+    scan_arg="${scan_args[scan_index]}"
+    case "${scan_arg}" in
+      --version=*)
+        fixture_version="${scan_arg#--version=}"
+        ;;
+      --version)
+        if [ $((scan_index + 1)) -lt ${#scan_args[@]} ]; then
+          scan_value="${scan_args[scan_index + 1]}"
+          fixture_version="${scan_value#v}"
+          scan_index=$((scan_index + 1))
+        fi
+        ;;
+    esac
+  done
+  if [ -z "${fixture_version}" ]; then
+    fixture_version=0.3.13
+  fi
+  if [ -f "${ROOT}/fail-version" ]; then
+    fixture_version=9.9.9
+  fi
+  if [ "${FIXTURE_HISTORICAL_TENDRIL}" -eq 1 ]; then
+    write_historical_tendril_archive
+  fi
+  setup_governed_release_fixture "${fixture_version}"
+  local env_args=(
+    env -i
+    HOME="${HOSTFS}/root"
+    PATH="${SHIM_DIR}"
+    TMPDIR="${TMP_DIR}"
+    LC_ALL=C
+    FIXTURE_VERSION="${fixture_version}"
+    UNAME_S="${UNAME_S}"
+    UNAME_M="${UNAME_M}"
+  )
+  if [ -n "${WSL_DISTRO}" ]; then
+    env_args+=(WSL_DISTRO_NAME="${WSL_DISTRO}")
+  fi
+  if [ -n "${PIN_VERSION}" ]; then
+    env_args+=(OPENTENDRIL_VERSION="${PIN_VERSION}")
+  fi
+  env_args+=(FIXTURE_IMAGE_VERSION="${FIXTURE_IMAGE_VERSION:-${fixture_version}}")
+  env_args+=(FIXTURE_IMAGE_REVISION="${FIXTURE_IMAGE_REVISION:-${FIXTURE_REVISION}}")
+  if [ -n "${GOVERNED_SUDO_USER}" ]; then
+    env_args+=(SUDO_USER="${GOVERNED_SUDO_USER}")
+  fi
+  set +e
+  (
+    cd "${ROOT}" || exit 1
+    "${env_args[@]}" /bin/sh "${installer}" "${mode_flag}" "$@"
+  ) >"${stdout_file}" 2>"${stderr_file}"
+  status=$?
+  set -e
+}
+
+run_remote_git_installer() {
+  run_posture_installer --governed-remote-git "$@"
+}
+
+run_remote_git_upgrade_installer() {
+  run_posture_installer --governed-remote-git-upgrade "$@"
+}
+
 write_tendril_unit_file() {
   local path=$1
   local uid=${2:-2001}
@@ -2675,6 +2786,52 @@ prepare_upgrade_host() {
   write_floor_systemctl_show 2001
   prepare_upgrade_rootless_runtime
   prepare_upgrade_sudo_policy
+}
+
+write_remote_git_unit_file() {
+  local path=$1
+  mkdir -p "$(dirname "${path}")"
+  cat >"${path}" <<'EOF'
+[Unit]
+Description=OpenTendril Stem
+After=network-online.target
+
+[Service]
+User=tendril
+Group=tendril
+WorkingDirectory=/home/tendril
+StateDirectory=opentendril-transport
+StateDirectoryMode=0755
+Environment=TENDRIL_LOCAL_SOCKET=/var/lib/opentendril-transport/stem.sock
+Environment=TENDRIL_DEPLOYMENT_POSTURE=remote-git
+ExecStart=/home/tendril/.local/bin/tendril serve
+Restart=on-failure
+
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ReadWritePaths=/home/tendril
+ProtectKernelTunables=yes
+ProtectControlGroups=yes
+RestrictSUIDSGID=yes
+
+[Install]
+WantedBy=multi-user.target
+EOF
+}
+
+prepare_remote_upgrade_host() {
+  preseed_tendril_user
+  place_old_stem_binary
+  seed_durable_stem_state
+  write_remote_git_unit_file "${HOSTFS}/usr/local/lib/systemd/system/tendril.service"
+  mkdir -p "${HOSTFS}/home/tendril/.tendril" "${ROOT}/meta/owners"
+  printf 'remote-git\n' >"${HOSTFS}/home/tendril/.tendril/deployment-posture"
+  chmod 0600 "${HOSTFS}/home/tendril/.tendril/deployment-posture"
+  printf 'tendril\n' >"${ROOT}/meta/owners/%home%tendril%.tendril%deployment-posture"
+  printf 'SENTINEL-GITCONFIG\n' >"${HOSTFS}/home/tendril/.gitconfig"
+  chmod 0600 "${HOSTFS}/home/tendril/.gitconfig"
+  printf 'tendril\n' >"${ROOT}/meta/owners/%home%tendril%.gitconfig"
 }
 
 seed_greenhouse_rollback_state() {
@@ -5224,6 +5381,300 @@ if assert_governed_success_core "Greenhouse lifecycle fixture installation"; the
   fi
 else
   fail "Greenhouse lifecycle fixture installation failed" "stderr=$(tr '\n' ' ' <"${stderr_file}")"
+fi
+
+# --- remote-git posture ------------------------------------------------------
+
+new_case
+run_installer --governed --governed-remote-git
+assert_failure_no_extract "--governed and --governed-remote-git are mutually exclusive"
+if grep -q 'mutually exclusive' "${stderr_file}"; then
+  pass "--governed and --governed-remote-git are mutually exclusive"
+else
+  fail "--governed and --governed-remote-git are mutually exclusive" "stderr=$(tr '\n' ' ' <"${stderr_file}")"
+fi
+
+new_case
+run_installer --governed-remote-git --pollinator-user alice
+assert_failure_no_extract "--pollinator-user is rejected by remote-git before install"
+if grep -q 'not valid with the remote-git posture' "${stderr_file}"; then
+  pass "--pollinator-user is rejected by remote-git before install"
+else
+  fail "--pollinator-user is rejected by remote-git before install" "stderr=$(tr '\n' ' ' <"${stderr_file}")"
+fi
+
+assert_remote_git_success() {
+  local name=$1
+  if [ "${status}" -ne 0 ]; then
+    fail "${name}" "stderr=$(tr '\n' ' ' <"${stderr_file}")"
+    return 1
+  fi
+  if ! grep -q '^Posture:     remote-git$' "${stdout_file}"; then
+    fail "${name}: success text" "stdout=$(tr '\n' ' ' <"${stdout_file}")"
+    return 1
+  fi
+  if grep -q '^Posture:     GOVERNED$' "${stdout_file}"; then
+    fail "${name}: reported the full governed posture"
+    return 1
+  fi
+  local stem="${HOSTFS}/home/tendril/.local/bin/tendril"
+  local unit="${HOSTFS}/usr/local/lib/systemd/system/tendril.service"
+  local posture="${HOSTFS}/home/tendril/.tendril/deployment-posture"
+  local gitconfig="${HOSTFS}/home/tendril/.gitconfig"
+  local hooks="${HOSTFS}/home/tendril/.config/opentendril/git-hooks"
+  local template="${HOSTFS}/home/tendril/.config/opentendril/git-template"
+  if [ ! -f "${stem}" ] || [ "$(stat -c '%a' "${stem}")" != 750 ]; then
+    fail "${name}: protected binary mode" "mode=$(stat -c '%a' "${stem}" 2>/dev/null || echo missing)"
+    return 1
+  fi
+  if [ "$(stat -c '%a' "${HOSTFS}/home/tendril")" != 750 ]; then
+    fail "${name}: home mode" "mode=$(stat -c '%a' "${HOSTFS}/home/tendril")"
+    return 1
+  fi
+  if [ "$(cat "${ROOT}/meta/owners/%home%tendril%.local%bin%tendril")" != "tendril" ]; then
+    fail "${name}: binary owner"
+    return 1
+  fi
+  if [ ! -f "${posture}" ] || [ "$(cat "${posture}")" != "remote-git" ] || [ "$(stat -c '%a' "${posture}")" != 600 ]; then
+    fail "${name}: posture file" "posture=$(cat "${posture}" 2>/dev/null || echo missing)"
+    return 1
+  fi
+  if [ ! -f "${unit}" ] \
+    || ! grep -q '^Environment=TENDRIL_DEPLOYMENT_POSTURE=remote-git$' "${unit}" \
+    || ! grep -q '^ReadWritePaths=/home/tendril$' "${unit}" \
+    || grep -q 'DOCKER_HOST' "${unit}" \
+    || grep -q 'XDG_RUNTIME_DIR' "${unit}" \
+    || grep -q '/run/user/' "${unit}"; then
+    fail "${name}: unit" "unit=$(tr '\n' ' ' <"${unit}" 2>/dev/null || echo missing)"
+    return 1
+  fi
+  if [ ! -f "${gitconfig}" ] \
+    || ! grep -q 'hooksPath = /home/tendril/.config/opentendril/git-hooks' "${gitconfig}" \
+    || ! grep -q 'templateDir = /home/tendril/.config/opentendril/git-template' "${gitconfig}" \
+    || grep -Eq 'filter\.|credential\.helper|core\.sshCommand' "${gitconfig}"; then
+    fail "${name}: gitconfig" "gitconfig=$(tr '\n' ' ' <"${gitconfig}" 2>/dev/null || echo missing)"
+    return 1
+  fi
+  if [ -n "$(ls -A "${hooks}")" ] || [ -n "$(ls -A "${template}")" ]; then
+    fail "${name}: hook directories are not empty"
+    return 1
+  fi
+  if find "${hooks}" "${template}" -type f -perm -111 | grep -q .; then
+    fail "${name}: hook directory contains an executable"
+    return 1
+  fi
+  if [ -e "${HOSTFS}/home/alice/.local/bin/tendril-mcp" ] \
+    || [ -e "${HOSTFS}/etc/apt/sources.list.d/docker.sources" ] \
+    || [ -e "${ROOT}/state/pkg/docker-ce" ] \
+    || [ -e "${ROOT}/state/linger-tendril" ] \
+    || [ -e "${HOSTFS}${GREENHOUSE_WRAPPER}" ]; then
+    fail "${name}: installed Docker, Greenhouse, linger, or tendril-mcp"
+    return 1
+  fi
+  if grep -Eq '^CMD (usermod |loginctl |dockerd-rootless|python3 )' "${events_file}" \
+    || grep -Eq 'docker-ce|uidmap|slirp4netns' "${events_file}"; then
+    fail "${name}: ran a full-governed dependency" "events=$(tr '\n' ' ' <"${events_file}")"
+    return 1
+  fi
+  if grep -Eq '^CMD systemctl (enable |start )tendril' "${events_file}"; then
+    fail "${name}: started the Stem" "events=$(tr '\n' ' ' <"${events_file}")"
+    return 1
+  fi
+  pass "${name}"
+  return 0
+}
+
+new_governed_case
+run_remote_git_installer --version v0.3.0
+assert_remote_git_success "Ubuntu 24.04 remote-git install has no Docker and no local Pollinator account"
+if grep -q 'Platform:    Ubuntu 24.04 LTS (noble)' "${stdout_file}" \
+  && grep -q 'not qualified until a fresh-host record exists' "${stdout_file}" \
+  && grep -q 'did not create a local Pollinator-hosting account' "${stdout_file}"; then
+  pass "Ubuntu 24.04 remote-git success names the posture and the qualification limit"
+else
+  fail "Ubuntu 24.04 remote-git success names the posture and the qualification limit" "stdout=$(tr '\n' ' ' <"${stdout_file}")"
+fi
+
+new_governed_case
+write_os_release ubuntu 26.04 resolute
+run_remote_git_installer --version v0.3.0
+assert_remote_git_success "Ubuntu 26.04 remote-git install is admitted"
+if grep -q 'Platform:    Ubuntu 26.04 LTS (resolute)' "${stdout_file}" \
+  && grep -q 'not qualified until a fresh-host record exists' "${stdout_file}"; then
+  pass "Ubuntu 26.04 remote-git admission is not described as qualification"
+else
+  fail "Ubuntu 26.04 remote-git admission is not described as qualification" "stdout=$(tr '\n' ' ' <"${stdout_file}")"
+fi
+
+new_governed_case
+write_os_release debian 12
+run_remote_git_installer
+if assert_governed_failure "remote-git rejects non-Ubuntu" && assert_no_host_mutation "remote-git rejects non-Ubuntu"; then
+  if grep -q 'requires Ubuntu' "${stderr_file}" && ! grep -q 'rootless Docker' "${stderr_file}"; then
+    pass "remote-git rejects non-Ubuntu before mutation"
+  else
+    fail "remote-git rejects non-Ubuntu before mutation" "stderr=$(tr '\n' ' ' <"${stderr_file}")"
+  fi
+fi
+
+new_governed_case
+write_os_release ubuntu 22.04
+run_remote_git_installer
+if assert_governed_failure "remote-git rejects Ubuntu 22.04" && assert_no_host_mutation "remote-git rejects Ubuntu 22.04"; then
+  if grep -q 'not admitted' "${stderr_file}" && ! grep -q 'rootless Docker' "${stderr_file}"; then
+    pass "remote-git rejects Ubuntu 22.04 before mutation"
+  else
+    fail "remote-git rejects Ubuntu 22.04 before mutation" "stderr=$(tr '\n' ' ' <"${stderr_file}")"
+  fi
+fi
+
+new_governed_case
+WSL_DISTRO=Ubuntu
+run_remote_git_installer
+if assert_governed_failure "remote-git rejects WSL" && assert_no_host_mutation "remote-git rejects WSL"; then
+  if grep -q 'does not support WSL' "${stderr_file}" && ! grep -q 'Docker' "${stderr_file}"; then
+    pass "remote-git rejects WSL before mutation"
+  else
+    fail "remote-git rejects WSL before mutation" "stderr=$(tr '\n' ' ' <"${stderr_file}")"
+  fi
+fi
+
+new_governed_case
+UNAME_M=aarch64
+run_remote_git_installer
+if assert_governed_failure "remote-git rejects arm64" && assert_no_host_mutation "remote-git rejects arm64"; then
+  if grep -q 'linux/amd64' "${stderr_file}" && ! grep -q 'Docker' "${stderr_file}"; then
+    pass "remote-git rejects arm64 before mutation"
+  else
+    fail "remote-git rejects arm64 before mutation" "stderr=$(tr '\n' ' ' <"${stderr_file}")"
+  fi
+fi
+
+new_governed_case
+run_remote_git_installer --pollinator-user alice
+if assert_governed_failure "remote-git rejects --pollinator-user" && assert_no_host_mutation "remote-git rejects --pollinator-user"; then
+  if grep -q 'not valid with the remote-git posture' "${stderr_file}"; then
+    pass "remote-git rejects --pollinator-user before mutation"
+  else
+    fail "remote-git rejects --pollinator-user before mutation" "stderr=$(tr '\n' ' ' <"${stderr_file}")"
+  fi
+fi
+
+new_governed_case
+preseed_tendril_user
+write_remote_git_unit_file "${HOSTFS}/usr/local/lib/systemd/system/tendril.service"
+mkdir -p "${HOSTFS}/home/tendril/.tendril"
+printf 'remote-git\n' >"${HOSTFS}/home/tendril/.tendril/deployment-posture"
+run_governed_installer --pollinator-user alice
+if assert_governed_failure "full install refuses a remote-git host" && assert_no_host_mutation "full install refuses a remote-git host"; then
+  if grep -q 'records the remote-git deployment posture' "${stderr_file}" && ! grep -q 'rootless Docker' "${stderr_file}"; then
+    pass "full install refuses a remote-git host before mutation"
+  else
+    fail "full install refuses a remote-git host before mutation" "stderr=$(tr '\n' ' ' <"${stderr_file}")"
+  fi
+fi
+
+new_governed_case
+preseed_tendril_user
+write_tendril_unit_file "${HOSTFS}/usr/local/lib/systemd/system/tendril.service" 2001
+run_remote_git_installer
+if assert_governed_failure "remote-git install refuses a full unit" && assert_no_host_mutation "remote-git install refuses a full unit"; then
+  if grep -q 'records the full governed posture' "${stderr_file}" && ! events_match '^CMD tar '; then
+    pass "remote-git install refuses a full unit before mutation"
+  else
+    fail "remote-git install refuses a full unit before mutation" "stderr=$(tr '\n' ' ' <"${stderr_file}") events=$(tr '\n' ' ' <"${events_file}")"
+  fi
+fi
+
+new_governed_case
+prepare_remote_upgrade_host
+place_old_mcp alice
+posture_before="$(stat -c '%Y %s' "${HOSTFS}/home/tendril/.tendril/deployment-posture")"
+gitconfig_before="$(stat -c '%Y %s' "${HOSTFS}/home/tendril/.gitconfig")"
+mcp_before="$(stat -c '%Y %s' "${HOSTFS}/home/alice/.local/bin/tendril-mcp")"
+run_remote_git_upgrade_installer --version v0.3.0
+if [ "${status}" -eq 0 ] \
+  && grep -q 'remote-git upgrade completed' "${stdout_file}" \
+  && grep -q 'tendril-payload' "${HOSTFS}/home/tendril/.local/bin/tendril" \
+  && [ "$(stat -c '%Y %s' "${HOSTFS}/home/tendril/.tendril/deployment-posture")" = "${posture_before}" ] \
+  && [ "$(stat -c '%Y %s' "${HOSTFS}/home/tendril/.gitconfig")" = "${gitconfig_before}" ] \
+  && [ "$(cat "${HOSTFS}/home/tendril/.gitconfig")" = "SENTINEL-GITCONFIG" ] \
+  && [ "$(stat -c '%Y %s' "${HOSTFS}/home/alice/.local/bin/tendril-mcp")" = "${mcp_before}" ] \
+  && grep -q 'tendril-mcp old' "${HOSTFS}/home/alice/.local/bin/tendril-mcp" \
+  && assert_durable_untouched "remote-git upgrade preserves durable state" \
+  && assert_no_upgrade_bootstrap "remote-git upgrade does not bootstrap Docker"; then
+  pass "remote-git upgrade preserves credentials, Git config, posture, and a planted MCP client"
+else
+  fail "remote-git upgrade preserves credentials, Git config, posture, and a planted MCP client" "status=${status} stderr=$(tr '\n' ' ' <"${stderr_file}")"
+fi
+
+new_governed_case
+prepare_remote_upgrade_host
+run_governed_upgrade_installer --pollinator-user alice
+if [ "${status}" -ne 0 ] \
+  && grep -q 'records the remote-git deployment posture' "${stderr_file}" \
+  && ! events_match '^CMD tar ' \
+  && ! grep -Eq '^CMD (apt-get |dockerd-rootless)' "${events_file}"; then
+  pass "full upgrade refuses a remote-git host before mutation"
+else
+  fail "full upgrade refuses a remote-git host before mutation" "status=${status} stderr=$(tr '\n' ' ' <"${stderr_file}") events=$(tr '\n' ' ' <"${events_file}")"
+fi
+
+new_governed_case
+prepare_upgrade_host
+run_remote_git_upgrade_installer
+if [ "${status}" -ne 0 ] \
+  && grep -q 'cannot upgrade remote-git' "${stderr_file}" \
+  && ! events_match '^CMD tar '; then
+  pass "remote-git upgrade refuses a full governed host before mutation"
+else
+  fail "remote-git upgrade refuses a full governed host before mutation" "status=${status} stderr=$(tr '\n' ' ' <"${stderr_file}")"
+fi
+
+new_governed_case
+prepare_remote_upgrade_host
+printf 'remote-git \n' >"${HOSTFS}/home/tendril/.tendril/deployment-posture"
+run_remote_git_upgrade_installer
+if [ "${status}" -ne 0 ] \
+  && grep -q 'deployment posture is ambiguous' "${stderr_file}" \
+  && ! events_match '^CMD tar '; then
+  pass "remote-git upgrade fails closed on an ambiguous posture file"
+else
+  fail "remote-git upgrade fails closed on an ambiguous posture file" "status=${status} stderr=$(tr '\n' ' ' <"${stderr_file}")"
+fi
+
+new_governed_case
+FIXTURE_HISTORICAL_TENDRIL=1
+run_remote_git_installer --version v0.3.0
+if [ "${status}" -ne 0 ] \
+  && grep -q 'tendril binary does not enforce remote-git execution denial' "${stderr_file}" \
+  && ! grep -q 'Attempting rollback' "${stderr_file}" \
+  && ! events_match '^CMD adduser ' \
+  && ! events_match '^CMD systemctl stop ' \
+  && [ ! -e "${HOSTFS}/home/tendril/.local/bin/tendril" ] \
+  && [ ! -e "${HOSTFS}/usr/local/lib/systemd/system/tendril.service" ] \
+  && [ ! -e "${HOSTFS}/home/tendril/.tendril/deployment-posture" ] \
+  && events_match "CMD curl https://raw.githubusercontent.com/opentendril/opentendril/${FIXTURE_REVISION}/VERSION" \
+  && events_match 'CMD git ls-remote https://github.com/opentendril/opentendril.git refs/tags/v0.3.0'; then
+  pass "remote-git install refuses a historical binary after provenance checks"
+else
+  fail "remote-git install refuses a historical binary after provenance checks" "status=${status} stderr=$(tr '\n' ' ' <"${stderr_file}") events=$(tr '\n' ' ' <"${events_file}")"
+fi
+
+new_governed_case
+prepare_remote_upgrade_host
+FIXTURE_HISTORICAL_TENDRIL=1
+run_remote_git_upgrade_installer --version v0.3.0
+if [ "${status}" -ne 0 ] \
+  && grep -q 'tendril binary does not enforce remote-git execution denial' "${stderr_file}" \
+  && ! grep -q 'Attempting rollback' "${stderr_file}" \
+  && ! events_match '^CMD systemctl stop ' \
+  && grep -q 'tendril old' "${HOSTFS}/home/tendril/.local/bin/tendril" \
+  && events_match "CMD curl https://raw.githubusercontent.com/opentendril/opentendril/${FIXTURE_REVISION}/VERSION" \
+  && events_match 'CMD git ls-remote https://github.com/opentendril/opentendril.git refs/tags/v0.3.0'; then
+  pass "remote-git upgrade refuses a historical binary before stopping the Stem"
+else
+  fail "remote-git upgrade refuses a historical binary before stopping the Stem" "status=${status} stderr=$(tr '\n' ' ' <"${stderr_file}") events=$(tr '\n' ' ' <"${events_file}")"
 fi
 
 if [ -n "${host_tendril}" ]; then

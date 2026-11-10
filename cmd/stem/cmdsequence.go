@@ -319,7 +319,7 @@ func buildSequenceCore(ctx context.Context) (core.Core, error) {
 	if err != nil {
 		root = "."
 	}
-	return core.NewService(manager).WithSequence(cliSequenceOperations(root)), nil
+	return withStemDeploymentPosture(core.NewService(manager).WithSequence(cliSequenceOperations(root))), nil
 }
 
 // cliSequenceOperations binds the sequence execution port to the conductor with

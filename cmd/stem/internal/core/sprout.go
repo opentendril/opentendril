@@ -142,6 +142,9 @@ func (s *Service) WithSprout(operations SproutOperations) *Service {
 // the session's provider/model/genotype/substrate preferences to the sprout),
 // and runs it to completion via the injected execution port.
 func (s *Service) SproutRun(ctx context.Context, in SproutRunInput) (SproutRunResult, error) {
+	if err := s.refuseRemoteGitExecution(CapSproutGrow); err != nil {
+		return SproutRunResult{}, err
+	}
 	if s.sprout.Run == nil {
 		return SproutRunResult{}, fmt.Errorf("sprout.grow is not wired: construct the Core with WithSprout(SproutOperations{Run: …})")
 	}

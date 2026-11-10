@@ -32,6 +32,9 @@ func validConfigFileName(name string) bool {
 
 // GenotypeCreate creates or updates a genotype definition in the configuration tree.
 func (s *Service) GenotypeCreate(ctx context.Context, in GenotypeCreateInput) (any, error) {
+	if err := s.refuseRemoteGitExecution(CapGenotypeCreate); err != nil {
+		return nil, err
+	}
 	if !validConfigFileName(in.Name) {
 		return nil, fmt.Errorf("invalid genotype name: must not contain path separators or traversal components")
 	}

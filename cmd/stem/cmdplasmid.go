@@ -85,7 +85,7 @@ func buildPlasmidCore(ctx context.Context, root string) (core.Core, error) {
 	if err != nil {
 		return nil, err
 	}
-	return core.NewService(manager).WithPlasmid(plasmidOperations(root)), nil
+	return withStemDeploymentPosture(core.NewService(manager).WithPlasmid(plasmidOperations(root))), nil
 }
 
 // plasmidOperations binds the plasmid execution port to the conductor — this wiring

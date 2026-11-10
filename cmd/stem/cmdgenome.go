@@ -77,7 +77,7 @@ func buildGenomeCore(ctx context.Context, root string) (core.Core, error) {
 	if err != nil {
 		return nil, err
 	}
-	return core.NewService(manager).WithGenome(genomeOperations(root)), nil
+	return withStemDeploymentPosture(core.NewService(manager).WithGenome(genomeOperations(root))), nil
 }
 
 // genomeOperations binds the genome execution port to the orchestrator — this wiring

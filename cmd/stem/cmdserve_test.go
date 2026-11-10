@@ -698,6 +698,85 @@ func (f *remoteMuxTestFixture) localMux() *http.ServeMux {
 	return buildServeMux(f.deps)
 }
 
+func TestRemoteGitPostureDeniesExecutionAndKeepsGit(t *testing.T) {
+	t.Setenv(core.DeploymentPostureEnv, "")
+	t.Setenv("OPENAI_API_KEY", "")
+	t.Setenv("ANTHROPIC_API_KEY", "")
+	t.Setenv("XAI_API_KEY", "")
+	t.Setenv("GEMINI_API_KEY", "")
+	t.Setenv("DOCKER_HOST", filepath.Join(t.TempDir(), "missing.sock"))
+
+	var calls, seedRuns, sproutRuns int
+	manager, err := session.NewManager(context.Background(), nil)
+	if err != nil {
+		t.Fatalf("session manager: %v", err)
+	}
+	service := core.NewService(manager).WithDeploymentPosture(core.DeploymentPostureRemoteGit).WithGit(core.GitOperations{
+		Status: func(context.Context, core.GitStatusSpec) (core.GitStatusResult, error) {
+			calls++
+			return core.GitStatusResult{Branch: "topic", Clean: true, CommitAllowed: true}, nil
+		},
+	}).WithSeed(core.SeedOperations{
+		Run: func(context.Context, core.SeedSpec, *core.SeedContinuationLifecycle) (core.SeedGrowResult, error) {
+			seedRuns++
+			return core.SeedGrowResult{}, nil
+		},
+	}).WithSprout(core.SproutOperations{
+		Run: func(context.Context, core.SproutSpec) (core.SproutRunReport, error) {
+			sproutRuns++
+			return core.SproutRunReport{}, nil
+		},
+	})
+	fixture := newRemoteMuxTestFixture(t, "grants:\n  claude:\n    operationClasses: [git.status, seed.grow, sprout.grow]\n    substrates: [core]\n", service)
+	if err := os.WriteFile(filepath.Join(fixture.dir, core.DeploymentPostureFilename), []byte("remote-git\n"), 0o600); err != nil {
+		t.Fatalf("write posture: %v", err)
+	}
+	mintResponse := serveMuxRequest(fixture.mux, http.MethodPost, "/v1/pollinator/token", "", map[string]string{
+		"Authorization": "Bearer " + fixture.root,
+	})
+	if mintResponse.Code != http.StatusOK {
+		t.Fatalf("mint access token: status = %d (%s)", mintResponse.Code, mintResponse.Body.String())
+	}
+	var minted struct {
+		Token string `json:"token"`
+	}
+	if err := json.Unmarshal(mintResponse.Body.Bytes(), &minted); err != nil {
+		t.Fatalf("decode minted access token: %v", err)
+	}
+	token := minted.Token
+	body := `{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"gitStatus","arguments":{"substrate":"core"}}}`
+	response := serveMuxRequest(fixture.mux, http.MethodPost, "/v1", body, map[string]string{
+		"Authorization": "Bearer " + token,
+	})
+	if response.Code != http.StatusOK || calls != 1 {
+		t.Fatalf("git status under remote-git: status=%d calls=%d body=%s", response.Code, calls, response.Body.String())
+	}
+	seedResponse := serveMuxRequest(fixture.mux, http.MethodPost, "/v1/seeds/grow", `{"substrate":"core","goal":"must not run","verify":["true"]}`, map[string]string{
+		"Authorization": "Bearer " + token,
+	})
+	if seedResponse.Code != http.StatusForbidden || !strings.Contains(seedResponse.Body.String(), "unavailable") || seedRuns != 0 {
+		t.Fatalf("delegated seed under remote-git: status=%d runs=%d body=%s", seedResponse.Code, seedRuns, seedResponse.Body.String())
+	}
+	aliasBody := `{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"sproutTendril","arguments":{"transcript":"grow","substrate":"core"}}}`
+	sproutResponse := serveMuxRequest(fixture.mux, http.MethodPost, "/v1", aliasBody, map[string]string{
+		"Authorization": "Bearer " + token,
+	})
+	var sproutDenied struct {
+		Result struct {
+			IsError bool `json:"isError"`
+		} `json:"result"`
+	}
+	if json.Unmarshal(sproutResponse.Body.Bytes(), &sproutDenied) != nil || !sproutDenied.Result.IsError || sproutRuns != 0 || !strings.Contains(sproutResponse.Body.String(), "unavailable") {
+		t.Fatalf("delegated sprout under remote-git: status=%d runs=%d body=%s", sproutResponse.Code, sproutRuns, sproutResponse.Body.String())
+	}
+	botanist := serveMuxRequest(fixture.localMux(), http.MethodPost, "/v1/seeds/grow", `{"substrate":"core","goal":"must not run","verify":["true"]}`, map[string]string{
+		"Authorization": "Bearer botanist-key",
+	})
+	if botanist.Code == http.StatusOK || seedRuns != 0 || !strings.Contains(botanist.Body.String(), "unavailable") {
+		t.Fatalf("botanist seed under remote-git: status=%d runs=%d body=%s", botanist.Code, seedRuns, botanist.Body.String())
+	}
+}
+
 func newRemoteMuxTestFixture(t *testing.T, grants string, service *core.Service) *remoteMuxTestFixture {
 	t.Helper()
 	controlDir := filepath.Join(t.TempDir(), ".tendril")

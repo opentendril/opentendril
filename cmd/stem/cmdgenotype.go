@@ -87,7 +87,7 @@ func buildGenotypeCore(ctx context.Context) (core.Core, error) {
 		return nil, err
 	}
 	tendrilDir := filepath.Join(resolveRepoRoot(""), ".tendril")
-	return core.NewService(manager).WithTendrilDir(tendrilDir), nil
+	return withStemDeploymentPosture(core.NewService(manager).WithTendrilDir(tendrilDir)), nil
 }
 
 func genotypeCLICapabilityNames() []string {

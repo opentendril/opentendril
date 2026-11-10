@@ -95,6 +95,9 @@ func (s *Service) PlasmidList(_ context.Context) ([]string, error) {
 // PlasmidInject copies the named plasmid into the active genome via the
 // injected execution port, returning the normalized injection outcome.
 func (s *Service) PlasmidInject(ctx context.Context, in PlasmidInjectInput) (PlasmidInjection, error) {
+	if err := s.refuseRemoteGitExecution(CapPlasmidInject); err != nil {
+		return PlasmidInjection{}, err
+	}
 	if s.plasmid.Inject == nil {
 		return PlasmidInjection{}, fmt.Errorf("plasmid.inject is not wired: construct the Core with WithPlasmid(PlasmidOperations{Inject: …})")
 	}

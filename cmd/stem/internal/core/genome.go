@@ -100,6 +100,9 @@ func (s *Service) GenomeView(_ context.Context) ([]GenomeSeed, error) {
 // GenomeReduce consolidates .tendril/genome/epigenetics.md in place via the
 // injected execution port and returns the file's path.
 func (s *Service) GenomeReduce(ctx context.Context) (string, error) {
+	if err := s.refuseRemoteGitExecution(CapGenomeReduce); err != nil {
+		return "", err
+	}
 	if s.genome.Reduce == nil {
 		return "", fmt.Errorf("genome.reduce is not wired: construct the Core with WithGenome(GenomeOperations{Reduce: …})")
 	}
@@ -112,6 +115,9 @@ func (s *Service) GenomeReduce(ctx context.Context) (string, error) {
 // GenomeEvolve prunes low-fitness genome material and rewrites epigenetics.md
 // via the injected execution port, returning the file's path.
 func (s *Service) GenomeEvolve(ctx context.Context) (string, error) {
+	if err := s.refuseRemoteGitExecution(CapGenomeEvolve); err != nil {
+		return "", err
+	}
 	if s.genome.Evolve == nil {
 		return "", fmt.Errorf("genome.evolve is not wired: construct the Core with WithGenome(GenomeOperations{Evolve: …})")
 	}

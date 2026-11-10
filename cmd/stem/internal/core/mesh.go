@@ -86,7 +86,10 @@ func (s *Service) WithMesh(operations MeshOperations) *Service {
 	return s
 }
 
-func (s *Service) meshDelegate(ctx context.Context, substrate, branch, commitMessage string) (MeshDelegation, error) {
+func (s *Service) meshDelegate(ctx context.Context, capability, substrate, branch, commitMessage string) (MeshDelegation, error) {
+	if err := s.refuseRemoteGitExecution(capability); err != nil {
+		return MeshDelegation{}, err
+	}
 	if s.mesh.ResolveWorkspace == nil || s.mesh.DelegatePush == nil {
 		return MeshDelegation{}, fmt.Errorf("mesh grafting is not wired: construct the Core with WithMesh(MeshOperations{ResolveWorkspace: …, DelegatePush: …})")
 	}
@@ -108,7 +111,7 @@ func (s *Service) meshDelegate(ctx context.Context, substrate, branch, commitMes
 // MeshGraft delegates the substrate's latest commit through the mesh graft
 // endpoint via the injected execution port.
 func (s *Service) MeshGraft(ctx context.Context, in MeshGraftInput) (MeshDelegation, error) {
-	return s.meshDelegate(ctx, in.Substrate, in.Branch, in.CommitMessage)
+	return s.meshDelegate(ctx, CapMeshGraft, in.Substrate, in.Branch, in.CommitMessage)
 }
 
 // MeshPromote promotes a pull-request branch through the mesh graft endpoint.
@@ -122,7 +125,7 @@ func (s *Service) MeshPromote(ctx context.Context, in MeshPromoteInput) (MeshPro
 		commitMessage = "promote PR #" + prNumber
 	}
 
-	delegation, err := s.meshDelegate(ctx, in.Substrate, in.Branch, commitMessage)
+	delegation, err := s.meshDelegate(ctx, CapMeshPromote, in.Substrate, in.Branch, commitMessage)
 	if err != nil {
 		return MeshPromotion{}, err
 	}
@@ -151,6 +154,9 @@ func (s *Service) MeshTraitList(ctx context.Context, _ MeshTraitListInput) (Mesh
 
 // MeshTraitAccept accepts one pending foreign trait via the injected execution port.
 func (s *Service) MeshTraitAccept(ctx context.Context, in MeshTraitAcceptInput) (MeshTraitAcceptOutput, error) {
+	if err := s.refuseRemoteGitExecution(CapMeshTraitAccept); err != nil {
+		return MeshTraitAcceptOutput{}, err
+	}
 	if s.mesh.AcceptTrait == nil {
 		return MeshTraitAcceptOutput{}, fmt.Errorf("mesh trait acceptance is not wired: construct the Core with WithMesh(MeshOperations{AcceptTrait: …})")
 	}
@@ -166,6 +172,9 @@ func (s *Service) MeshTraitAccept(ctx context.Context, in MeshTraitAcceptInput) 
 
 // MeshTraitReject rejects one pending foreign trait via the injected execution port.
 func (s *Service) MeshTraitReject(ctx context.Context, in MeshTraitRejectInput) (MeshTraitRejectOutput, error) {
+	if err := s.refuseRemoteGitExecution(CapMeshTraitReject); err != nil {
+		return MeshTraitRejectOutput{}, err
+	}
 	if s.mesh.RejectTrait == nil {
 		return MeshTraitRejectOutput{}, fmt.Errorf("mesh trait rejection is not wired: construct the Core with WithMesh(MeshOperations{RejectTrait: …})")
 	}
