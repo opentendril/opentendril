@@ -85,13 +85,13 @@ posture omits the container daemon and the local Pollinator account. It does
 not weaken the full governed installation, and the installer refuses to change
 one posture into the other.
 
-The published v0.5.2 installer and binary do not support remote-git. Production
-installation of this posture uses a later published release. The installer
-verifies that release and refuses it when the tendril binary does not enforce
-remote-git execution denial. Staged qualification uses a candidate binary built
-from one exact source commit and checks that binary's checksum before the run.
-It is not a production installation, it does not relax published-release checks,
-and it does not substitute an older binary for the implementation being qualified.
+Production installation of this posture uses the pinned release in this guide.
+That release supports remote-git. The installer verifies the release and
+refuses it when the tendril binary does not enforce remote-git execution
+denial. Staged qualification uses a candidate binary built from one exact
+source commit and checks that binary's checksum before the run. It is not a
+production installation, it does not relax published-release checks, and it
+does not substitute an older binary for the implementation being qualified.
 
 ---
 
@@ -429,7 +429,7 @@ the restricted `tendril-mcp` client for that account.
 ```bash
 # [root] Linux amd64. Verify the archive before extracting or installing it.
 # The subshell exits on checksum failure, so extract/install do not run.
-RELEASE=v0.5.2
+RELEASE=v0.5.3
 ARCHIVE=opentendril-linux-amd64.tar.gz
 WORKDIR=$(mktemp -d)
 (
@@ -1004,7 +1004,7 @@ account. Do not run `make install-mcp-client` on the normal path.
 ```bash
 # as the ordinary (Pollinator-hosting) account
 # The subshell exits on checksum failure, so extract/install do not run.
-RELEASE=v0.5.2
+RELEASE=v0.5.3
 ARCHIVE=opentendril-linux-amd64.tar.gz
 WORKDIR=$(mktemp -d)
 (
@@ -1491,14 +1491,14 @@ same release pin. Do **not** pipe the installer into `sudo sh`.
 
 ```bash
 # [root] Linux amd64 - substitute the newer release tag.
-RELEASE=v0.5.2
+RELEASE=v0.5.3
 curl -fsSL -o install.sh \
   "https://github.com/opentendril/opentendril/releases/download/${RELEASE}/install.sh"
 curl -fsSL -o checksums.txt \
   "https://github.com/opentendril/opentendril/releases/download/${RELEASE}/checksums.txt"
 grep 'install.sh$' checksums.txt | sha256sum -c || exit 1
 
-RELEASE=v0.5.2
+RELEASE=v0.5.3
 sudo sh install.sh \
   --governed-upgrade \
   --pollinator-user <ordinary-user> \
